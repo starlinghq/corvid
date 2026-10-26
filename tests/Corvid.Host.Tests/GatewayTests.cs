@@ -283,6 +283,29 @@ public sealed class GatewayTests
     }
 
     [Fact]
+    public async Task ASpawnsApprovalInTheChatShowsTheChildsPlan()
+    {
+        // A5 fix round (D4): the owner's /approve message carries the DelegationCard lines, as the CLI, the app and ACP show.
+        var models = new FakeModels(new FakeGenerator(
+            Reply.Call("delegate_task", """{"goal":"count the notes","max_steps":3}"""), Reply.Say("Not started.")));
+        await using var host = TestHost.Create(models, Settings(("Corvid:Tools:Delegate", "true"), ("Corvid:Approvals:Mode", "Manual")));
+        var (runtime, gateway, adapter) = await StartAsync(host);
+        await using (runtime)
+        await using (gateway)
+        {
+            adapter.Write(Message("owner", "count my notes with a helper", "1"));
+            await Wait.Until(() => adapter.Sent.Any(sent => sent.Text.StartsWith("Approval needed", StringComparison.Ordinal)), "the prompt");
+            var prompt = adapter.Sent.Last(sent => sent.Text.StartsWith("Approval needed", StringComparison.Ordinal)).Text;
+
+            Assert.Contains("Child: count the notes", prompt, StringComparison.Ordinal);
+            Assert.Contains("  budget: 3 steps", prompt, StringComparison.Ordinal);
+            Assert.Contains("  models: ", prompt, StringComparison.Ordinal);
+            adapter.Write(Message("owner", "/deny", "2"));
+            await Wait.Until(() => adapter.Sent.Any(sent => sent.Text == "Not started."), "the answer");
+        }
+    }
+
+    [Fact]
     public async Task AChannelsPersonaAndSlotOverrideApplyToItsSessionOnly()
     {
         var models = new FakeModels(new FakeGenerator(Reply.Say("small")));

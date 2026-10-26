@@ -1,6 +1,6 @@
 # Windowed UI: handoff
 
-2026-10-24. Where the build of the windowed Corvid stands, how to pick it up on another machine, and what comes next.
+2026-10-25. Where the build of the windowed Corvid stands, how to pick it up on another machine, and what comes next.
 The design is [`ui.md`](ui.md), the approved mockups are in [`ui-mockups/`](ui-mockups/README.md), the rules every
 builder follows are in [`ui-build.md`](ui-build.md), and the app's own conventions and gotchas are in
 [`src/Corvid.App/README.md`](../../src/Corvid.App/README.md). Everything is on branch `claude/zen-allen-puw590`, draft
@@ -20,6 +20,7 @@ pull request starlinghq/corvid#71.
 | A2 the pages without mockups (Skills, Jobs, MCP, Gateway, Safety, Secrets, Settings), the palette, the rest of the keys, the phone screens, an accessibility pass | done, verified on the running app in three rounds, PR review fixed (§1.3) | PR #76, branch `a2/screens` |
 | A3 `Corvid.App.Engine`: the real runtime behind the services | done behind `--engine`, verified end to end in three rounds, PR review fixed (§1.4) | PR #77 |
 | A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | done, verified end to end in three rounds (§1.5) | branch `a4/engine` |
+| A5 model switching at any time, subagents with a model mix, G-15 forks mid-turn, the A4 leftovers | done, verified end to end in two rounds (§1.6) | branch `a5/engine` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
@@ -306,7 +307,7 @@ additions took.
 Still refused on the engine, each with its message: memory consolidation (plan §9.5), opening a terminal or the Vault
 helper (U-6), the Vault policy, role, budget and daily counts (V-n), media memory (plan §9.4) and images in prompts (K-8).
 
-Left:
+Left (A5 closed every item here except those §1.6 still lists):
 
 - A question that blocks mid-turn (a question router beside the approval router); ACP has no tail or question
   notifications; `corvid chat` shows `ask_user`'s call in its panel.
@@ -324,7 +325,7 @@ The A4 end-to-end pass (engine by default, a scripted generator, Qwen3.5-0.8B fo
 process starts reaching the rail and the Board without a restart (the log is read every 3 s), a replayed call's time,
 Audit's session titles, a refusal's reason staying shown after its draft is kept, the Gateway page reading the store on
 each visit (a terminal's `pair approve`, `revoke`, `tools`), and titles and recaps with the local generator (it refuses
-sampling without a seed). Still open from that pass:
+sampling without a seed). Still open from that pass (A5 closed all but the last two, §1.6):
 
 - Token use is not in the log, so a replayed turn has no "0.2k tokens" and the context gauge is empty until the next turn.
 - A session's first opening after the app starts can land mid-transcript, with "Jump to bottom".
@@ -370,6 +371,192 @@ data directory 0700.
 Left from the review: lock files under the data directory's `drivers/` are not removed (deleting one another process
 just opened would split the lock); a guest's own allowlist replaces the adapter's rather than narrowing it (the page
 says so); a few App.Engine tests time out now and then when the machine's CPU is saturated.
+
+### 1.6 Switching, subagents and forks (A5)
+
+Four groups in parallel worktrees, merged one at a time by an integrator (`a5/int`: switch, delegate, fork, leftovers),
+building and running every test project after each merge, then tests where the groups meet
+(`tests/Corvid.Host.Tests/A5MeetingTests.cs`):
+
+- **Model switching at any time (`a5/switch`).** A switch the person makes lasts for the session: it no longer reverts
+  at the turn's end. Escalation and fallback still move off it and de-escalation returns to it, not to the registry's
+  default. A running turn takes it at its next step boundary, after the calls already issued. "This session" and
+  "default for new sessions" are separate choices on Models (Switch… › This session or New sessions, and Follow the
+  default again), in `Alt+P`'s two groups, in `/model` (`--default`, `reset <slot>`) and in `corvid model switch`. The
+  decider (Kev) is switchable per session. The session header shows the session's generator and decider (the pill gives
+  way to the title when the header is narrow). `ToolCallIssued.Generator` records which generator asked for each call, so
+  a switch made mid-turn sits at the right step live and on replay. A session opened again restores the person's choices
+  from its log. A cloud choice is not restored: it says so and is chosen again through the privacy gate. `corvid chat`
+  takes `/model` while a turn runs; approval answers still come first. ACP exposes the generator and decider as session
+  config options (`session/set_config_option`, `config_option_update`).
+- **Subagents with a model mix (`a5/delegate`).** `delegate_task` (plan §14, §17 row 1.7) runs up to 10 child sessions
+  at once, depth 1. Each child has a fresh log, a goal, an explicit toolset (presets in `Corvid:Agents:Toolsets`,
+  `read_only` built in), a budget, an optional output schema (one repair inside the same budget) and a model mix for any
+  slot, picked from the catalogue by the agent or the person (`/delegate`; `/agents` lists, shows and stops). Slots the
+  mix leaves out run on the parent's session choices. Spawning is a side effect under the session's approval mode, and
+  its card shows the goal, toolset, budget and models on every surface. Children are a tree on the Board card and in the
+  session header. A child opens read-only, linked to its parent, and can be stopped; its outside content taints the
+  parent through the result.
+- **G-15, fork at a step boundary (`a5/fork`).** `CorvidRuntime.ForkAsync` forks while a turn runs without waiting. It
+  copies through the turn's last completed step (`TurnRunner.StepBoundary`) and the turn goes on. The fork starts with
+  the source's taint and session model choices, plus an optional mix picked for it. `/fork` runs while a turn runs in
+  `corvid chat`; the app has Fork… in the palette, and the aside forks mid-turn. ACP's `session/fork` does the same.
+- **A4 leftovers (`a5/leftovers`).** Token use is in the log (`Usage` on `AssistantMessage` and `ToolCallIssued`), so
+  replay shows a turn's tokens and the context gauge. `ask_user` waits inside the turn (a question router beside the
+  approval router) where the app or `corvid chat` can answer it; `ClarificationAnswered` closes it. ACP gets the output
+  tail and `_corvid/question`. `corvid chat` hides `ask_user`'s call from its panel. The configured sandbox launcher is
+  protected but not hidden from its own sandbox, and `corvid-sandbox` ships beside the app. The egress gate reads only
+  free text, not JSON structure or Corvid's own prompts (threshold 0.6; the A5 review put it back to 0.4). Text typed while a new session starts becomes
+  its draft, and a session's first opening lands on its latest message.
+
+Decisions taken while merging:
+
+- `corvid chat` has one reader for lines typed during a turn: the switch group's line router. It takes the commands
+  marked `SlashCommand.DuringTurn` (`/model` and `/fork`); any other line stays typed ahead for after the turn, and an
+  open approval prompt or question gets every line first.
+- A fork's copied session choices come back through the restore when it opens (`ForkResult.Models` reports them
+  `Unchanged`). So `/fork` lets go of a fork with local choices, and keeps one open only when it holds a cloud choice.
+- The session header gives the parent link and the children button their room before the models pill (`FitTitle`).
+- An in-turn question could reach the window (`QuestionAsked`) before `WindowQuestioner` had registered its wait, since
+  the kernel logged `ClarificationAsked` before calling the asker: an answer given then was refused, and
+  `EngineRunningTurnTests.A_question_the_windows_turn_asks…` failed in 2 of 3 full-suite runs after the merges.
+  `IQuestionAsker.Expect` (a default method) is now called under the turn's lock just before the question is logged.
+- The models pill measured itself to decide whether it fits. Once it had given way (`MaxWidth` 0) it measured 0 wide and
+  came back, a layout cycle whenever the title's room was near the line: at 1440 with the dock open the composer stopped
+  showing typed text. It now measures its text.
+- ACP's `available_commands` still leave out `/agents`, `/delegate` and `/fork`. Re-recording (`CORVID_RECORD_ACP=1`) after the
+  leftovers merge and again at the end produced no diff.
+
+The integrator ran the merged app once on the engine and once with `--demo`, in a temporary home with two scripted
+OpenAI-compatible servers. On the engine: a spawn's approval card showed the child's goal, tools, budget and models; the
+child ran on the second server, and the header's "1 child" list and the Board card showed it. `/model generator fake2`
+switched this session, and the next turn ran on it and stayed on it after the turn ended. At 1920 px the header showed
+the models pill and the children button side by side.
+
+New on the wire: `clarification_answered`, plus the optional `generator` and `usage` fields on `tool_call_issued` and
+`usage` on `assistant_message`. A binary older than A5 cannot read a log that holds the new event (the same one-way step
+as before); it ignores the new fields.
+
+Still refused on the engine, each with its message: memory consolidation (plan §9.5), opening a terminal or the Vault
+helper (U-6), the Vault policy, role, budget and daily counts (V-n), media memory (plan §9.4) and images in prompts
+(K-8). Attached mode, worktrees per session, images and packaging wait for A6.
+
+Left:
+
+- From §1.5: a steer's position in the report relative to the call that finished; the Board's Take over; the lock files
+  under `drivers/`; a job's message read as the user's on replay; a gateway adapter needs Vault for its token.
+- Delegation: the calls a turn issues in the same round are authorized and run one after another (approved
+  `delegate_task` calls do not run together across calls, only the tasks of one call); a finished child's tail timer keeps ticking until its channel goes; `--demo` has no children.
+  (`Children(parentId)` now reads only what the parent's log added since its last list; A5 review.)
+- Switching: the live step's model is inferred until `ITurnListener.StepStarted` carries the generator (replay is exact).
+- A person's message clears taint for its turn (plan §10.3), so a child spawned in a tainted fork after the person writes
+  is not tainted unless the turn reads outside content again. This is the intended model; it is noted because a fork's
+  inherited taint lasts only until then.
+
+The end-to-end pass walked the A5 flows in the app and in `corvid chat` (three scripted servers: a local server, one gated
+as a cloud model with `Egress: { Action: Redact, Tainted: Refuse }`, and an escalation step; Kev-0.8B and Kev-4B as deciders).
+A real cloud model needs https and a Vault key, so "cloud-class" here is a gated local server. It fixed:
+
+- A child's fixed system prompt was redacted for a gated child model ("You are a `<PERSON_1>` working on one goal"): it is
+  now one of the egress gate's trusted texts. The output schema after it is still read.
+- `Alt+P` filtered dropped the "This session" and "Default for new sessions" headers, so a model listed in both did not say
+  which choice a row made.
+- A this-session switch to a model not loaded yet (Kev-4B, seconds on the CPU) gave no sign until it was made; a message
+  sent meanwhile ran on the old decider. Models' picker now says it is loading and which model the session stays on.
+- The turn strip said "generating" while the turn waited on an in-turn question.
+- Choosing with Enter in the palette (Fork…) typed a line break into the composer the focus went back to.
+- Coming back from a fork, the header's title stayed cut to a word: a pill that collapses raises no `SizeChanged`.
+
+Found and left:
+
+- Pin semantics differ between layers. `SessionModelSlots` (and its test) lets escalation move a pinned slot and keeps it
+  there after the turn; `/model`'s help ("--pin to keep it past escalation"), `/model unpin` ("escalation moves off it
+  again") and `IModelService.SetPinnedAsync` ("escalation leaves it alone") say a pin is not escalated off. Seen in
+  `corvid chat`: pinned on fake, two failed repairs escalated to fakebig, and the next turn stayed on fakebig. Plan §6
+  ("returns to the session's default unless the user pinned the model") and C-006 back the model layer, so the fix is
+  the surfaces' words, unless the person wants a pin to stop escalation. (The A5 review fixed the words: below.)
+- After "default for new sessions", the degraded decider tier (`/status`) and the session titler still use the default
+  the runtime started with.
+- The egress gate redacts some non-PII: "hello two" sent as "hello `<PERSON_1>`", and a tool's own schema default (`200`) in
+  an invalid-arguments result as an account number.
+- A fork's copied turns read "0 s".
+- The spawn card offers Allow once when every child would be refused; the refusal shows on the card and the call fails.
+- `corvid chat` without `corvid-sandbox` beside it refuses sandboxed tools (correctly); the message names
+  `Corvid:Sandbox:LauncherPath` now (it named only `SandboxOptions.LauncherPath`). With that key set to the app's
+  launcher, the shell runs and the launcher is visible and read-only inside its sandbox.
+
+The A5 verifier's fix round then fixed:
+
+- An interrupt that reached the app's question asker between setting its cancelling flag and cancelling the turn's token
+  got a null answer, so the turn ended cancelled with its question still open on every replay. The asker now waits for
+  the token, an answer meanwhile is refused, and the kernel withdraws the question (`ClarificationAnswered` with "")
+  whenever the token is cancelled as the asker returns.
+- The output schema's repair turn had a fresh step budget (up to twice what the card showed). `TurnRunner.StepLimit` gives
+  it what the first turn left, and with nothing left there is no repair.
+- A schema-checked `output` reached the parent uncapped; past `MaxChildTextChars` it goes as the start of its JSON text
+  in `answer`, and `detail` says so.
+- The gateway's `/approve` message shows the spawn's plan (`IGatewayAgent.CardLinesAsync`, the host's `DelegationCard`).
+- The spawn card's preview loaded the models a mix named while the approval waited; it now reads the catalogue's profiles
+  (the gate checks them the same way) and binds nothing, and the approved call loads.
+- A child opened but not run yet (another task of the call still planning) could not be stopped: its usage is made at
+  open, and a stop before it runs means it never starts ("stopped by the person").
+- Egress: a lowercase JSON key was taken as structure, and every key's words then suppressed the same word anywhere in
+  the request, so `{"jsmith": …}` went unredacted. A key is structure only when it is made of Corvid's fixed structure
+  words (`PrivacyEgress.StructureWords`: "status", "exit_code", "toolCallId"); any other key is scanned and rewritten as a
+  value, and only those words make a lowercase span structure (the trusted prompts' own words did too, until the A5 review).
+
+Verification: the end-to-end pass and the first verify round ran side by side (the workflow was revised mid-run to
+build incrementally and to stop after two verify rounds, since A3 and A4 spent most of their hours in serial
+verify-and-fix loops). Round 1 found seven defects, all fixed; round 2 passed. Still open from it: `/model`'s help and
+its unpin reply say a pin holds a model against escalation, while a pin only stops de-escalation (plan §6, C-006); the
+review round below fixed the words.
+
+The A5 review's fix round, switching, forks, questions and privacy (`a5fix/switch`):
+
+- A choice lasts exactly as made. Choosing the model a slot already uses is logged (a `session` `ModelSwitched` from the
+  model to itself), and so is a reset that leaves the slot where it is (pinned, or off the choice): before, both came back
+  wrong when the session was opened again. Pins are restored too: every `session` switch logs its pin, `/model unpin` and
+  the Models page's unpin log an `unpin` (`SessionModelSlots.UnpinAsync`), and `CorvidRuntime.ModelChoiceStates` reads
+  choices with their pins (paged now: it read only the log's first 256 events). The words of `/model`'s help, its unpin
+  reply and the Models page's pin say what a pin does: a turn's end leaves the slot where it is; escalation still moves it.
+- A fork starts on the choices logged through its position (the copied log), not on the source's current ones; a cloud
+  choice from then is chosen again through the gate with the fork's taint.
+- An in-turn `ask_user` call is parked while it waits, so a switch then (the app, ACP's `set_config_option`) is made instead
+  of failing as "neither tracked nor parked". A call names the generator that answered (`SlotChatClient` stamps
+  `corvid.answered_by` on the response), so a fallback, a privacy retreat or a switch during the call tags the right one.
+- ACP offers `default` ("Follow the default") for a slot the session chose, which forgets the choice (the decider back to
+  the degraded tier). The Models page's "default for new sessions" writes through `ModelDefaults.Write`, as the other surfaces do.
+- The question router keeps every surface attached to a session; the latest asks, and detaching takes away only its own.
+- A `!` line that is a session's first message has the step boundary 0 (it was read as "no turn", and a fork then copied
+  the line without its call); a fork then says there is nothing before it yet.
+- Privacy: a `credential` span is structure only when made of credential nouns ("API key", "wifi password", "handle");
+  any other is a value ("sunshinerainbow"). The trusted prompts' words are no longer structure where the person or a tool
+  writes them (a name can be one). A value of letters is replaced only as a whole word when it has three letters or fewer;
+  a longer one wherever it appears ("Smith" in "SmithJ"; "Mark" in "Marketing" too, restored in the response). The
+  threshold is 0.4 again, for every request: the false positives behind 0.6 were all structure, which the shape and
+  structure rules drop at any threshold, and nothing measured what 0.6 missed; a tainted-only 0.4 would leave the person's
+  own PII less well found. The realistic turns of `EgressModelTests` (GLiNER2) still pass unmangled at 0.4.
+- New on the wire: `ModelSwitched`'s optional `pinned` and `reset`, and the reason `unpin`. Older binaries ignore the fields.
+
+Left from it:
+
+- With the real GLiNER2, "my wifi password is sunshinerainbow" labels nothing, and the credential detector's prose gate
+  (C-032, `Corvid.Secrets`) wants a digit or a symbol, so the word is sent; "SmithJ" goes only when the extractor finds
+  "Smith" itself ("John Smith" alone does not redact it). Both need the detector or a surname rule, not the redaction map.
+- A per-session decider on another device than the shared one keeps the shared fabric's checkpoint reduction (C-030): the
+  reduction is resolved once from the runtime's decider placement.
+
+The PR review (two agents and a security review) found one high defect: a multi-task `delegate_task` leaked the
+children it had opened when a later task's planning threw. Fixed with the rest; decisions taken in that round: an agent's
+mix may not name a child's decider (a child judges with its parent's decider unless the person or a configured
+`Corvid:Agents:Mixes` entry names one), a tainted child's answer gets the injection checkpoint and is labelled outside
+content, `Corvid:Agents:Models` covers inherited models in the slots a remote model can serve (generator, summarizer,
+vision), and the egress threshold is back to 0.4. Still open: a plain-word password in prose ("my wifi password is
+sunshinerainbow") reaches a cloud model when GLiNER2 labels nothing, since the credential detector's prose rule wants a
+digit or symbol (a `Corvid.Secrets` change). From the fix verification, also left: an abandoned child frees its
+concurrency place while a tool that ignores cancellation still runs (its driver lock holds until it is idle); a reset on
+a pinned slot is logged without the pin, so replay shows it unpinned; a tainted child's answer is labelled with a
+prefix, not enclosed, so the injection checkpoint is the defence against text after it.
 
 ### What the running app shows today
 

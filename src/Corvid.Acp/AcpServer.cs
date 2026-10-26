@@ -126,7 +126,7 @@ internal sealed class AcpSessionState(CorvidSession session)
     }
 }
 
-internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
+internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
 {
     private const string Surface = "acp";
     private const int ListPage = 50;
@@ -155,6 +155,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             AcpMethods.SessionList => Result(await ListAsync(Read(parameters, AcpJson.Default.ListSessionsRequest)).ConfigureAwait(false),
                 AcpJson.Default.ListSessionsResponse),
             AcpMethods.SessionClose => Result(Close(Read(parameters, AcpJson.Default.SessionIdRequest)), AcpJson.Default.EmptyResponse),
+            // A5: the generator and the decider for this session (AcpServer.Models.cs).
+            AcpConfig.SetConfigOption => await SetConfigOptionAsync(Read(parameters, AcpJson.Default.SetConfigOptionRequest), cancellationToken).ConfigureAwait(false),
             AcpMethods.SessionPrompt => Result(await PromptAsync(Read(parameters, AcpJson.Default.PromptRequest), cancellationToken).ConfigureAwait(false),
                 AcpJson.Default.PromptResponse),
             _ => throw new AcpException(AcpErrors.MethodNotFound, $"Corvid does not implement '{method}'."),
@@ -169,6 +171,7 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        Unwatch();
         foreach (var state in _sessions.Values)
         {
             state.Cancel();
@@ -185,6 +188,15 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         }
         await runtime.MaintenanceIdleAsync().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         await runtime.DisposeAsync().ConfigureAwait(false);
+        runtime.ChildChanged -= OnChild;
+    }
+
+    private void OnChild(string parentId, SessionStreamUpdate update)
+    {
+        // L5 (A5 review): a child is a tool call of the prompt turn that runs it; a session/update about a call outside any
+        // prompt turn (a child a /delegate command started, which runs on after the command's answer) is not sent.
+        if (_sessions.TryGetValue(parentId, out var state) && state.Reporter is not null && TurnReporter.Child(update) is { } notification)
+            _context.Update(parentId, notification);
     }
 
     private async Task<CorvidRuntime> StartAsync(Func<CancellationToken, Task<CorvidRuntime>> start, CancellationToken cancellationToken)
@@ -194,6 +206,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             var runtime = await Task.Run(() => start(cancellationToken), cancellationToken).ConfigureAwait(false);
             _context.Runtime = runtime;
             _context.Tools = new ToolPresentation(runtime);
+            // A5: a child session of an open session is shown as a call of its own, started and finished.
+            runtime.ChildChanged += OnChild;
             foreach (var notice in runtime.DeciderNotices)
                 _context.Log("corvid acp: " + notice);
             return runtime;
@@ -241,7 +255,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         CheckWorkspace(runtime, request);
         NoteMcpServers(request);
         var state = Open(runtime, runtime.OpenSession(surface: Surface));
-        return Result(new NewSessionResponse(state.Session.Id), AcpJson.Default.NewSessionResponse, () => SendCommands(state.Session.Id));
+        return Result(new NewSessionResponse(state.Session.Id) { ConfigOptions = ConfigOptions(runtime, state.Session) }, AcpJson.Default.NewSessionResponse,
+            () => SendCommands(state.Session.Id));
     }
 
     private async Task<JsonRpcResult> LoadAsync(SessionRequest request, bool replay)
@@ -264,7 +279,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
         // session/load replays the whole conversation before answering; session/resume must not.
         if (replay)
             await ReplayAsync(runtime, id).ConfigureAwait(false);
-        return Result(new EmptyResponse(), AcpJson.Default.EmptyResponse, () => SendCommands(state.Session.Id));
+        return Result(new ConfigOptionsResponse { ConfigOptions = ConfigOptions(runtime, state.Session) }, AcpJson.Default.ConfigOptionsResponse,
+            () => SendCommands(state.Session.Id));
     }
 
     private async Task<JsonRpcResult> ForkAsync(SessionRequest request, CancellationToken cancellationToken)
@@ -287,7 +303,8 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             throw new AcpException(AcpErrors.InvalidParams, exception.Message);
         }
         var state = Open(runtime, fork);
-        return Result(new NewSessionResponse(fork.Id), AcpJson.Default.NewSessionResponse, () => SendCommands(state.Session.Id));
+        return Result(new NewSessionResponse(fork.Id) { ConfigOptions = ConfigOptions(runtime, fork) }, AcpJson.Default.NewSessionResponse,
+            () => SendCommands(state.Session.Id));
     }
 
     private async Task<ListSessionsResponse> ListAsync(ListSessionsRequest request)
@@ -357,6 +374,11 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             // Streamed text is already in the editor; anything else (a fixed message, an answer not streamed) is sent now.
             if (result.Text is { } answer && !string.Equals(answer.Trim(), reporter.Streamed.Trim(), StringComparison.Ordinal))
                 _context.Update(state.Session.Id, new AgentMessageChunk(new TextContent(answer)));
+            // A5: the question the turn ended on (K-6), structured, after its text; the person's next prompt answers it.
+            if (result.Status == TurnStatus.Clarifying && result.Question is { } question)
+                _context.Connection.Notify(AcpMethods.CorvidQuestion,
+                    new CorvidQuestionNotification(state.Session.Id, question.Id, question.Text, [.. question.Options.IsDefault ? [] : question.Options]),
+                    AcpJson.Default.CorvidQuestionNotification);
             // ACP: once the client has sent session/cancel, the prompt MUST answer "cancelled", even when the turn reached
             // its end before the kernel saw the cancel.
             if (cancelled.IsCancellationRequested)
@@ -383,8 +405,10 @@ internal sealed class AcpAgent : IJsonRpcHandler, IAsyncDisposable
 
     private void SendCommands(string sessionId) =>
         _context.Update(sessionId, new AvailableCommandsUpdate([.. _commands.Commands
-            // Leaving is the editor's business.
-            .Where(command => command.Name is not ("exit" or "quit"))
+            // Leaving is the editor's business; forking is session/fork's (G-15), which opens the fork for the editor.
+            .Where(command => command.Name is not ("exit" or "quit" or "fork"))
+            // A5: /agents and /delegate run when typed; the editor's list keeps its recorded set (they are the chat's and the app's).
+            .Where(command => command.Name is not ("agents" or "delegate"))
             .Select(command => new AvailableCommand(command.Name, command.Summary)
             {
                 Input = command.Usage.Contains(' ', StringComparison.Ordinal) ? new AvailableCommandInput(command.Usage) : null,

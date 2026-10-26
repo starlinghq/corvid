@@ -118,6 +118,9 @@ public sealed class ModelsViewModel : AreaViewModel
     private ModelsPicker _picker;
     private string _switchTitle = "";
     private string _switchSlot = "";
+    private bool _switchForSession = true;
+    private SlotRowViewModel? _switchRow;
+    private string _switchHint = "";
     private string _serverName = "";
     private string _serverUrl = "";
     private bool _editingPlacement;
@@ -159,6 +162,11 @@ public sealed class ModelsViewModel : AreaViewModel
         EditPlacementCommand = new RelayCommand(() => IsEditingPlacement = true);
         SavePlacementCommand = new AsyncRelayCommand(SavePlacementAsync);
         CancelPlacementCommand = new RelayCommand(() => IsEditingPlacement = false);
+        ForgetChoiceCommand = new RelayCommand(() =>
+        {
+            if (_switchRow is { } row)
+                Run(() => ForgetChoiceAsync(row.Name));
+        }, () => CanForgetChoice);
         SwitchGeneratorCommand = new RelayCommand(() =>
         {
             if (Slots.FirstOrDefault(slot => slot.Name == ModelSlotNames.Generator) is { CanSwitch: true } generator)
@@ -277,6 +285,23 @@ public sealed class ModelsViewModel : AreaViewModel
 
     public ObservableCollection<SwitchChoiceViewModel> SwitchChoices { get; } = [];
 
+    /// <summary>
+    /// A5: the picker's two choices, "This session" and "Default for new sessions": separate, as in the CLI's
+    /// <c>/model</c> and <c>/model --default</c>.
+    /// </summary>
+    public ObservableCollection<Choice> SwitchScopes { get; } = [];
+
+    /// <summary>A5: true when a pick switches the open session only; false when it writes the default for new sessions.</summary>
+    public bool SwitchForSession => _switchForSession;
+
+    /// <summary>What a pick does in the chosen scope, under the picker's title.</summary>
+    public string SwitchHint { get => _switchHint; private set => SetProperty(ref _switchHint, value); }
+
+    /// <summary>A5: "Follow the default": forgets the open session's choice for the slot (shown while it has one).</summary>
+    public RelayCommand ForgetChoiceCommand { get; }
+
+    public bool CanForgetChoice => _switchForSession && _switchRow?.HasSessionChoice == true;
+
     public string ServerName { get => _serverName; set { if (SetProperty(ref _serverName, value ?? "")) AddServerCommand.NotifyCanExecuteChanged(); } }
 
     public string ServerUrl { get => _serverUrl; set { if (SetProperty(ref _serverUrl, value ?? "")) AddServerCommand.NotifyCanExecuteChanged(); } }
@@ -306,25 +331,55 @@ public sealed class ModelsViewModel : AreaViewModel
     /// <summary>Alt+P (docs/plan/ui.md §6): the generator's Switch… picker.</summary>
     public RelayCommand SwitchGeneratorCommand { get; }
 
-    internal void OpenSwitch(SlotRowViewModel slot)
+    internal void OpenSwitch(SlotRowViewModel slot, bool? forSession = null)
     {
+        _switchRow = slot;
+        _switchForSession = forSession ?? true;
         var snapshot = _service.Snapshot;
         SwitchChoices.Clear();
+        // A5: in "This session" the current one is what the open session uses; in "Default for new sessions" the configured one.
+        var current = _switchForSession ? slot.SessionModel ?? slot.BoundModel : slot.BoundModel;
+        var scope = _switchForSession;
         foreach (var model in snapshot.Catalogue.Where(model => model.CanServe.Contains(slot.Name)))
         {
             // The current model says so; why another could not be picked is for the others.
-            var reason = model.IsAvailable || model.Name == slot.BoundModel ? ""
+            var reason = model.IsAvailable || model.Name == current ? ""
                 : model.Kind == ModelKind.Local ? (model.State is ModelState.Downloading or ModelState.Queued ? "downloading" : "not downloaded")
                 : model.Secret is { } secret ? $"set {SafeText.Clean(secret)} in Vault" : "unavailable";
             var name = model.Name;
             // Revealed: choosing it switches the slot in one click, so a hidden character in the name must show.
-            SwitchChoices.Add(new SwitchChoiceViewModel(SafeText.Reveal(name), $"{Spans.Plain(model.Where)} · {SafeText.Clean(model.Serves)}", name == slot.BoundModel,
-                model.IsAvailable, reason, new RelayCommand(() => Run(() => SwitchAsync(slot.Name, name)), () => model.IsAvailable && name != slot.BoundModel)));
+            SwitchChoices.Add(new SwitchChoiceViewModel(SafeText.Reveal(name), $"{Spans.Plain(model.Where)} · {SafeText.Clean(model.Serves)}", name == current,
+                model.IsAvailable, reason, new RelayCommand(() => Run(() => SwitchAsync(slot.Name, name, scope)), () => model.IsAvailable && name != current)));
         }
+
+        SwitchScopes.Clear();
+        SwitchScopes.Add(new Choice("This session", "Switches the open session only, until you change it", new RelayCommand(() => OpenSwitch(slot, true)))
+        {
+            IsSelected = _switchForSession,
+        });
+        SwitchScopes.Add(new Choice("Default for new sessions", "Writes corvid.json, as corvid model switch does; open sessions keep their own choice",
+            new RelayCommand(() => OpenSwitch(slot, false)))
+        {
+            IsSelected = !_switchForSession,
+        });
+        SwitchHint = _switchForSession
+            ? "This session only, until you change it: escalation still moves off it and the turn's end comes back to it. A running turn takes it at its next step, after its issued tool calls."
+            : "Written to corvid.json: new sessions start on it. Open sessions keep their own choice; one that made none follows it when its turn ends.";
+        ForgetChoiceCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(CanForgetChoice));
+        OnPropertyChanged(nameof(SwitchForSession));
 
         _switchSlot = slot.Name;
         SwitchTitle = $"Switch the {slot.Name}";
         Picker = ModelsPicker.Switch;
+    }
+
+    private async Task ForgetChoiceAsync(string slot)
+    {
+        var answer = await _service.ClearSessionChoiceAsync(slot).ConfigureAwait(true);
+        if (answer.Written)
+            ClosePicker();
+        Report(answer);
     }
 
     internal void TogglePin(SlotRowViewModel slot) =>
@@ -364,9 +419,27 @@ public sealed class ModelsViewModel : AreaViewModel
         }
     }
 
-    private async Task SwitchAsync(string slot, string model)
+    private async Task SwitchAsync(string slot, string model, bool forSession)
     {
-        var answer = await _service.SwitchAsync(slot, model).ConfigureAwait(true);
+        // A local model loads before the switch is made (Kev-4B takes seconds on the CPU): until then the open session is on
+        // the old one, so the picker says so rather than looking as if the click did nothing.
+        var hint = SwitchHint;
+        var pending = forSession
+            ? $"Switching this session's {slot} to {SafeText.Clean(model)}… A model that is not loaded yet loads first; until then the session stays on {SafeText.Clean(_service.Snapshot.Slot(slot)?.SessionModel ?? _service.Snapshot.Slot(slot)?.Model ?? "its current model")}."
+            : $"Writing {SafeText.Clean(model)} as the {slot} for new sessions…";
+        SwitchHint = pending;
+        ConfigWrite answer;
+        try
+        {
+            answer = forSession
+                ? await _service.SwitchSessionAsync(slot, model).ConfigureAwait(true)
+                : await _service.SwitchAsync(slot, model).ConfigureAwait(true);
+        }
+        finally
+        {
+            if (SwitchHint == pending)
+                SwitchHint = hint;
+        }
         if (answer.Written)
             ClosePicker();
         Report(answer);

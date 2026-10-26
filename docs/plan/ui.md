@@ -190,7 +190,7 @@ work: K-n from tui.md §9, G-n from §9 here.
 | Image paste and screenshots as chips, shown inline | stakes | | K-8 |
 | Queue while a turn runs: `Enter` queues, chips above the composer, reorder, remove, take back into the editor | stakes | the actor already reads during a turn | |
 | Steer now: `Ctrl+Enter` delivers at the next step checkpoint, visible to the fabric before the generator | Corvid | | K-3 |
-| Aside (`Ctrl+;`): a side question answered in a scratch fork of the session at its head, never appended to the main log; "bring this in" sends the answer as a message | stakes (Claude Code's `/btw` and side chat) | `ForkSessionAsync` between turns today; during a running turn the fork waits for the turn to end | G-15 for mid-turn |
+| Aside (`Ctrl+;`): a side question answered in a scratch fork of the session at its head, never appended to the main log; "bring this in" sends the answer as a message | stakes (Claude Code's `/btw` and side chat) | `ForkSessionAsync`; during a running turn it forks at the turn's last completed step without waiting (G-15, A5) | |
 | Token estimate of the draft against the context gauge | nice | | K-5 |
 | Saved prompts and templates with placeholders | nice (the local front ends) | `ui.db` | G-7 |
 | Voice push-to-talk | later (plan D-7) | | |
@@ -317,9 +317,12 @@ by side; for MCP tools the server's trust; the deadline as a countdown (five min
 ### 4.8 Models
 
 - **Slots** page: the seven slots (`generator`, `summarizer`, `decider`, `extractor`, `embedder.text`, `embedder.media`,
-  `vision`) with current, default, escalation ladder, fallbacks, placement and pin state; switching mid-turn; drag to
-  reorder the ladder, validated and written to `corvid.json` the way `corvid model switch` does it. The decider is
-  shared across sessions and the page says so.
+  `vision`) with current, default, escalation ladder, fallbacks, placement and pin state; switching at any time,
+  mid-turn too (the running turn takes it at its next step boundary); drag to reorder the ladder, validated and written
+  to `corvid.json` the way `corvid model switch` does it. A switch is either "this session" (it lasts for the session,
+  through turn ends, until the person changes or forgets it; escalation and fallback still move off it and
+  de-escalation returns to it) or "default for new sessions" (written to `corvid.json`); `Alt+P`, `/model` and
+  `/model --default` offer the same two. The decider is switchable per session too (A5).
 - **Catalogue**: local Starling models and the configured remote ones (Anthropic, OpenAI-compatible endpoints, Gemini),
   each with size, device fit from the doctor's GPU section, cached state and what it serves.
 - **Downloads**: explicit, with sizes and progress, cancel, and a note that nothing downloads implicitly. The default
@@ -391,8 +394,11 @@ plug in when they land. Audit appears as counts, through the read-only summary v
 
 The Board shows every session as a card: state (idle, running, waiting on you), the current step, elapsed time, model,
 taint and workspace. Peek opens a read-only live view; attach makes it the active session. New parallel sessions start
-here. When plan §14's `delegate_task` lands, a session's children appear as a tree with goal, toolset, budget, status
-and the validated output, and the Board groups them under their parent. Kanban boards come later, on the same substrate.
+here. A session's children (plan §14's `delegate_task`, built in A5, and `/delegate`) appear as a tree with goal,
+toolset, budget, model mix, status and the validated output: on the Board under their parent, and in the session
+header's children list. A child opens read-only, linked to its parent, and can be stopped from either list. Spawning one
+is a side effect under the session's approval mode, its card showing the goal, toolset, budget and models. Kanban boards
+come later, on the same substrate.
 
 ### 4.14 Remote and companion
 
@@ -464,7 +470,7 @@ into the editor.
 
 **F7 An aside.** `Ctrl+;` opens a panel beside the transcript. The question runs in a scratch fork at the session's
 head, so it sees the context and writes nothing back. "Bring this in" sends the answer as a message; closing the panel
-discards the fork. Mid-turn asides wait on G-15.
+discards the fork. Mid-turn, the fork is taken at the running turn's last completed step (G-15, built in A5).
 
 **F8 Escalation and the privacy gate.** A step's `difficulty` answer sends the step to the cloud slot. The row says
 "escalated to claude: step budget", and the gauge shows the cloud window. The user clicks "what left the machine" and
@@ -509,8 +515,8 @@ host binding and the command to set it, and opens the Vault helper (U-6) or a te
 becomes available. The app never saw the value.
 
 **F18 The Board.** Three sessions run in two workspaces. The Board shows each with its step and state; one waits on an
-approval, which the tray also lists. Peek opens it read-only; attach switches to it. A child session, once subagents
-exist, shows under its parent with its budget.
+approval, which the tray also lists. Peek opens it read-only; attach switches to it. A child session shows under its
+parent with its budget and models (A5), opens read-only with its parent linked, and can be stopped there.
 
 **F19 Attachments and images.** A dropped screenshot becomes a chip and renders in the transcript (K-8); a dropped
 source file becomes an `@` reference; a dropped folder is offered as a workspace to open.
@@ -626,7 +632,7 @@ structured questions, rule removal, images, titles and `SessionUpdates`. New:
 | G-12 | a single-driver lock per session and read-only tailing from another process | sessions open in a terminal |
 | G-13 | job create and edit through a host API with schedule preview | the Jobs form |
 | G-14 | gateway and scheduler hosting with a status API in-process | the Gateway page in the app |
-| G-15 | forking at a step boundary while a turn runs | asides mid-turn |
+| G-15 | forking at a step boundary while a turn runs (built in A5: `CorvidRuntime.ForkAsync`, `/fork`, Fork…, ACP `session/fork`) | asides mid-turn |
 | V-n | a read-only catalogue and status call from Vault (names, hosts, policy summary, audit counts) | the Secrets page |
 
 ## 10. Phasing
@@ -642,7 +648,8 @@ pages, the attention tray and notifications, the Board, search, export, themes, 
 K-3, K-5, K-7, K-9, G-3, G-5, G-6, G-8 to G-14.
 
 **A2, reach.** Attached mode and the daemon, the WebAssembly client with pairing, phone notifications through Vault,
-subagent views, worktrees per session, images, voice. G-1, G-4, G-15, K-8.
+subagent views, worktrees per session, images, voice. G-1, G-4, G-15, K-8. (Subagent views and G-15 were built in the
+A5 phase, before attached mode, worktrees, images and packaging, which A6 takes.)
 
 ## 11. Open decisions
 

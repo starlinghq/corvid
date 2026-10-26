@@ -37,6 +37,30 @@ public enum ModelSwitchKind
     FellBack,
     /// <summary>The user switched it (<c>/model</c>, Alt+P).</summary>
     Switched,
+    /// <summary>A5: the turn ended and it went back to the session's default (de-escalation, or a one-turn switch undone).</summary>
+    Returned,
+}
+
+/// <summary>
+/// A5: one slot's model for this session changed, or the person's choice of it did (<c>_corvid/slot_model</c>, from the
+/// host's <c>ModelChanged</c>): any slot (generator, decider, extractor…), for the session's model strip and the Models
+/// page's per-session column. The generator's change also comes as <see cref="ModelSwitched"/>, which is the transcript's
+/// row; this one adds no row. Model ids come from configuration: shown through <see cref="SafeText"/>.
+/// </summary>
+/// <param name="Slot">The slot's name (<c>generator</c>, <c>decider</c>…).</param>
+/// <param name="From">The profile id it left (<c>none</c> for a slot nothing bound: a decider chosen on the degraded tier).</param>
+/// <param name="To">The profile id it uses now (<c>none</c> when let go of).</param>
+/// <param name="Reason">The wire reason: <c>session</c>, <c>user</c>, <c>escalation</c>, <c>fallback</c>, <c>de_escalation</c> or <c>privacy</c>.</param>
+public sealed record SlotModelChanged(string Slot, string From, string To, string Reason) : SessionUpdate
+{
+    /// <summary>The change made <see cref="To"/> the slot's default for this session (the person's "this session" choice).</summary>
+    public bool SessionDefault { get; init; }
+
+    /// <summary>The slot is pinned: a turn's end leaves it where it is.</summary>
+    public bool Pinned { get; init; }
+
+    /// <summary>The model is a cloud one: its requests leave the machine through the egress gate.</summary>
+    public bool Cloud { get; init; }
 }
 
 /// <summary>
@@ -225,7 +249,7 @@ public sealed record EngineStatus : SessionUpdate
 /// <summary>
 /// A clarifying question (<c>_corvid/question</c>): options as buttons and a free-text answer, pinned until answered.
 /// K-6: the log's <c>ClarificationAsked</c>, the structured question a <c>Clarifying</c> turn ended on (the decider's
-/// clarify, or the generator's <c>ask_user</c> with its options). Nothing answers it but the person's next message.
+/// clarify, or the generator's <c>ask_user</c> with its options). Nothing answers it but the person: their next message, or (A5) their answer inside the turn where a surface can take it.
 /// </summary>
 public sealed record QuestionAsked(string QuestionId, string Text) : SessionUpdate
 {
@@ -237,7 +261,7 @@ public sealed record QuestionAsked(string QuestionId, string Text) : SessionUpda
     public bool AllowsFreeText { get; init; } = true;
 }
 
-/// <summary>The question was answered; the answer is sent as the user's reply.</summary>
+/// <summary>The question was answered: sent as the user's reply, or (A5) taken inside the turn as its call's result; an empty answer withdraws it.</summary>
 public sealed record QuestionAnswered(string QuestionId, string Answer) : SessionUpdate;
 
 /// <summary>

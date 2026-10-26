@@ -45,6 +45,14 @@ public sealed record TurnOptions
     /// </summary>
     public bool Interactive { get; init; } = true;
 
+    /// <summary>
+    /// A5: false for a turn that may not put a question to the person (a child session's, plan §14: no <c>clarify</c>): the
+    /// <c>clarify</c> question is not asked, <c>intent</c>'s <c>ask_clarifying_question</c> never diverts the turn, and
+    /// <c>ask_user</c> is not offered, so the turn never ends <see cref="TurnStatus.Clarifying"/>. Its approvals still ask
+    /// whoever answers them (<see cref="Interactive"/>).
+    /// </summary>
+    public bool AsksQuestions { get; init; } = true;
+
     /// <summary>Labels the extractor looks for in the user message, for the TurnState's <c>entities</c>.</summary>
     public ImmutableArray<string> EntityLabels { get; init; } = ["person", "organization", "place", "date", "time", "project", "file", "url"];
 
@@ -138,7 +146,17 @@ public sealed class TurnServices
 
     public required SessionModelSlots Slots { get; init; }
 
+    /// <summary>The shared fabric; with <see cref="Deciders"/> set, only the default (see <see cref="CurrentFabric"/>).</summary>
     public required DecisionFabric Fabric { get; init; }
+
+    /// <summary>
+    /// A5: the decider per session. When set, each checkpoint and each approval's <c>risk</c> question runs on the fabric for
+    /// the session's current <c>decider</c> slot (its mix's, or the one the person switched to); null keeps <see cref="Fabric"/>.
+    /// </summary>
+    public SessionDeciders? Deciders { get; init; }
+
+    /// <summary>The fabric the session's decisions run on now (A5): <see cref="Deciders"/>' for <see cref="Slots"/>, else <see cref="Fabric"/>.</summary>
+    public DecisionFabric CurrentFabric() => Deciders?.For(Slots) ?? Fabric;
 
     public required ToolRegistry Tools { get; init; }
 
@@ -192,6 +210,12 @@ public sealed class TurnServices
     /// (turn progress) and the bounded tail of a running call's output (K-2). Null tells nobody, and tools get no output sink.
     /// </summary>
     public ITurnListener? Listener { get; init; }
+
+    /// <summary>
+    /// A5: where an <c>ask_user</c> question is asked inside the turn when a surface can answer it now; null (or nobody
+    /// attached) ends the turn on the question, as K-6 does.
+    /// </summary>
+    public IQuestionAsker? Questions { get; init; }
 }
 
 /// <summary>

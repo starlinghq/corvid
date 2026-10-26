@@ -39,8 +39,14 @@ internal sealed class InstrumentedChatClient(IChatClient inner, ModelProfile pro
                             stream.Publish(session, observer => observer.Thought(thought));
                 }
                 response = updates.ToChatResponse();
-                if (response.Usage is { } used)
+                if (response.Usage is { } used && (used.InputTokenCount is not null || used.OutputTokenCount is not null))
                     stream.Publish(session, observer => observer.Usage(used.InputTokenCount, used.OutputTokenCount));
+                else
+                {
+                    // L3 (A5 review): a provider that reports no usage is estimated, so a child's token budget still counts it.
+                    var (input, output) = Estimate(messages, response);
+                    stream.Publish(session, observer => observer.UsageEstimated(input, output));
+                }
             }
             else
             {
@@ -89,6 +95,21 @@ internal sealed class InstrumentedChatClient(IChatClient inner, ModelProfile pro
                 activity?.SetStatus(ActivityStatusCode.Error);
             latency.Record(Stopwatch.GetElapsedTime(started), failed);
         }
+    }
+
+    /// <summary>
+    /// The tokens of a call its provider did not count: the request's and the response's text through the binding's token
+    /// counter, or about four characters a token without one.
+    /// </summary>
+    private (long Input, long Output) Estimate(IEnumerable<ChatMessage> messages, ChatResponse response)
+    {
+        var counter = GetService(typeof(Abstractions.Tokens.ITokenCounter)) as Abstractions.Tokens.ITokenCounter;
+        long Count(string text) => text.Length == 0 ? 0 : counter?.CountTokens(text) ?? (text.Length + 3) / 4;
+        // Tool results too (a fetched page is most of a prompt), so a child's token budget holds on such a provider.
+        long Of(ChatMessage message) => Count(message.Text) + message.Contents.OfType<FunctionCallContent>()
+            .Sum(call => Count(call.Name) + Count(call.Arguments is null ? "" : string.Join(" ", call.Arguments.Select(pair => pair.Key + " " + pair.Value))))
+            + message.Contents.OfType<FunctionResultContent>().Sum(result => Count(result.Result?.ToString() ?? ""));
+        return (messages.Sum(Of), response.Messages.Sum(Of));
     }
 
     private static void Describe(Activity? activity, string? model, UsageDetails? usage, ChatFinishReason? finish)

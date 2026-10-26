@@ -21,6 +21,13 @@ internal static class AcpMethods
     public const string SessionUpdate = "session/update";
     public const string RequestPermission = "session/request_permission";
     public const string CancelRequest = "$/cancel_request";
+
+    /// <summary>
+    /// A5: Corvid's extension notification (tui.md §3.2's <c>corvid.question</c>, as ACP's <c>_</c>-prefixed custom methods
+    /// go): the clarifying question a prompt turn ended on (K-6), sent before the prompt's response so an editor that
+    /// knows it can show its options. A client that does not ignores it, as ACP asks of unknown notifications.
+    /// </summary>
+    public const string CorvidQuestion = "_corvid/question";
 }
 
 /// <summary>JSON-RPC and ACP error codes (schema <c>ErrorCode</c>).</summary>
@@ -94,7 +101,11 @@ internal sealed record SessionRequest
     public JsonElement? Meta { get; init; }
 }
 
-internal sealed record NewSessionResponse(string SessionId);
+internal sealed record NewSessionResponse(string SessionId)
+{
+    /// <summary>A5: the session's configuration options (the generator, the decider); see AcpServer.Models.cs.</summary>
+    public ConfigOption[]? ConfigOptions { get; init; }
+}
 
 internal sealed record EmptyResponse;
 
@@ -156,6 +167,7 @@ internal sealed record SessionNotification(string SessionId, SessionUpdate Updat
 [JsonDerivedType(typeof(ToolCall), "tool_call")]
 [JsonDerivedType(typeof(ToolCallUpdate), "tool_call_update")]
 [JsonDerivedType(typeof(AvailableCommandsUpdate), "available_commands_update")]
+[JsonDerivedType(typeof(ConfigOptionUpdate), "config_option_update")]
 internal abstract record SessionUpdate;
 
 internal sealed record UserMessageChunk(ContentBlock Content) : SessionUpdate;
@@ -260,6 +272,9 @@ internal sealed record RequestPermissionResponse
     public PermissionOutcome Outcome { get; init; } = new();
 }
 
+/// <summary>A5: <c>_corvid/question</c>'s parameters. The question and options are the model's text.</summary>
+internal sealed record CorvidQuestionNotification(string SessionId, string QuestionId, string Question, string[] Options);
+
 internal sealed record CorvidMeta
 {
     /// <summary>For session/fork: the log position to fork at (default the source's head).</summary>
@@ -287,5 +302,8 @@ internal sealed record JsonRpcError(int Code, string Message);
 [JsonSerializable(typeof(RequestPermissionRequest))]
 [JsonSerializable(typeof(RequestPermissionResponse))]
 [JsonSerializable(typeof(CorvidMeta))]
+[JsonSerializable(typeof(SetConfigOptionRequest))]
+[JsonSerializable(typeof(ConfigOptionsResponse))]
+[JsonSerializable(typeof(CorvidQuestionNotification))]
 [JsonSerializable(typeof(JsonRpcError))]
 internal sealed partial class AcpJson : JsonSerializerContext;

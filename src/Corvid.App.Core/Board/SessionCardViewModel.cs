@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Corvid.App.Core.Markdown;
 using Corvid.App.Core.Mvvm;
 using Corvid.App.Core.Sessions;
@@ -113,6 +114,66 @@ public sealed class SessionCardViewModel : BoardTile
     public RelayCommand OpenRunCommand { get; }
 
     public RelayCommand OpenJobsCommand { get; }
+
+    /// <summary>A5: this session's children, as a tree under the card (docs/plan/ui.md §4.13): oldest first.</summary>
+    public ObservableCollection<ChildRowViewModel> Children { get; } = [];
+
+    public bool HasChildren => Children.Count > 0;
+
+    /// <summary>
+    /// M5 (A5 review): the most child rows a card shows; the rest are counted in <see cref="MoreChildren"/>. Running children
+    /// are shown first (they can be stopped), then the latest.
+    /// </summary>
+    public const int MaxChildRows = 8;
+
+    private int _childCount, _runningCount;
+
+    /// <summary>"2 child sessions · 1 running", over every child, the ones left out of the rows too.</summary>
+    public string ChildrenHeader =>
+        $"{_childCount} child session{(_childCount == 1 ? "" : "s")}" + (_runningCount > 0 ? $" · {_runningCount} running" : "");
+
+    /// <summary>"+3 more" when the card shows only <see cref="MaxChildRows"/> of its children; empty otherwise.</summary>
+    public string MoreChildren { get; private set; } = "";
+
+    /// <summary>
+    /// A5: the children the Board found for this card, in order: a row each, kept in place when it only changed, so focus
+    /// stays on it.
+    /// </summary>
+    public void SetChildren(IReadOnlyList<ChildSessionChanged> all, Action<string> open, Func<string, Task>? stop)
+    {
+        ArgumentNullException.ThrowIfNull(all);
+        _childCount = all.Count;
+        _runningCount = all.Count(child => child.IsRunning);
+        // M5: a capped tree, in order: the running children, then the latest, up to MaxChildRows.
+        IReadOnlyList<ChildSessionChanged> children = all.Count <= MaxChildRows ? all
+            : [.. all.Select((child, index) => (Child: child, Index: index)).OrderByDescending(item => item.Child.IsRunning)
+                .ThenByDescending(item => item.Index).Take(MaxChildRows).OrderBy(item => item.Index).Select(item => item.Child)];
+        MoreChildren = all.Count > children.Count ? $"+{all.Count - children.Count} more" : "";
+        for (var i = 0; i < children.Count; i++)
+        {
+            var at = -1;
+            for (var j = i; j < Children.Count; j++)
+                if (Children[j].Id == children[i].ChildId)
+                {
+                    at = j;
+                    break;
+                }
+            if (at < 0)
+                Children.Insert(i, new ChildRowViewModel(children[i], open, stop));
+            else
+            {
+                if (at != i)
+                    Children.Move(at, i);
+                if (Children[i].Child != children[i])
+                    Children[i].Update(children[i]);
+            }
+        }
+        while (Children.Count > children.Count)
+            Children.RemoveAt(Children.Count - 1);
+        OnPropertyChanged(nameof(HasChildren));
+        OnPropertyChanged(nameof(ChildrenHeader));
+        OnPropertyChanged(nameof(MoreChildren));
+    }
 
     public void Update(SessionSummary summary)
     {

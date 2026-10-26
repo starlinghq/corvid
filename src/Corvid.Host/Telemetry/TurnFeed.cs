@@ -24,6 +24,13 @@ public interface ITurnObserver
     /// </summary>
     void Usage(long? inputTokens, long? outputTokens) { }
 
+    /// <summary>
+    /// A5 review (L3): the generator call finished and its provider reported no usage, so these are the token counter's
+    /// estimate of the request and the response. Surfaces that show only reported usage ignore it; a child's token budget
+    /// counts it.
+    /// </summary>
+    void UsageEstimated(long inputTokens, long outputTokens) { }
+
     void ToolStarted(string callId, string tool, bool approval) { }
 
     /// <param name="outcome"><c>succeeded</c>, <c>failed</c>, <c>invalid_arguments</c>, <c>denied</c> or <c>cancelled</c>.</param>

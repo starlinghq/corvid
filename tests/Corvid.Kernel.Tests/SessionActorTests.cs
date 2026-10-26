@@ -62,7 +62,7 @@ public sealed class SessionActorTests
         // The prompt is linked to its call in the log, and the result follows the switch.
         var events = harness.Payloads();
         Assert.Equal("c-park", events.OfType<ApprovalRequested>().Single().CallId);
-        var switchIndex = events.ToList().FindIndex(item => item is ModelSwitched { Reason: "user" });
+        var switchIndex = events.ToList().FindIndex(item => item is ModelSwitched { Reason: "session" });
         var resultIndex = events.ToList().FindIndex(item => item is ToolResult);
         Assert.True(switchIndex < resultIndex);
     }

@@ -126,6 +126,10 @@ public static class SessionCatalogue
                 case ClarificationAsked asked:
                     question = asked;
                     break;
+                // A5: answered inside its turn.
+                case ClarificationAnswered answered when question?.QuestionId == answered.QuestionId:
+                    question = null;
+                    break;
                 case AssistantMessage assistant:
                     answer = assistant.Text;
                     break;
@@ -220,11 +224,13 @@ public sealed class SessionTitler
     private const long Seed = 20_261;
     private const int LineChars = 300;
 
-    private const string TitlePrompt =
+    /// <summary>The title prompt, Corvid's own text (A5: the egress gate neither scans nor rewrites it).</summary>
+    internal const string TitlePrompt =
         "You name conversations for a list. Reply with a title of at most eight words for the conversation below, in the "
         + "language it is written in: no quotes, no punctuation at the end, nothing else.";
 
-    private const string RecapPrompt =
+    /// <summary>The recap prompt, Corvid's own text (A5: the egress gate neither scans nor rewrites it).</summary>
+    internal const string RecapPrompt =
         "You write recaps for a person coming back to a conversation with a coding assistant. In at most three short lines, "
         + "say what was asked, what was done and what is still open, from the events below. Reply with the recap only.";
 

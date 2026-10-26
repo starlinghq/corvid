@@ -102,7 +102,14 @@ public sealed record ToolAction(
     ToolDescriptor Tool,
     JsonElement Arguments,
     ImmutableArray<ActionTarget> Targets = default,
-    ImmutableArray<string> Recipients = default) : ProposedAction;
+    ImmutableArray<string> Recipients = default) : ProposedAction
+{
+    /// <summary>
+    /// A5 review (security L5): the tools the calling turn was offered, when the kernel knows them, so a card that previews
+    /// what the call would start (a <c>delegate_task</c> spawn's children) shows the toolset the call will get. Null: unknown.
+    /// </summary>
+    public IReadOnlySet<string>? OfferedTools { get; init; }
+}
 
 /// <summary>One command after unwrapping, with what it does and to what.</summary>
 /// <param name="Verb">The program's name (<c>rm</c>), the tool name, or <c>?</c> when it is computed at run time.</param>

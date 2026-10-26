@@ -16,6 +16,9 @@ public sealed partial class RedactionMap
     private readonly Dictionary<string, string> _byPlaceholder = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _counters = new(StringComparer.Ordinal);
 
+    // A5 review: the longest letters-only value replaced only as a whole word.
+    internal const int WholeWordMaxLength = 3;
+
     internal long LastUsed { get; set; }
 
     public int Count
@@ -70,8 +73,17 @@ public sealed partial class RedactionMap
         // (a first name inside a full name) never splits it.
         var matches = new List<(int Start, int Length, string Placeholder)>();
         foreach (var (value, placeholder) in values)
+        {
+            // A5: a short PII value of letters (three or fewer: "Ann", "Bo") is replaced only where it stands as a word, not
+            // inside a longer one ("Annual"), or it would rewrite unrelated words everywhere. A5 review: anything longer is
+            // replaced wherever it appears, as a credential, a number (an account, a phone) or a full name is: a name glued
+            // to other text (the handle "SmithJ") still names the person. The cost is a word that holds a name ("Mark" in
+            // "Marketing"), which the response maps back.
+            var whole = !IsCredential(placeholder) && value.Length <= WholeWordMaxLength && value.All(char.IsLetter);
             for (var at = text.IndexOf(value, StringComparison.Ordinal); at >= 0; at = text.IndexOf(value, at + 1, StringComparison.Ordinal))
-                matches.Add((at, value.Length, placeholder));
+                if (!whole || (at == 0 || !char.IsLetterOrDigit(text[at - 1])) && (at + value.Length == text.Length || !char.IsLetterOrDigit(text[at + value.Length])))
+                    matches.Add((at, value.Length, placeholder));
+        }
         if (matches.Count == 0)
             return text;
         matches.Sort((a, b) => a.Start != b.Start ? a.Start.CompareTo(b.Start) : b.Length.CompareTo(a.Length));

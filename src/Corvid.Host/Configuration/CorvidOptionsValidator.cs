@@ -112,6 +112,7 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
         errors.AddRange(Composition.McpComposition.Definitions(options).Problems);
 
         ValidateGateway(errors, models, options.Gateway, options.Mcp.Servers.Keys);
+        ValidateAgents(errors, models, options.Agents);
 
         // The file tools and the shell are confined to it, so it must be there before anything runs.
         if (options.Workspace is { Length: > 0 } workspace && Path.IsPathFullyQualified(CorvidPaths.ExpandHome(workspace))
@@ -183,6 +184,58 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
                         CheckModel(errors, models, slot, $"(gateway chat {chat})", model);
                 }
             }
+        }
+    }
+
+    // A5: child sessions' ceilings, the allowlist's names and the named mixes, each as a child would bind it.
+    private static void ValidateAgents(List<string> errors, Models models, AgentsSettings agents)
+    {
+        if (agents.MaxConcurrent is < 1 or > 10)
+            errors.Add("Corvid:Agents:MaxConcurrent must be between 1 and 10.");
+        if (agents.MaxDepth is < 0 or > 1)
+            errors.Add("Corvid:Agents:MaxDepth must be 0 (no children) or 1 (children cannot delegate).");
+        if (agents.MaxSteps is < 1 or > 64)
+            errors.Add("Corvid:Agents:MaxSteps must be between 1 and 64.");
+        if (agents.MaxTokens is < 1_000 or > 10_000_000)
+            errors.Add("Corvid:Agents:MaxTokens must be between 1000 and 10000000.");
+        if (agents.MaxSeconds is < 10 or > 86_400)
+            errors.Add("Corvid:Agents:MaxSeconds must be between 10 and 86400.");
+        foreach (var model in agents.Models)
+            if (!models.TryFind(model, out _))
+                errors.Add($"Corvid:Agents:Models: no model is named '{ModelMix.Escape(model ?? "")}'; known models: {models.Names}.");
+        foreach (var name in agents.Mixes.Keys.Order(StringComparer.Ordinal))
+        {
+            ModelMix mix;
+            try
+            {
+                mix = agents.Mix(name)!;
+            }
+            catch (ModelMixException exception)
+            {
+                errors.Add($"Corvid:Agents:Mixes:{ModelMix.Escape(name)}: {exception.Message}");
+                continue;
+            }
+            foreach (var (slot, entry) in mix.Slots)
+                foreach (var model in new[] { entry.Model }.Concat(entry.Ladder ?? []).Concat(entry.Fallbacks ?? []))
+                {
+                    if (!models.TryFind(model, out var descriptor))
+                        errors.Add($"Corvid:Agents:Mixes:{ModelMix.Escape(name)}:{slot}: no model is named '{model}'; known models: {models.Names}.");
+                    else if (!descriptor.Serves(slot))
+                        errors.Add($"Corvid:Agents:Mixes:{ModelMix.Escape(name)}:{slot}: '{model}' cannot serve {slot}; it serves {string.Join(", ", descriptor.Slots)}.");
+                    else if (agents.Models.Count > 0 && !agents.Models.Contains(descriptor.Name, StringComparer.OrdinalIgnoreCase))
+                        errors.Add($"Corvid:Agents:Mixes:{ModelMix.Escape(name)}:{slot}: '{model}' is not in Corvid:Agents:Models.");
+                }
+        }
+        // A5: named toolsets. Whether each tool exists is known only once the registry is; a child is cut to its parent's anyway.
+        foreach (var (name, tools) in agents.Toolsets.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            if (string.Equals(name, Composition.CorvidRuntime.ReadOnlyToolset, StringComparison.OrdinalIgnoreCase))
+                errors.Add($"Corvid:Agents:Toolsets:{name}: '{Composition.CorvidRuntime.ReadOnlyToolset}' is built in and cannot be configured.");
+            else if (string.IsNullOrWhiteSpace(name) || !name.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
+                errors.Add($"Corvid:Agents:Toolsets: '{ModelMix.Escape(name ?? "")}' is not a toolset name (letters, digits, '_' and '-').");
+            foreach (var tool in tools ?? [])
+                if (string.IsNullOrWhiteSpace(tool) || !tool.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.'))
+                    errors.Add($"Corvid:Agents:Toolsets:{ModelMix.Escape(name ?? "")}: '{ModelMix.Escape(tool ?? "")}' is not a tool name.");
         }
     }
 

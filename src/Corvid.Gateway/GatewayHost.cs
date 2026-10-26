@@ -428,7 +428,17 @@ public sealed class GatewayHost : IAsyncDisposable
             return ApprovalAnswer.Deny();
         try
         {
-            _ledger.Queue(new DeliveryQueued(NewId(), adapter, chatId, Describe(prompt, _time.GetUtcNow() + wait), "notice"));
+            IReadOnlyList<string> extra;
+            try
+            {
+                extra = await _agent.CardLinesAsync(prompt, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
+            {
+                // The card's extra lines are a view; the approval still asks, without them.
+                extra = [];
+            }
+            _ledger.Queue(new DeliveryQueued(NewId(), adapter, chatId, Describe(prompt, _time.GetUtcNow() + wait, extra), "notice"));
             Signal();
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
             deadline.CancelAfter(wait);
@@ -447,12 +457,13 @@ public sealed class GatewayHost : IAsyncDisposable
         }
     }
 
-    private static string Describe(ApprovalPrompt prompt, DateTimeOffset until)
+    private static string Describe(ApprovalPrompt prompt, DateTimeOffset until, IReadOnlyList<string> extra)
     {
         var lines = new List<string>
         {
             $"Approval needed: {prompt.Analysis.Kind} {prompt.Analysis.Text}",
         };
+        lines.AddRange(extra);
         if (!prompt.Reasons.IsEmpty)
             lines.Add("Why: " + string.Join("; ", prompt.Reasons.Select(reason => reason.Detail)));
         lines.Add("Reply /approve" + string.Concat(prompt.Offered.Where(offered => offered != ApprovalScope.Once)

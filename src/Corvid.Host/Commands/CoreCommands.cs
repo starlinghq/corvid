@@ -28,7 +28,7 @@ public static class CoreCommands
         return registry
             .Add(new SlashCommand("help", "List the commands.", "", Help))
             .Add(new SlashCommand("model", "Pick a model: lists a slot's models numbered, or switches one for this session.",
-                ModelUsage, ModelAsync) { Aliases = ["models"] })
+                ModelUsage, ModelAsync) { Aliases = ["models"], DuringTurn = true })
             .Add(new SlashCommand("status", "Slots with their device, queue depth and median latency; the session's state.", "", Status))
             .Add(new SlashCommand("goal", "Show, set or clear the standing goal.", "[text | clear]", Goal))
             .Add(new SlashCommand("approvals", "Pending approvals and the remembered approval rules.", "", Approvals))
@@ -42,6 +42,9 @@ public static class CoreCommands
             .Add(new SlashCommand("compact", "Compact the conversation before the latest turn now, keeping what you name in full.",
                 "[<what to keep>]", CompactAsync))
             .Add(new SlashCommand("cron", "Scheduled jobs: list, run history, pause, resume or remove one.", CronCommands.Usage, CronCommands.RunAsync))
+            .Add(new SlashCommand("agents", "This session's child sessions: list them, show one's answer, or stop one.", AgentCommands.AgentsUsage, AgentCommands.AgentsAsync))
+            .Add(new SlashCommand("delegate", "Start a child session on a goal, with the tools, model mix and budget you give.", AgentCommands.DelegateUsage,
+                AgentCommands.DelegateAsync))
             .Add(new SlashCommand("rollback", "List checkpoints, or go back to before the Nth latest one (files and conversation).",
                 "[N]", RollbackAsync))
             .Add(new SlashCommand("cancel", "Cancel the running turn.", "", Cancel))
@@ -50,6 +53,8 @@ public static class CoreCommands
             .Add(new SlashCommand("recap", "A few lines on what happened in this session since its last recap, by the local generator.", "",
                 SessionCommands.RecapAsync))
             .Add(new SlashCommand("pin", "Keep this session at the top of the app's rail and of /sessions.", "[off]", SessionCommands.Pin))
+            .Add(new SlashCommand("fork", "Fork this session into a new one; during a turn, at its last completed step.", ForkCommand.Usage,
+                ForkCommand.RunAsync) { DuringTurn = true })
             .Add(new SlashCommand("exit", "Leave the session.", "", Exit) { Aliases = ["quit"] });
     }
 
@@ -75,19 +80,26 @@ public static class CoreCommands
 
     // ---- /model ----
 
-    internal const string ModelUsage = "[slot] [<model> | <number>] [--pin] | unpin <slot>";
+    internal const string ModelUsage = "[slot] [<model> | <number>] [--pin | --default] | unpin <slot> | reset <slot>";
 
     private static async ValueTask<CommandOutput> ModelAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
     {
-        var arguments = invocation.Arguments.Where(argument => argument != "--pin").ToArray();
+        var arguments = invocation.Arguments.Where(argument => argument is not ("--pin" or "--default")).ToArray();
         var pin = invocation.Arguments.Contains("--pin");
+        // A5: "default for new sessions" is a separate choice from this session's (corvid.json, as `corvid model switch` writes it).
+        var asDefault = invocation.Arguments.Contains("--default");
+        if (pin && asDefault)
+            return CommandOutput.Error("--pin is for this session and --default for new sessions: pick one.");
         if (arguments.Length == 0)
             return ModelPicker(context, ModelSlots.Generator);
+        if (arguments is ["reset", var reset])
+            return await ResetModelAsync(context, reset, cancellationToken).ConfigureAwait(false);
         if (arguments is ["unpin", var unpinned])
         {
             ModelSlots.ContractOf(unpinned);
-            context.Session.Slots.Unpin(unpinned);
-            return CommandOutput.Success($"{unpinned} is unpinned: it returns to its default when the turn ends.");
+            await context.Session.Slots.UnpinAsync(unpinned, cancellationToken).ConfigureAwait(false);
+            // A pin only stops de-escalation (plan §6, C-006): escalation and fallback move a pinned slot too.
+            return CommandOutput.Success($"{unpinned} is unpinned: when a turn ends it returns to this session's choice again, wherever escalation took it.");
         }
 
         string slot, name;
@@ -120,27 +132,65 @@ public static class CoreCommands
             return CommandOutput.Error($"Usage: /model {ModelUsage}. /model alone lists the models to pick from.");
         }
 
-        // The fabric, approvals and memory share one decider across sessions, so a per-session switch would not reach them.
-        if (slot == ModelSlots.Decider)
-            return CommandOutput.Error($"The decider is shared by every session ({context.Runtime.DeciderState}). Change it with " +
-                $"`corvid model switch {ModelSlots.Decider} <model>` and restart.");
         if (slot == ModelSlots.TextEmbedder && !context.Runtime.IsConfigured(slot, name))
             return CommandOutput.Error($"Memory embeds only with the embedder.text models configured at start. Add {name} to " +
                 "Corvid:Models:Slots:embedder.text:Fallbacks, then restart.");
+        if (asDefault)
+            return DefaultModel(context, slot, name);
         var availability = context.Runtime.Catalogue.Check(name);
         if (!availability.IsReady)
             return CommandOutput.Error(availability.Detail + (availability.Acquire is { } acquire ? $" Run `{acquire}`." : ""));
 
-        var binding = context.Runtime.Bind(slot, name);
-        var result = await context.Session.Actor.SwitchModelAsync(slot, binding, pin, cancellationToken).ConfigureAwait(false);
+        // A5: a turn running now takes the switch at its next step, once its issued tool calls finish.
+        var running = context.Runtime.IsTurnRunning(context.Session.Id);
+        // A5: the switch is this session's choice until changed (de-escalation returns to it); the decider too, per session.
+        // `corvid model switch` changes the default for new sessions.
+        var result = await context.Session.SetModelAsync(slot, name, pin ? SwitchScope.Pin : SwitchScope.Session, cancellationToken).ConfigureAwait(false);
         var carried = result.PendingApprovals.IsEmpty ? "" : $" {result.PendingApprovals.Length} pending approval(s) carry over.";
+        var target = result.To?.Id ?? name;
+        var when = running ? " The running turn takes it at its next step." : "";
         return result.Status switch
         {
-            SwitchStatus.Switched => CommandOutput.Success($"{slot}: {result.From.Id} → {result.To!.Id}{(pin ? " (pinned)" : "")}.{carried}"),
-            SwitchStatus.Unchanged => CommandOutput.Text($"{slot} already uses {binding.Profile.Id}."),
-            SwitchStatus.Refused => CommandOutput.Error($"{slot}: the privacy gate refused {binding.Profile.Id}: {result.Detail}"),
+            SwitchStatus.Switched => CommandOutput.Success($"{slot}: {result.From.Id} → {target}{(pin ? " (pinned)" : "")} for this session.{when}{carried}"),
+            SwitchStatus.Unchanged when result.SessionDefaultChanged => CommandOutput.Success($"{slot} already uses {target}; it is this session's choice now."),
+            SwitchStatus.Unchanged => CommandOutput.Text($"{slot} already uses {target}."),
+            SwitchStatus.Refused => CommandOutput.Error($"{slot}: the privacy gate refused {target}: {result.Detail}"),
             _ => CommandOutput.Error($"{slot}: nothing to switch to ({result.Detail})."),
         };
+    }
+
+    /// <summary>A5: <c>/model [slot] &lt;model&gt; --default</c>: the default for new sessions, written to corvid.json; this session stays.</summary>
+    private static CommandOutput DefaultModel(SlashCommandContext context, string slot, string name)
+    {
+        if (context.Runtime.ConfigWriter is null)
+            return CommandOutput.Error("This Corvid has no configuration file to write a default to; use `corvid model switch`.");
+        var change = context.Runtime.WriteDefaultModel(slot, name);
+        return change.Write.Written ? CommandOutput.Success(change.Describe()) : CommandOutput.Error(change.Describe());
+    }
+
+    /// <summary>A5: <c>/model reset &lt;slot&gt;</c>: forgets this session's choice, so the slot follows the default again.</summary>
+    private static async Task<CommandOutput> ResetModelAsync(SlashCommandContext context, string slot, CancellationToken cancellationToken)
+    {
+        ModelSlots.ContractOf(slot);
+        var result = await context.Session.ClearModelChoiceAsync(slot, cancellationToken).ConfigureAwait(false);
+        if (result is null)
+            return CommandOutput.Text($"{slot}: this session made no choice; it follows the default.");
+        return result.Status == SwitchStatus.Switched
+            ? CommandOutput.Success($"{slot}: back to the default, {result.To?.Id ?? "none"}, for this session.")
+            : CommandOutput.Success($"{slot}: this session's choice is forgotten; it returns to the default, {result.To?.Id ?? "none"}, when the slot moves back.");
+    }
+
+    /// <summary>
+    /// A5: the decider this session's checkpoints run on (per session now): the runtime's state when it is the shared one,
+    /// else the session's own with the default for new sessions beside it.
+    /// </summary>
+    private static string SessionDecider(SlashCommandContext context)
+    {
+        var deciders = context.Runtime.Deciders;
+        if (ReferenceEquals(deciders.For(context.Session.Slots), deciders.Shared))
+            return context.Runtime.DeciderState;
+        var name = deciders.DeciderName(context.Session.Slots) is { } named ? TerminalText.Visible(named) : "degraded tier";
+        return $"{name} for this session (new sessions: {context.Runtime.DeciderState})";
     }
 
     private static bool IsPickNumber(string argument) => argument.Length is > 0 and < 4 && argument.All(char.IsAsciiDigit);
@@ -186,8 +236,8 @@ public static class CoreCommands
                 : Names(configuration!.Default.Profile.Id, model) ? "default"
                 : configuration.Escalation.Any(item => Names(item.Profile.Id, model)) ? "escalation" : "";
             rows.Add([(i + 1).ToString(CultureInfo.InvariantCulture), model.Name, model.Profile.Privacy.ToString().ToLowerInvariant(), status, role]);
-            // The decider is shared by every session, so it is listed but never offered.
-            if (slot != ModelSlots.Decider && !isCurrent && !restart && availability.IsReady)
+            // A5: the decider is switchable per session too.
+            if (!isCurrent && !restart && availability.IsReady)
                 choices.Add(new CommandChoice(rows[^1][0], model.Name, slot == ModelSlots.Generator ? $"/model {i + 1}" : $"/model {slot} {i + 1}"));
         }
 
@@ -197,9 +247,10 @@ public static class CoreCommands
             .OfType<string>();
         var prefix = slot == ModelSlots.Generator ? "/model" : $"/model {slot}";
         string[] lines = models.Count == 0 ? [$"No model can serve {slot}."]
-            : slot == ModelSlots.Decider ? [$"decider: {runtime.DeciderState}.",
-                $"The decider is shared by every session: change it with `corvid model switch {slot} <model>` and restart."]
-            : [$"Switch with {prefix} <number> or {prefix} <name>; add --pin to keep it past escalation."];
+            : slot == ModelSlots.Decider ? [$"decider: {SessionDecider(context)}.",
+                $"Switch this session's decider with {prefix} <number> or {prefix} <name>; add --default for new sessions instead. /model reset {slot} forgets this session's choice."]
+            : [$"Switch this session with {prefix} <number> or {prefix} <name> (it lasts until you change it); add --pin to keep the slot where it is when a turn ends (escalation still moves it). " +
+                $"Add --default to make it the default for new sessions instead; /model reset {slot} forgets this session's choice."];
         return new CommandOutput
         {
             Title = $"{slot}: {(bound ? current!.Profile.Id : slot == ModelSlots.Decider ? "degraded tier" : "unbound")}",
@@ -250,7 +301,7 @@ public static class CoreCommands
                 (session.Tainted ? ", tainted by outside content" : ""),
                 $"goal: {snapshot.Goal ?? "none"}",
                 $"project: {(runtime.Project is { } project ? $"{project.Id[..12]} ({project.Source})" : "none (lessons off)")}",
-                $"decider: {runtime.DeciderState}",
+                $"decider: {SessionDecider(context)}",
                 $"scheduler: {runtime.SchedulerState}",
                 $"skills: {(runtime.Skills.Store is { } skills ? $"{skills.Skills.Count} in {skills.Root}" : runtime.Skills.State)}" +
                 (runtime.Skills.Database?.Pending() is { Count: > 0 } drafts ? $", {drafts.Count} draft(s) to review" : ""),

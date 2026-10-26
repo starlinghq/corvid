@@ -66,6 +66,12 @@ public sealed record TurnStarted(int Turn, string Model) : SessionUpdate
 public sealed record TurnProgress(int Step) : SessionUpdate
 {
     public int? MaxSteps { get; init; }
+
+    /// <summary>
+    /// A5: the generator this step runs on ("qwen3.5-0.8b"), live from the session's slot and on replay from the log's
+    /// <c>ModelSwitched</c> events before it; null when unknown. Configuration text: shown through <see cref="SafeText"/>.
+    /// </summary>
+    public string? Model { get; init; }
 }
 
 /// <summary>How a turn ended: Corvid's <c>TurnStatus</c>, which refines ACP's stop reasons.</summary>
@@ -109,8 +115,8 @@ public sealed record TurnEnded(int Turn, TurnOutcome Outcome) : SessionUpdate
 public sealed record ContextPart(string Label, int Tokens);
 
 /// <summary>
-/// Token usage and the context gauge (ACP draft <c>usage_update</c>). Needs K-5: usage persisted and reported per call
-/// and per session, and the renderer's prompt token count.
+/// Token usage and the context gauge (ACP draft <c>usage_update</c>). K-5: each generator call's tokens live and, since A5,
+/// replayed from the log (on the answer or call each response produced); the latest prompt's count fills the gauge.
 /// </summary>
 public sealed record UsageUpdate : SessionUpdate
 {

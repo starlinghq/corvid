@@ -32,10 +32,14 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(McpPinsForgotten), "mcp_pins_forgotten")]
 [JsonDerivedType(typeof(UserSteered), "user_steered")]
 [JsonDerivedType(typeof(ClarificationAsked), "clarification_asked")]
+[JsonDerivedType(typeof(ClarificationAnswered), "clarification_answered")]
 [JsonDerivedType(typeof(SessionTitled), "session_titled")]
 [JsonDerivedType(typeof(SessionRecapped), "session_recapped")]
 [JsonDerivedType(typeof(ApprovalAssessed), "approval_assessed")]
 [JsonDerivedType(typeof(EgressRecorded), "egress_recorded")]
+[JsonDerivedType(typeof(ChildSpawned), "child_spawned")]
+[JsonDerivedType(typeof(ChildFinished), "child_finished")]
+[JsonDerivedType(typeof(ChildOf), "child_of")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -48,7 +52,16 @@ public abstract record SessionEvent;
 public sealed record UserMessage(string Text,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? From = null) : SessionEvent;
-public sealed record AssistantMessage(string Text) : SessionEvent;
+// Usage (A5) is the generator calls' tokens since the previous call's record, on the answer that ended them; omitted when
+// null (no call reported any, or a message from elsewhere), so events written before it keep their persisted form.
+public sealed record AssistantMessage(string Text,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null) : SessionEvent;
+// A5: what one or more generator calls used, as their provider reported it (K-5 in the log). InputTokens and OutputTokens are
+// summed over the Calls it covers; PromptTokens is the latest call's prompt, which is what a context gauge shows. Each is
+// null when no call reported it.
+public sealed record TokenUsage(long? InputTokens, long? OutputTokens,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] int Calls = 1,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? PromptTokens = null);
 // K-3: a message the user sent into a running turn (steer now, Ctrl+Enter), taken at the turn's next step checkpoint. It is
 // part of the conversation like a UserMessage (the generator reads it as the user's words, after the results before it),
 // but it starts no turn: turn counting, undo and compaction, which look for UserMessage, never see it. It does not clear
@@ -58,15 +71,25 @@ public sealed record UserSteered(string Text) : SessionEvent;
 // question too, so a reader that knows only messages loses nothing). Options are answers the person can pick; empty when
 // the question is free text only. QuestionId is unique in the session. The person's answer is their next message.
 public sealed record ClarificationAsked(string QuestionId, string Text, ImmutableArray<string> Options) : SessionEvent;
+// A5: the person answered a question inside the running turn (an ask_user call a surface could answer then), so the turn
+// went on with the answer as the call's result. Logged with that result; it closes the question as their next message would.
+// The answer is the person's words (or an option's visible text), not a message: it starts no turn and clears no taint. An empty
+// answer withdraws the question: the turn was interrupted while it waited.
+public sealed record ClarificationAnswered(string QuestionId, string Answer) : SessionEvent;
 // Round (the turn's generator response that made the call, from 1) and ReadOnly (the tool's risk descriptor said read-only)
 // were added by C-026, so the recovery scan can tell a later round from a call run one at a time after approval, and a
 // read from a change, from the log alone. Both are omitted when null, so events written before them keep their persisted
 // form; ReadOnly is null when the call named no offered tool. LocalOnly (A4) is a call the user ran from the composer's `!!`
 // line, which the prompt and the episodic index leave out with its result; omitted when null too.
+// Generator (A5) is the profile id of the generator whose response asked for the call ("qwen3.5-0.8b@cuda0"), so a switch
+// mid-turn is placed exactly on replay; omitted when null (the user's own `!` call, and events written before it). Usage (A5)
+// is on the first call a generator response issued: the tokens of the calls since the previous record, as on AssistantMessage.
 public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Round = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnly = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Generator = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null) : SessionEvent;
 // LocalOnly (A4) marks the result of a `!!` call, so a reader of one event (the episodic index) leaves it out without
 // finding its call; omitted when null.
 public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false,
@@ -102,8 +125,13 @@ public sealed record ApprovalRequested(string ApprovalId, string Action, string 
 public sealed record ApprovalResolved(string ApprovalId, bool Approved, string Reason,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Scope = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Note = null) : SessionEvent;
-// Profiles are snapshots, not mutable registry references; the slot implementation follows in C-006.
-public sealed record ModelSwitched(string Slot, JsonElement OldProfile, JsonElement NewProfile, string Reason) : SessionEvent;
+// Profiles are snapshots, not mutable registry references; the slot implementation follows in C-006. A5 review: Pinned (the
+// slot's pin after a person's change: a "session" choice, or an "unpin") and Reset (a "de_escalation" that forgets the
+// session's choice, logged even when the slot stays where it is) let a session opened again restore its choices and pins
+// exactly. Both are omitted when null, so events written before them keep their persisted form.
+public sealed record ModelSwitched(string Slot, JsonElement OldProfile, JsonElement NewProfile, string Reason,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Pinned = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Reset = null) : SessionEvent;
 // Summarizer (the profile that wrote the record) and Chunks (how many map calls it took, 1 when the range fit one call) were
 // added by C-016. Both are omitted when null, so events written before them keep their persisted form. Focus (C-041) is
 // what the user asked `/compact <focus>` to keep, recorded for audit and trace and not rendered; omitted when null too.
@@ -291,4 +319,49 @@ public static class EgressOutcomes
     public const string Sent = "sent";
     public const string Redacted = "redacted";
     public const string Refused = "refused";
+}
+
+// A5 (plan §14, delegate_task): a child session's limits as it was started with them, after the parent's ceilings: the most
+// generator steps, tokens (prompt and completion as providers report them) and seconds it may use.
+public sealed record ChildBudget(int MaxSteps, int MaxTokens, int MaxSeconds);
+
+// A5: in the parent's log, a child session was started from it. ChildId is the child's session (whose log starts with ChildOf);
+// Goal what it was asked (the parent model's or the person's words: untrusted); Tools the toolset it was given, by name, after
+// the forbidden ones were taken out; Mix the slots it runs on, by catalogue name ({"generator":"qwen3.5-9b",...}, the
+// ModelMix shape), omitted when it runs on the parent's; OutputSchema the JSON Schema its answer must meet, when one was
+// given; By "agent" (a delegate_task call, CallId naming it) or "user" (/delegate, the app); Tainted whether it starts with
+// the parent's outside content. Optional members are omitted when null.
+public sealed record ChildSpawned(string ChildId, string Goal, ImmutableArray<string> Tools, ChildBudget Budget, string By,
+    bool Tainted = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? Mix = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? OutputSchema = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CallId = null) : SessionEvent;
+
+// A5: in the parent's log, a child session ended. Status is a ChildStatuses name; Text its answer (model text: untrusted), cut
+// to a readable size; Steps and Tokens what it used; Detail why it ended other than answered (the budget it ran out of, the
+// schema error, the failure); OutputValid whether the answer met the output schema (omitted when none was given); Tainted
+// whether it ended holding outside content.
+public sealed record ChildFinished(string ChildId, string Status, int Steps, long Tokens, bool Tainted = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Text = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Detail = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? OutputValid = null) : SessionEvent;
+
+// A5: the first event of a child session's log: whose child it is (ParentId), how deep (1: the parent is a top-level session),
+// and what it was started with, as on the parent's ChildSpawned.
+public sealed record ChildOf(string ParentId, int Depth, string Goal, ImmutableArray<string> Tools, ChildBudget Budget,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? Mix = null) : SessionEvent;
+
+/// <summary>The wire names of <see cref="ChildFinished.Status"/>.</summary>
+public static class ChildStatuses
+{
+    public const string Answered = "answered";
+    public const string Failed = "failed";
+    /// <summary>The kernel's <c>stuck</c> question acted with nowhere to escalate: the stall monitor.</summary>
+    public const string Stuck = "stuck";
+    public const string StepBudgetExhausted = "step_budget_exhausted";
+    public const string TokenBudgetExhausted = "token_budget_exhausted";
+    public const string TimedOut = "timed_out";
+    public const string Cancelled = "cancelled";
+    /// <summary>It answered, but not in the output schema's shape.</summary>
+    public const string InvalidOutput = "invalid_output";
 }

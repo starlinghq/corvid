@@ -321,7 +321,7 @@ The degraded tier is also the A/B baseline for spike S2: the same golden set run
   - the user asks for it
 - **What escalation targets:** a profile-ordered list, for example local 0.8B → local-server 27B → cloud. Each step must be allowed by the privacy policy for the current content (§10.4).
 - **Escalation is visible.** The CLI shows "escalating to <model>: <reason>", the gateway appends a short footnote, and `/insights` reports the escalation rate as a headline metric.
-- **De-escalation.** After an escalated turn finishes, the slot returns to the default unless the user pinned the model.
+- **De-escalation.** After an escalated turn finishes, the slot returns to the session's default unless the user pinned the model. The session's default is the model the person chose for the session, when they chose one (A5: a switch made "for this session", at any time and mid-turn, lasts until they change or forget it; a running turn takes it at its next step boundary), else the configured one. "Default for new sessions" is a separate choice, written to `corvid.json`. The decider is switchable per session in the same way.
 - **Architect/editor split** (from Aider): for coding, the escalated model plans and the local model applies mechanical edits. Phase 3.
 
 ## 7. Tool calling that works with small models
@@ -506,9 +506,11 @@ Secrets live in **Corvid Vault** (`corvid-vault`), a separate, model-free proces
 
 ## 14. Subagents
 
-- `delegate_task` starts a child session actor with a fresh log, a goal, an explicit toolset (not inherited wholesale: #11431), a budget and an optional output schema that is validated on return.
+- `delegate_task` starts a child session actor with a fresh log, a goal, an explicit toolset (not inherited wholesale: #11431), a budget and an optional output schema that is validated on return (one repair inside the same budget). Built in A5: up to 10 tasks run at once, depth 1, a stall monitor on `stuck`.
+- **Model mix (A5).** The agent may pass a mix for any slot (generator, decider, extractor, …) from models in the catalogue; the person can pass one too (`/delegate` in `corvid chat`, the app). Slots the mix leaves out run on the parent's session choices. `Corvid:Agents:Models` optionally narrows the models a child may be given (empty: any catalogue model). Local and local-server models are used freely; a cloud model goes through the same privacy egress gate as the parent, with the parent's taint (a tainted parent cannot send a child to the cloud unless egress allows it). A child inherits its parent's taint, and a model cannot raise a child's depth, concurrency, budget or toolset beyond what the parent session allows.
+- **Spawning is a side effect** under the session's approval mode; the approval card shows the goal, toolset, budget and model mix. A child session opens read-only by id on every surface; only its parent's run drives it.
 - Children run in parallel when their slots are cloud or local-server. In-process GPU children queue behind the interactive turn on the device scheduler, so there is no 10-way contention on one GPU.
-- Children cannot use `clarify`, `memory` writes, `send_message` or `cronjob` (Hermes' rule, kept). Their decisions and outcomes still feed calibration.
+- Children cannot use `clarify` (`ask_user`), `memory` writes, `send_message` or `cronjob` (Hermes' rule, kept), nor `delegate_task` (depth 1). Their decisions and outcomes still feed calibration.
 - Kanban-style durable multi-agent boards come later. The event log and jobs table already provide the substrate.
 
 ## 15. Code execution and checkpoints
@@ -541,7 +543,7 @@ Rows follow the numbering of the Hermes feature report (16 Oct 2026, v0.22.2). P
 | 1.4 | about 28 messaging platforms, pairing, delivery ledger, voice, profiles, Bot Mode | memory leak (#18438), Telegram hangs | 6 adapters in v1, lazily loaded and isolated; ledger in the event log; `deliver` decides routing | Kev | v1 / later |
 | 1.5 | 70+ tools, 28 toolsets, 7 terminal backends, browser backends, tool search | tool calls leak as text on local models (#8965, #84158, #87027, #32660) | source-generated tools; embedding shortlist + `tool` + one-schema generation + validate/repair; local, container and SSH backends; browser through Playwright for .NET; tool search for cloud generators | Kev, embedders, GLiNER2 | v1 |
 | 1.6 | `execute_code` Python over UDS RPC, persistent kernels | different block list from the shell (#74078) | same RPC design, one structural policy for all execution paths, .NET file-based apps plus Python and JS | generator (cloud or local server) | later |
-| 1.7 | `delegate_task`, 10 concurrent, depth 1, stall monitor | oversized child toolsets (#11431) | child session actors, explicit toolsets, device-scheduled GPU work, `stuck` replaces time-only stalls | Kev | v1 |
+| 1.7 | `delegate_task`, 10 concurrent, depth 1, stall monitor | oversized child toolsets (#11431) | child session actors, explicit toolsets, device-scheduled GPU work, `stuck` replaces time-only stalls | Kev | v1 (built in A5, with a per-child model mix) |
 | 1.8 | agentskills.io skills, self-written, curator, hubs, scanner | skills overwritten (#20273, #64338, #78004); overconfident self-evaluation | git-versioned skills with authorship; replay-tested drafts; `skill_write_safe` gate; embedding selection | Kev, embedders, generator | v1 |
 | 1.9 | MEMORY.md and USER.md with character caps; FTS5 session search; external providers (Honcho and others) | caps error out; stale memories persist | core blocks with budgets and consolidation; bi-temporal graph from GLiNER2; Mem0 operations; hybrid retrieval; media memory | GLiNER2, Kev, embedders | v1 |
 | 1.10 | cron with schedule grammar, pre-run scripts, delivery targets | — | durable jobs, same grammar, `wake` gate | Kev | v1 |

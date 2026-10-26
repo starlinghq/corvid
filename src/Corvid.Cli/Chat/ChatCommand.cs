@@ -48,6 +48,13 @@ internal static class ChatCommand
         await using (runtime.ConfigureAwait(false))
         {
             CorvidSession session;
+            // A5: a child session is its parent's record: read-only, never driven from a terminal.
+            if (arguments.Option("--session") is { } wanted && ChildParent(runtime, wanted) is { } parentOfChild)
+            {
+                console.MarkupLine($"[red]{Markup.Escape(TerminalText.Visible(wanted))} is a child session of {Markup.Escape(parentOfChild)}: it is read-only.[/]");
+                console.MarkupLine($"[grey]`corvid chat --session {Markup.Escape(parentOfChild)}` then `/agents show {Markup.Escape(TerminalText.Visible(wanted))}` shows it.[/]");
+                return ExitCodes.Failure;
+            }
             try
             {
                 session = runtime.OpenSession(arguments.Option("--session"), "cli");
@@ -61,7 +68,21 @@ internal static class ChatCommand
             }
             var renderer = new ChatRenderer(console, verbose: arguments.Flag("--verbose"));
             using var feed = runtime.Feed.Subscribe(session.Id, renderer);
-            using var prompter = runtime.AttachPrompter(session.Id, new CliApprovalPrompter(renderer, context.Input));
+            using var prompter = runtime.AttachPrompter(session.Id, new CliApprovalPrompter(renderer, context.Input,
+                (prompt, whole, token) => DelegationCard.LinesAsync(runtime, prompt, token, whole)));
+            // A5: this session's children, the agent's and /delegate's, as they start and end.
+            void OnChild(string parentId, SessionStreamUpdate update)
+            {
+                if (parentId != session.Id)
+                    return;
+                if (update is ChildStarted started)
+                    renderer.Notice($"[grey]↳ {Markup.Escape(AgentCommands.Started(started.Child))}[/]");
+                else if (update is ChildEnded ended)
+                    renderer.Notice($"[grey]↳ {Markup.Escape(AgentCommands.Ended(ended.Child))}[/]");
+            }
+            runtime.ChildChanged += OnChild;
+            // A5: ask_user questions are asked and answered inline while the turn waits, like approvals.
+            using var questioner = runtime.AttachQuestioner(session.Id, new CliQuestionAsker(renderer, context.Input));
             // Scheduled runs happen in their own sessions; until the gateway delivers them (C-020), the chat says that they ran.
             void OnJob(ScheduledJob job, JobRun run) =>
                 renderer.Notice($"[grey]⏰ job {Markup.Escape(job.Name)}: {Markup.Escape(run.Status)} (session {Markup.Escape(run.SessionId)})[/]");
@@ -77,6 +98,14 @@ internal static class ChatCommand
             // Background problems (the egress ledger) as notices through the renderer, never written mid-panel by their thread.
             void OnNotice(string line) => renderer.Notice($"[yellow]{Markup.Escape(line)}[/]");
             runtime.Notice += OnNotice;
+            // A5: a slot that moves on its own (escalation, a fallback, the privacy gate, the turn's end) says so; the person's
+            // own switch is said by /model's reply.
+            void OnModel(string id, ModelChanged change)
+            {
+                if (id == session.Id && ChatRenderer.ModelNotice(change) is { } notice)
+                    renderer.Notice(notice);
+            }
+            runtime.ModelChanged += OnModel;
 
             using var leave = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             Task<Delivery>? running = null;
@@ -108,6 +137,31 @@ internal static class ChatCommand
                 if (line is not null && !context.Input.Echoes)
                     renderer.Echo(line);
                 return line;
+            }
+            // A5: while a turn runs, the commands that run beside it (SlashCommand.DuringTurn: /model, which the turn takes at its
+            // next step, and /fork, G-15) are read and run at once; anything else typed then waits for the turn's end as before,
+            // and an approval prompt open meanwhile gets every line first.
+            async Task WatchTurnAsync(CancellationToken turnEnded)
+            {
+                try
+                {
+                    while (await context.Input.ReadDuringTurnAsync(line => ChatRenderer.TakesMidTurn(commands, line), turnEnded).ConfigureAwait(false) is { } command)
+                    {
+                        if (!context.Input.Echoes)
+                            renderer.Echo(command);
+                        // The switch itself is not cut short by the turn's end, only by leaving.
+                        var output = await commands.ExecuteAsync(command, new SlashCommandContext(runtime, session, commands), leave.Token)
+                            .ConfigureAwait(false);
+                        renderer.Output(output);
+                    }
+                }
+                catch (OperationCanceledException) when (turnEnded.IsCancellationRequested)
+                {
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    renderer.Notice($"[red]{Markup.Escape(exception.Message)}[/]");
+                }
             }
             context.Interrupts.Interrupted += OnInterrupt;
             try
@@ -192,6 +246,9 @@ internal static class ChatCommand
                         : session.SendAsync(line, cancellationToken);
                     Volatile.Write(ref running, turn);
                     Delivery delivery;
+                    // A5: /model typed while the turn runs switches this session; the turn takes it at its next step.
+                    using var turnInput = CancellationTokenSource.CreateLinkedTokenSource(leave.Token);
+                    var watching = WatchTurnAsync(turnInput.Token);
                     try
                     {
                         delivery = await turn.ConfigureAwait(false);
@@ -199,6 +256,11 @@ internal static class ChatCommand
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         break;
+                    }
+                    finally
+                    {
+                        await turnInput.CancelAsync().ConfigureAwait(false);
+                        await watching.ConfigureAwait(false);
                     }
                     string? shellStatus = null;
                     // Only a turn that issued the call has a result to report (a refused line, say the shell tool is off, issued none).
@@ -216,6 +278,8 @@ internal static class ChatCommand
                 context.Interrupts.Interrupted -= OnInterrupt;
                 runtime.JobCompleted -= OnJob;
                 runtime.Notice -= OnNotice;
+                runtime.ModelChanged -= OnModel;
+                runtime.ChildChanged -= OnChild;
             }
             console.MarkupLine($"[grey]Session {Markup.Escape(session.Id)} is in the log; resume it with `corvid chat --session {Markup.Escape(session.Id)}`.[/]");
             // The title the local generator writes after the first exchange lands before the runtime goes, if it comes within
@@ -280,6 +344,13 @@ internal static class ChatCommand
             return CommandOutput.Warning("Not remembered: " + exception.Message);
         }
     }
+
+    /// <summary>A5: the parent of a child session (whose id starts <c>child-</c> and whose log starts with <c>ChildOf</c>), else null.</summary>
+    internal static string? ChildParent(CorvidRuntime runtime, string sessionId) =>
+        sessionId.StartsWith(ChildSessions.Surface + "-", StringComparison.Ordinal)
+        && Corvid.Kernel.Events.SessionProjection.Load(runtime.Log, sessionId).Parent is { } parent
+            ? parent.ParentId
+            : null;
 
     // ui.db is a convenience: a file another process holds too long, or a read-only data directory, never stops the chat.
     private static void Shared(Action action) => Shared<object?>(() =>

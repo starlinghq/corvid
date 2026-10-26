@@ -117,6 +117,28 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     public bool HasFork => ForkText.Length > 0;
 
+    /// <summary>
+    /// A5: the session's generator and decider now, for the header ("qwen3.5-0.8b · decider kev-0.8b"): this session's own,
+    /// live as they switch (a person's choice, escalation, a fallback, the privacy gate). Empty until the engine says.
+    /// </summary>
+    public string ModelsText
+    {
+        get
+        {
+            var generator = _state.Model is { Length: > 0 } model ? SafeText.Clean(model) : null;
+            var decider = _state.Decider is { Length: > 0 } named ? SafeText.Clean(named) : null;
+            return (generator, decider) switch
+            {
+                (null, null) => "",
+                (_, null) => generator!,
+                (null, _) => $"decider {decider}",
+                _ => $"{generator} · decider {decider}",
+            };
+        }
+    }
+
+    public bool HasModels => ModelsText.Length > 0;
+
     /// <summary>The standing goal, raw.</summary>
     public string Goal => _state.Goal ?? "";
 
@@ -303,12 +325,20 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
 
     private void RaiseHeader(SessionView previous)
     {
+        // A5: the header's children, or the parent this child links.
+        RaiseChildren(previous);
         if (previous.Title != _state.Title)
             OnPropertyChanged(nameof(Title));
         if (previous.ForkOf != _state.ForkOf || previous.ForkTurn != _state.ForkTurn)
         {
             OnPropertyChanged(nameof(ForkText));
             OnPropertyChanged(nameof(HasFork));
+        }
+
+        if (previous.Model != _state.Model || previous.Decider != _state.Decider)
+        {
+            OnPropertyChanged(nameof(ModelsText));
+            OnPropertyChanged(nameof(HasModels));
         }
 
         if (previous.Goal != _state.Goal)
@@ -477,10 +507,23 @@ public sealed partial class SessionViewModel : ObservableObject, IDisposable
     internal void AnswerApproval(ApprovalCardBlock card, ApprovalAnswer answer) =>
         Run(() => _service.AnswerApprovalAsync(SessionId, card.ApprovalId, answer), card.AnswerFailed);
 
+    /// <summary>
+    /// Fork… (G-15): a fork at the head, opened in the rail. While a turn runs it is taken at the turn's last completed step
+    /// without waiting, and the turn goes on here.
+    /// </summary>
+    internal void ForkAtHead() => Fork(null);
+
     private void Fork(long? position) => Run(async () =>
     {
         var forked = await _service.ForkAsync(SessionId, position).ConfigureAwait(true);
-        _shell?.OpenSession(forked);
+        // The rail lists the fork once the service's summary arrives, which can come after this returns (a fork taken while
+        // a turn runs, G-15): until then it opens under an entry of its own, as a peeked session does, and the summary
+        // replaces it keeping the selection.
+        if (_shell is { } shell && !shell.OpenSession(forked))
+        {
+            shell.SelectSession(shell.CreateSession(forked, Title, SessionState.Idle, "now"));
+            shell.Navigate(Area.Sessions);
+        }
     });
 
     /// <summary>Runs a request; a refusal shows in <see cref="Error"/> rather than escaping into the UI loop.</summary>

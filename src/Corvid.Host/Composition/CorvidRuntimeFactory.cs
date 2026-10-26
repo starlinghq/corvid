@@ -70,7 +70,8 @@ public sealed class CorvidRuntimeFactory(
     CorvidConfigFile? configFile = null,
     IMcpTransports? mcpTransports = null,
     WebFetchTransport? webTransport = null,
-    UiStateStore? uiState = null)
+    UiStateStore? uiState = null,
+    CorvidConfigWriter? configWriter = null)
 {
     /// <summary>
     /// Configured models that stop the runtime from starting, checked offline (by size for Starling's): every missing or
@@ -192,8 +193,10 @@ public sealed class CorvidRuntimeFactory(
             {
                 Workspace = environment.Workspace,
                 Vault = vault,
-                DeniedPaths = environment.Protected.SafetyConfiguration,
-                ReadOnlyPaths = skillsGuard.ReadOnly,
+                // A5: the launcher stays protected from the tools' writes but is never hidden from the sandbox it runs:
+                // stage 2 re-executes it inside bubblewrap. It is read-only to commands instead.
+                DeniedPaths = [.. WithoutLauncher(environment.Protected.SafetyConfiguration, settings)],
+                ReadOnlyPaths = [.. skillsGuard.ReadOnly, .. LauncherInside(settings, environment.Workspace)],
                 Network = settings.Tools.ShellNetwork,
                 EgressLifetime = sandboxOptions.Timeout + TimeSpan.FromMinutes(1),
             }, egress);
@@ -215,6 +218,10 @@ public sealed class CorvidRuntimeFactory(
                 if (memory?.Writer is { } writer)
                     toolRegistry.Add(new MemoryTools(writer, memory.Retriever));
             }
+            // A5 (plan §14): delegate_task starts child sessions through the runtime made below.
+            CorvidRuntime? created = null;
+            if (settings.Tools.Delegate && settings.Agents.MaxDepth > 0)
+                toolRegistry.Add(CorvidRuntime.CreateDelegateTool(() => created ?? throw new InvalidOperationException("The runtime has not started yet.")));
             var skills = skillsGuard.Refusal is { } refusal ? new SkillServices(null, null, null, null, refusal)
                 : StartupStep.Run(progress, "Opening skills", () => OpenSkills(settings, log));
             if (skills.Store is { } store)
@@ -234,7 +241,7 @@ public sealed class CorvidRuntimeFactory(
             // definitions are recorded in the log's mcp-pins session. Vault's sandbox directory is made to exist first, so it is
             // denied to a server started before Vault's first sandbox_open too (V-003b).
             vault.EnsureSandboxDirectory();
-            var mcp = McpComposition.Start(settings, McpDeniedPaths(vault, environment), toolRegistry, log, transports: mcpTransports);
+            var mcp = McpComposition.Start(settings, McpDeniedPaths(vault, environment, settings), toolRegistry, log, transports: mcpTransports);
 
             // C-025: the workspace's project, once, with the checkpoints' git and the user's home as discovery's ceiling.
             ProjectIdentity? project = memory?.Lessons is null ? null
@@ -250,14 +257,17 @@ public sealed class CorvidRuntimeFactory(
                 RecapAfter = TimeSpan.FromMinutes(settings.Sessions.RecapAfterMinutes),
             }, untitled);
 
-            return new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
+            created = new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,
                 toolRegistry, memory, counter, builtin, checkpoints, skills, mcp, hostScheduler)
             {
                 UnavailableModels = [.. unavailable],
                 Project = project,
                 Titles = titles,
                 UiState = uiState ?? new UiStateStore(UiStateStore.PathFor(settings)),
+                // A5: the "default for new sessions" choice on surfaces that have only the runtime (/model --default).
+                ConfigWriter = configWriter,
             };
+            return created;
         }
         catch
         {
@@ -319,11 +329,52 @@ public sealed class CorvidRuntimeFactory(
         var vault = VaultLocationsFor(settings);
         var environment = vault.Protect(ApprovalEnvironment.FromProcess(CorvidPaths.Workspace(settings)));
         var rulesFile = settings.Approvals.RulesFile is { Length: > 0 } file ? CorvidPaths.ExpandHome(file) : JsonFileApprovalRuleStore.DefaultPath(environment);
-        return McpDeniedPaths(vault, ProtectCorvidState(environment, settings, rulesFile, configFile));
+        return McpDeniedPaths(vault, ProtectCorvidState(environment, settings, rulesFile, configFile), settings);
     }
 
-    private static IEnumerable<string> McpDeniedPaths(VaultLocations vault, ApprovalEnvironment environment) =>
-        vault.Paths.Concat(environment.Protected.SafetyConfiguration).Distinct(StringComparer.Ordinal);
+    private static IEnumerable<string> McpDeniedPaths(VaultLocations vault, ApprovalEnvironment environment, CorvidOptions settings) =>
+        WithoutLauncher(vault.Paths.Concat(environment.Protected.SafetyConfiguration), settings).Distinct(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A5: the paths a sandbox is told to hide, less the configured launcher (as written and as resolved). The launcher's
+    /// stage 2 re-executes itself inside bubblewrap, so hiding it made every sandboxed command fail ("execvp ... Permission
+    /// denied"). It stays in the approvals' safety configuration, so the hardline list and the file tools still refuse it.
+    /// </summary>
+    internal static IEnumerable<string> WithoutLauncher(IEnumerable<string> denied, CorvidOptions settings)
+    {
+        if (Launcher(settings) is not { } launcher)
+            return denied;
+        var self = new HashSet<string>(StringComparer.Ordinal) { launcher };
+        if (Resolved(launcher) is { } real)
+            self.Add(real);
+        return denied.Where(path => !self.Contains(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path))));
+    }
+
+    /// <summary>The configured launcher, read-only to commands, when it lies inside the workspace (where commands may write).</summary>
+    internal static IEnumerable<string> LauncherInside(CorvidOptions settings, string workspace)
+    {
+        if (Launcher(settings) is not { } launcher || !File.Exists(launcher))
+            return [];
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
+        return launcher.StartsWith(root + "/", StringComparison.Ordinal) ? [launcher] : [];
+    }
+
+    private static string? Launcher(CorvidOptions settings) =>
+        settings.Sandbox.LauncherPath is { Length: > 0 } configured && CorvidPaths.ExpandHome(configured) is var path && Path.IsPathFullyQualified(path)
+            ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(path))
+            : null;
+
+    private static string? Resolved(string path)
+    {
+        try
+        {
+            return File.ResolveLinkTarget(path, returnFinalTarget: true) is { } target ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(target.FullName)) : null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
 
     private static ApprovalEnvironment Protect(ApprovalEnvironment environment, string path)
     {

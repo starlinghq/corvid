@@ -11,8 +11,10 @@ namespace Corvid.Acp;
 /// <see cref="SessionUpdateReporter"/>) mapped onto ACP. Streamed text is <c>agent_message_chunk</c>, each tool call
 /// <c>tool_call</c> when it starts and <c>tool_call_update</c> when it finishes (with its input, result and, for file
 /// edits, the diff from the write ledger). The host's reporter produces every update on one ordered chain, so the client
-/// sees them in order and all of them before the prompt's response. Updates ACP's turn has no notification for here (the
-/// user's message, the task list, decisions, checkpoints) are not sent.
+/// sees them in order and all of them before the prompt's response. A running call's output tail (K-2) is a
+/// <c>tool_call_update</c> in progress with the tail as its content (A5). Updates ACP's turn has no notification for here (the
+/// user's message, the task list, decisions, checkpoints) are not sent; a question the turn ended on goes as
+/// <c>_corvid/question</c> after it (<see cref="AcpMethods.CorvidQuestion"/>).
 /// </summary>
 internal sealed class TurnReporter : ITurnObserver
 {
@@ -38,6 +40,9 @@ internal sealed class TurnReporter : ITurnObserver
     public void ToolStarted(string callId, string tool, bool approval) => _reporter.ToolStarted(callId, tool, approval);
 
     public void ToolFinished(string callId, string tool, string outcome, TimeSpan elapsed) => _reporter.ToolFinished(callId, tool, outcome, elapsed);
+
+    /// <summary>A5: a running call's output tail (K-2), as a <c>tool_call_update</c> whose content is the latest lines.</summary>
+    public void ToolOutput(string callId, string tool, string tail) => _reporter.ToolOutput(callId, tool, tail);
 
     /// <summary>
     /// Makes sure a call is known to the client before a permission request names it: a prompt for a call the feed has not
@@ -69,6 +74,8 @@ internal sealed class TurnReporter : ITurnObserver
             Locations = Locations(changed.Locations),
             Content = !changed.Diffs.IsDefaultOrEmpty ? [.. changed.Diffs.Select(Diff)]
                 : changed.OutputText is { } text ? [new ContentToolCallContent(new TextContent(text))]
+                // A5: a running call's tail replaces the content shown so far, as ACP's tool_call_update content does.
+                : changed.Tail is { } tail ? [new ContentToolCallContent(new TextContent(tail))]
                 : null,
         },
         _ => null,
@@ -95,6 +102,34 @@ internal sealed class TurnReporter : ITurnObserver
         },
         _ => null,
     };
+
+    /// <summary>
+    /// A5: a child session as ACP shows it (ACP has no notion of subagents): a <c>tool_call</c> of its own, its id the
+    /// child's session id, when it starts, and a <c>tool_call_update</c> with its status and answer when it ends. Goals and
+    /// answers are model text, sent as text content as any tool result is.
+    /// </summary>
+    internal static SessionUpdate? Child(SessionStreamUpdate update) => update switch
+    {
+        ChildStarted started => new ToolCall(started.Child.ChildId, "Child session: " + Short(started.Child.Goal), ToolKinds.Other,
+            ToolStatuses.InProgress)
+        {
+            Content = [new ContentToolCallContent(new TextContent(Corvid.Host.Commands.AgentCommands.Started(started.Child)))],
+        },
+        ChildEnded ended => new ToolCallUpdate(ended.Child.ChildId)
+        {
+            Status = ended.Child.Status == ChildStatuses.Answered ? ToolStatuses.Completed : ToolStatuses.Failed,
+            Content = [new ContentToolCallContent(new TextContent(ended.Child.Text is { Length: > 0 } text && ended.Child.Status == ChildStatuses.Answered
+                ? text
+                : Corvid.Host.Commands.AgentCommands.Ended(ended.Child)))],
+        },
+        _ => null,
+    };
+
+    private static string Short(string text)
+    {
+        var line = text.ReplaceLineEndings(" ").Trim();
+        return line.Length > 80 ? line[..80] + "…" : line;
+    }
 
     internal static ToolCallLocation[]? Locations(ImmutableArray<string> paths) =>
         paths.IsDefaultOrEmpty ? null : [.. paths.Select(path => new ToolCallLocation(path))];

@@ -50,7 +50,7 @@ internal sealed class ChatRenderer : ITurnObserver
         {
             _console.Write(new Rule($"[bold]corvid[/] [grey]· {Markup.Escape(generator)} · {tools} tool(s) · session {Markup.Escape(session)}[/]")
                 .LeftJustified().RuleStyle("grey"));
-            _console.MarkupLine("[grey]/help lists commands · /model picks a model · Ctrl-C cancels a turn · /exit leaves[/]");
+            _console.MarkupLine("[grey]/help lists commands · /model picks a model, during a turn too · Ctrl-C cancels a turn · /exit leaves[/]");
             _console.MarkupLine(@"[grey]! cmd runs a shell command · # fact stages a memory · \! or \# at the start sends the line as a message[/]");
         }
     }
@@ -110,6 +110,9 @@ internal sealed class ChatRenderer : ITurnObserver
 
     public void ToolStarted(string callId, string tool, bool approval)
     {
+        // A5 (A4 leftover): ask_user is the question, shown as one (ShowQuestion, or the turn's end), not as a running call.
+        if (tool == AskUserTool.ToolName)
+            return;
         lock (_gate)
         {
             EndText();
@@ -125,6 +128,8 @@ internal sealed class ChatRenderer : ITurnObserver
 
     public void ToolFinished(string callId, string tool, string outcome, TimeSpan elapsed)
     {
+        if (tool == AskUserTool.ToolName)
+            return;
         lock (_gate)
         {
             var row = _tools.FirstOrDefault(item => item.CallId == callId && item.Running);
@@ -261,13 +266,16 @@ internal sealed class ChatRenderer : ITurnObserver
 
     // ---- approvals and commands ----
 
-    public void ShowApproval(ApprovalPrompt prompt)
+    public void ShowApproval(ApprovalPrompt prompt, IReadOnlyList<string>? details = null)
     {
         lock (_gate)
         {
             StopPanel();
             EndText();
             var body = new List<IRenderable> { new Markup($"[bold]{Markup.Escape(prompt.Analysis.Text)}[/]") };
+            // A5: a spawn's children, or the child that asks (already shown with hidden characters escaped).
+            foreach (var line in details ?? [])
+                body.Add(new Markup($"[cyan]{Markup.Escape(line)}[/]"));
             foreach (var command in prompt.Analysis.Commands)
             {
                 var targets = command.Targets.IsDefaultOrEmpty ? "" : " → " + string.Join(", ", command.Targets.Select(target => target.Value));
@@ -279,6 +287,24 @@ internal sealed class ChatRenderer : ITurnObserver
             body.Add(new Markup($"[grey]Denied automatically at {prompt.Deadline.ToLocalTime():HH:mm:ss} if unanswered.[/]"));
             _console.Write(new Panel(new Rows(body)).Header("[yellow] approval needed [/]").BorderColor(Color.Yellow));
             _console.Markup(Choices(prompt.Offered) + " ");
+        }
+    }
+
+    /// <summary>
+    /// A5: a question the turn asks inside the turn (<c>ask_user</c>), answered on the next line by a choice's number or in
+    /// the person's words; the model's text is shown with its hidden characters as codes.
+    /// </summary>
+    public void ShowQuestion(ClarifyingQuestion question)
+    {
+        lock (_gate)
+        {
+            StopPanel();
+            EndText();
+            _console.MarkupLine("[blue]?[/] [bold]" + Markup.Escape(TerminalText.Visible(question.Text)) + "[/]");
+            if (!question.Options.IsDefaultOrEmpty)
+                _console.MarkupLine("  " + string.Join(" · ", question.Options.Select((option, i) =>
+                    $"[green]{i + 1}[/] {Markup.Escape(TerminalText.Choice(option))}")) + " [grey](a number picks it, or answer in your words)[/]");
+            _console.Markup("[grey]answer ›[/] ");
         }
     }
 
@@ -305,6 +331,39 @@ internal sealed class ChatRenderer : ITurnObserver
             _console.Markup($"{Markup.Escape(output.ChoicePrompt ?? "Pick")} " +
                 string.Join(" · ", output.Choices.Select(choice => $"[green]{Markup.Escape(choice.Key)}[/] {Markup.Escape(choice.Label)}")) +
                 " [grey](Enter keeps it)[/] › ");
+    }
+
+    /// <summary>
+    /// A5: the lines a running turn can take as they are typed: a command that runs beside the turn
+    /// (<see cref="SlashCommand.DuringTurn"/>): <c>/model</c>, which the turn takes at its next step, and <c>/fork</c> (G-15).
+    /// </summary>
+    public static bool TakesMidTurn(SlashCommandRegistry commands, string line) =>
+        SlashCommandRegistry.IsCommand(line) && commands.TryGet(SlashCommandRegistry.Parse(line).Name, out var command) && command.DuringTurn;
+
+    /// <summary>
+    /// A5: the notice for a slot that moved on its own (escalation, a fallback, the privacy gate, back at the turn's end); null
+    /// for the person's own switch, which <c>/model</c>'s reply already says, and for a change of choice alone. Ids are
+    /// configuration text, escaped for the terminal.
+    /// </summary>
+    public static string? ModelNotice(Corvid.Host.Sessions.ModelChanged change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        // A choice the person changed (a reset) is said by its command's reply.
+        if (change.Sequence is null || change.From == change.To || change.SessionDefault)
+            return null;
+        var what = change.Reason switch
+        {
+            "escalation" => "escalated to",
+            "fallback" => "fell back to",
+            "privacy" => "kept local: the privacy gate moved it to",
+            "de_escalation" => "back to",
+            _ => null,
+        };
+        if (what is null)
+            return null;
+        var cloud = change.Cloud ? " (cloud: requests leave the machine through the egress gate)" : "";
+        return $"[grey]↳ {Markup.Escape(TerminalText.Visible(change.Slot))} {what} {Markup.Escape(TerminalText.Visible(change.To))}" +
+            $" from {Markup.Escape(TerminalText.Visible(change.From))}{Markup.Escape(cloud)}[/]";
     }
 
     public void Notice(string markup)

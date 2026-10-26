@@ -90,6 +90,12 @@ public delegate ValueTask<CommandOutput> SlashCommandHandler(SlashCommandContext
 public sealed record SlashCommand(string Name, string Summary, string Usage, SlashCommandHandler Run)
 {
     public ImmutableArray<string> Aliases { get; init; } = [];
+
+    /// <summary>
+    /// G-15: the command runs beside a running turn (<c>/fork</c>, and <c>/model</c>, whose switch the turn takes at its next
+    /// step), so a surface that reads lines during a turn runs it then rather than after the turn.
+    /// </summary>
+    public bool DuringTurn { get; init; }
 }
 
 /// <summary>

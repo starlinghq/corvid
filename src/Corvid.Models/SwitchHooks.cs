@@ -12,10 +12,33 @@ public enum SwitchReason
     DeEscalation,
     /// <summary>The privacy egress gate refused a request to a gated model, so the slot moved to a local one (plan §10.4).</summary>
     Privacy,
+    /// <summary>
+    /// The person chose the model for the rest of the session (A5): it becomes the session's default, so de-escalation
+    /// returns to it and it lasts past the turn until they change it (<see cref="SessionModelSlots.SetSessionDefaultAsync"/>).
+    /// </summary>
+    Session,
+}
+
+/// <summary>How long a person's switch lasts (A5): the session's choice, the session's choice pinned, or this turn only.</summary>
+public enum SwitchScope
+{
+    /// <summary>The session's default from now on: escalation and fallback still move off it, de-escalation returns to it.</summary>
+    Session,
+    /// <summary>As <see cref="Session"/>, and pinned: a turn's end leaves the slot where it is, escalated or not.</summary>
+    Pin,
+    /// <summary>For the running (or next) turn only: the turn's end returns the slot to the session's default.</summary>
+    Turn,
 }
 
 public static class SwitchReasons
 {
+    /// <summary>
+    /// A5 review: the reason logged when the person unpins a slot (<see cref="SessionModelSlots.UnpinAsync"/>): a
+    /// <c>ModelSwitched</c> from the slot's model to itself with <c>Pinned</c> false, so a session opened again does not
+    /// bring the pin back. Not a <see cref="SwitchReason"/>: nothing moves.
+    /// </summary>
+    public const string Unpin = "unpin";
+
     public static string ToWireName(this SwitchReason reason) => reason switch
     {
         SwitchReason.User => "user",
@@ -23,6 +46,7 @@ public static class SwitchReasons
         SwitchReason.Fallback => "fallback",
         SwitchReason.DeEscalation => "de_escalation",
         SwitchReason.Privacy => "privacy",
+        SwitchReason.Session => "session",
         _ => throw new ArgumentOutOfRangeException(nameof(reason)),
     };
 }
@@ -107,6 +131,14 @@ public sealed record ModelSwitchOptions
     public IBudgetPolicy Budget { get; init; } = AcceptedContextBudgetPolicy.Instance;
 
     public IPrivacyGate Privacy { get; init; } = PrivacyGates.DenyCloud;
+
+    /// <summary>
+    /// Told after each change of a slot's binding or of its session default (A5), with the result: every
+    /// <see cref="SwitchStatus.Switched"/> one, and an <see cref="SwitchStatus.Unchanged"/> one whose
+    /// <see cref="SwitchResult.SessionDefaultChanged"/> is set. Called inside the session's switch lock, on the switching
+    /// thread: it must be quick, must not throw (a throw is swallowed) and must not switch again.
+    /// </summary>
+    public Action<SwitchResult>? Changed { get; init; }
 }
 
 public enum SwitchStatus
@@ -141,4 +173,10 @@ public sealed record SwitchResult(
     public ImmutableArray<string> PendingApprovals { get; init; } = PendingApprovals.IsDefault ? [] : PendingApprovals;
 
     public ImmutableArray<string> UnfinishedToolCalls { get; init; } = UnfinishedToolCalls.IsDefault ? [] : UnfinishedToolCalls;
+
+    /// <summary>The switch made <see cref="To"/> the session's default for the slot (A5, <see cref="SwitchScope.Session"/> or <see cref="SwitchScope.Pin"/>).</summary>
+    public bool SessionDefaultChanged { get; init; }
+
+    /// <summary>Whether the slot is pinned after the switch.</summary>
+    public bool Pinned { get; init; }
 }

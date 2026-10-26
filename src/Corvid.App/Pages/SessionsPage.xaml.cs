@@ -66,7 +66,17 @@ public sealed partial class SessionsPage : Page, IDockProvider
         Root.LostFocus += (_, _) => _ctrlHeld = false;
         Root.AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnCardPreviewKeyDown), true);
         Composer.BeforeTextChanging += OnComposerTextChanging;
+        // A5: with no session open while a new one starts, what is typed is kept for it.
+        Composer.TextChanged += (_, _) =>
+        {
+            if (_session is null && ViewModel?.IsStartingSession == true)
+                ViewModel.StartingDraft = Composer.Text;
+        };
         Root.KeyDown += OnRootKeyDown;
+        // A collapsed pill raises no SizeChanged, so the title would keep the narrow room it had beside it (seen going from a
+        // fork, its pill and children shown, back to its source: the title stayed cut to a word). Fit again once laid out.
+        foreach (var beside in new FrameworkElement[] { ForkPill, ModelsPill, ParentLink, ChildrenButton })
+            beside.RegisterPropertyChangedCallback(VisibilityProperty, (_, _) => DispatcherQueue.TryEnqueue(FitTitle));
         for (var i = 0; i < 7; i++)
         {
             var index = i;
@@ -96,6 +106,7 @@ public sealed partial class SessionsPage : Page, IDockProvider
         ApplyLayout();
         Bindings.Update();
         Attach(ViewModel.Session);
+        UpdateStarting();
         base.OnNavigatedTo(e);
     }
 
@@ -330,7 +341,26 @@ public sealed partial class SessionsPage : Page, IDockProvider
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(SessionsViewModel.Session))
+        {
+            // A5: opening a child (or the parent) from the header's list leaves that list behind.
+            ChildrenFlyout.Hide();
             Attach(ViewModel.Session);
+        }
+        else if (e.PropertyName == nameof(SessionsViewModel.IsStartingSession))
+            UpdateStarting();
+    }
+
+    /// <summary>
+    /// A5 (A4 leftover): while a new session starts with none open (Ctrl+N as the runtime loads), the composer takes text for
+    /// it, focused, and the new session opens with it as its draft.
+    /// </summary>
+    private void UpdateStarting()
+    {
+        if (_session is not null)
+            return;
+        Composer.IsEnabled = ViewModel.IsStartingSession;
+        if (ViewModel.IsStartingSession)
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FocusComposer);
     }
 
     private void Attach(SessionViewModel? session)
@@ -395,6 +425,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
             UpdateTurnStrip();
         if (e.PropertyName is nameof(SessionViewModel.IsReadOnly) or null or "")
             UpdateReadOnly();
+        // A5 (A4 leftover): a session's first opening positions once its history has drawn, not on the empty view before it.
+        if (e.PropertyName is nameof(SessionViewModel.IsOpen) && !_positioned)
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, PositionAtLatest);
         UpdateAnnouncements(e.PropertyName);
     }
 
@@ -595,6 +628,29 @@ public sealed partial class SessionsPage : Page, IDockProvider
             args.Cancel = true;
             _swallowLineBreak = false;
         }
+        else if (IsWindowAltLetter(sender.Text, args.NewText))
+        {
+            args.Cancel = true;
+        }
+    }
+
+    /// <summary>
+    /// A5: Alt+P (a window key on Alt and a letter) switches the generator without leaving the composer, but Uno still types
+    /// the letter into it. One letter that a window binding on Alt names, inserted while Alt alone is held, is that key's,
+    /// not text. AltGr (Ctrl with Alt) types its own characters and is left alone.
+    /// </summary>
+    private bool IsWindowAltLetter(string before, string after)
+    {
+        if (_composition is null || after.Length != before.Length + 1 || !IsDown(VirtualKey.Menu) || IsDown(VirtualKey.Control))
+            return false;
+        var at = 0;
+        while (at < before.Length && before[at] == after[at])
+            at++;
+        var typed = after[at];
+        if (!char.IsAsciiLetter(typed) || before[at..] != after[(at + 1)..])
+            return false;
+        return _composition.Keys.Find(new Corvid.App.Core.Keys.KeyGesture(Corvid.App.Core.Keys.KeyModifiers.Alt,
+            char.ToUpperInvariant(typed).ToString())) is not null;
     }
 
     private static int LineBreaks(string text) => text.Count(c => c is '\r' or '\n');
@@ -759,7 +815,9 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>Opens at the latest message: its top under the header, as the mockups show a running turn.</summary>
     private void PositionAtLatest()
     {
-        if (_session is not { } session || _positioned)
+        // A5 (A4 leftover): not before the history is in. Positioned on the empty view of a first opening (the engine still
+        // replaying the log), the transcript then filled in around an offset taken from no blocks, mid-way down.
+        if (_session is not { IsOpen: true } session || _positioned)
             return;
         _positioned = true;
         // A find (Ctrl+F) that opened the page lands on its block rather than on the latest message.
@@ -781,11 +839,21 @@ public sealed partial class SessionsPage : Page, IDockProvider
 
         ScrollToBlock(index);
         // The repeater estimates the heights of blocks it has not drawn; once the ones around the target are drawn the
-        // estimate can move it, so the position is taken again after that layout.
+        // estimate can move it, so the position is taken again after each layout until it holds (a few passes at most),
+        // unless the person scrolled meanwhile.
+        Settle(session, index, passes: 4);
+    }
+
+    private void Settle(SessionViewModel session, int index, int passes)
+    {
+        var offset = TranscriptScroll.VerticalOffset;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            if (_session is not null && index < _session.Blocks.Count)
-                ScrollToBlock(index);
+            if (!ReferenceEquals(_session, session) || index >= session.Blocks.Count || Math.Abs(TranscriptScroll.VerticalOffset - offset) > 1)
+                return;
+            ScrollToBlock(index);
+            if (passes > 1 && Math.Abs(TranscriptScroll.VerticalOffset - offset) > 1)
+                Settle(session, index, passes - 1);
         });
     }
 
@@ -882,11 +950,39 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>The title gives way to the fork pill (CSS's flex shrink): it is cut with an ellipsis, never the pill.</summary>
     private void OnHeaderSizeChanged(object sender, SizeChangedEventArgs e) => FitTitle();
 
+    /// <summary>The title's room the models pill leaves at least; with less, the pill gives way (the status bar names both).</summary>
+    private const double ModelsPillTitleRoom = 220;
+
     private void FitTitle()
     {
+        // Not laid out (the page away): nothing to fit to, and its next SizeChanged fits it.
+        if (HeaderGrid.ActualWidth <= 0)
+            return;
         // The room left of the actions, less the pill at its natural width.
         var room = HeaderGrid.ActualWidth - HeaderActions.ActualWidth - HeaderGrid.ColumnSpacing;
         var pill = ForkPill.Visibility == Visibility.Visible ? ForkPill.ActualWidth + TitleRow.Spacing : 0;
+        // A5: a child's parent link and a parent's children button keep their room too; the models pill gives way first.
+        foreach (var kept in new FrameworkElement[] { ParentLink, ChildrenButton })
+            if (kept.Visibility == Visibility.Visible)
+                pill += kept.ActualWidth + TitleRow.Spacing;
+        // A5: the models pill gives way to the title: it shows only while the title keeps room for a few words beside it.
+        if (ModelsPill.Visibility == Visibility.Visible)
+        {
+            // Its natural width from its text, not the pill's own measure: once given way (MaxWidth 0) the pill measures 0 wide,
+            // which would read as room and bring it back, a layout cycle whenever the title's room is near the line.
+            ModelsPillText.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            var wanted = ModelsPillText.DesiredSize.Width + ModelsPill.Padding.Left + ModelsPill.Padding.Right
+                + ModelsPill.BorderThickness.Left + ModelsPill.BorderThickness.Right + TitleRow.Spacing;
+            var fits = room - pill - wanted >= ModelsPillTitleRoom;
+            var limit = fits ? double.PositiveInfinity : 0;
+            if (ModelsPill.MaxWidth != limit)
+            {
+                ModelsPill.MaxWidth = limit;
+                AutomationProperties.SetAccessibilityView(ModelsPill, fits ? Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Content : Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+            }
+            if (fits)
+                pill += wanted;
+        }
         var width = Math.Max(40, room - pill);
         if (Math.Abs(TitleText.MaxWidth - width) > 0.5)
             TitleText.MaxWidth = width;

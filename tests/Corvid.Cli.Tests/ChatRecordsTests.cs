@@ -51,20 +51,32 @@ public sealed class ChatRecordsTests
         Assert.DoesNotContain("Staged for review", run.Output, StringComparison.Ordinal);
     }
 
-    /// <summary>A4 verification: with a question open a ! line is refused (its command would run as the answer) and the question waits.</summary>
+    /// <summary>
+    /// A4 verification: with a question open a ! line is refused (its command would run as the answer) and the question waits.
+    /// A5: corvid chat asks ask_user's question inside the turn, so the next line is the call's result and the same turn goes on.
+    /// </summary>
     [Fact]
     public async Task A_shell_line_while_a_question_is_open_is_refused_and_the_next_line_answers()
     {
         using var run = new CliRun(new FakeModels(new FakeGenerator(
-            Reply.Call("ask_user", """{"question":"What should I run before tagging?"}"""), Reply.Say("I will run the cleanup first."))));
+            Reply.Call("ask_user", """{"question":"What should I run before tagging?","options":["the tests","the cleanup script"]}"""),
+            Reply.Say("I will run the cleanup first."))));
 
-        await run.RunAsync(["chat", "--set", "Tools:Builtin=true"], "tag the release", "!rm -rf build", "the cleanup script", "/exit");
+        await run.RunAsync(["chat", "--set", "Tools:Builtin=true"], "tag the release", "!rm -rf build", "2", "/exit");
 
+        Assert.Contains("What should I run before tagging?", run.Output, StringComparison.Ordinal);
         Assert.Contains("A question is open: answer it first, then send the ! line. Nothing was sent.", run.Output, StringComparison.Ordinal);
         var calls = run.Models!.Generator.Calls;
         Assert.Equal(2, calls.Count);
-        Assert.Contains("the cleanup script", calls[1].Last(message => message.Role == Microsoft.Extensions.AI.ChatRole.User).Text, StringComparison.Ordinal);
+        // One turn: the answer (the choice's text, picked by its number) is ask_user's result, not a new message.
+        Assert.Single(calls[1], message => message.Role == Microsoft.Extensions.AI.ChatRole.User && message.Text.Contains("tag the release", StringComparison.Ordinal));
+        Assert.DoesNotContain(calls[1], message => message.Role == Microsoft.Extensions.AI.ChatRole.User && message.Text.Contains("cleanup", StringComparison.Ordinal));
+        var result = calls[1].SelectMany(message => message.Contents).OfType<Microsoft.Extensions.AI.FunctionResultContent>().Single();
+        Assert.Contains("the cleanup script", result.Result?.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(calls.SelectMany(call => call), message => message.Text.Contains("rm -rf", StringComparison.Ordinal));
+        Assert.Contains("I will run the cleanup first.", run.Output, StringComparison.Ordinal);
+        // The call is the question, never a row in the tool panel.
+        Assert.DoesNotContain("ask_user", run.Output, StringComparison.Ordinal);
     }
 
     /// <summary>A4V2-8: an empty session is listed nowhere, so /pin refuses it rather than pinning what nobody can see.</summary>

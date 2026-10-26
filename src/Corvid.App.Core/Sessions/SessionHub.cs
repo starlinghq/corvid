@@ -125,7 +125,8 @@ public sealed class SessionHub : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         if (_open.TryGetValue(sessionId, out var session))
             return session;
-        session = new SessionViewModel(sessionId, _service, _dispatcher, _time, _shell);
+        // A5: a child or a parent the rail does not list (read-only) still opens, as the Board's peek does.
+        session = new SessionViewModel(sessionId, _service, _dispatcher, _time, _shell) { ShowSession = Show };
         session.SetPinned(_summaries.TryGetValue(sessionId, out var summary) && summary.Pinned);
         _open[sessionId] = session;
         _ = OpenAsync(session);
@@ -155,7 +156,21 @@ public sealed class SessionHub : IDisposable
     /// </summary>
     public async Task<string> CreateAsync(CancellationToken cancellationToken = default)
     {
-        var id = await _service.CreateAsync(cancellationToken).ConfigureAwait(true);
+        // A5 (A4 leftover): text typed while the new session starts (Ctrl+N while the runtime loads) is the new session's:
+        // typed into the composer with no session open (StartingDraft), or onto the end of the draft of the one that was.
+        var from = _current;
+        var before = from?.Draft ?? "";
+        SetStarting(true);
+        string id;
+        try
+        {
+            id = await _service.CreateAsync(cancellationToken).ConfigureAwait(true);
+        }
+        catch
+        {
+            SetStarting(false);
+            throw;
+        }
         if (!_summaries.ContainsKey(id))
         {
             _summaries[id] = new SessionSummary(id, "New session")
@@ -167,12 +182,40 @@ public sealed class SessionHub : IDisposable
             };
             RebuildRail();
         }
+        var opened = Get(id);
+        var typed = StartingDraft;
+        if (from is not null && !ReferenceEquals(from, opened) && from.Draft.Length > before.Length
+            && from.Draft.StartsWith(before, StringComparison.Ordinal))
+        {
+            typed += from.Draft[before.Length..];
+            from.Draft = before;
+        }
+        if (typed.Trim().Length > 0 && opened.Draft.Length == 0)
+            opened.Draft = typed;
+        StartingDraft = "";
+        SetStarting(false);
         _shell.OpenSession(id);
         // ui.md F2: a new session is for typing in. After the page has drawn it: a page that is loading takes the request
         // when it attaches.
-        var opened = Get(id);
         _dispatcher.Post(opened.RequestComposerFocus);
         return id;
+    }
+
+    /// <summary>A5: a new session is starting (<see cref="CreateAsync"/>): the composer takes text for it meanwhile.</summary>
+    public bool Starting { get; private set; }
+
+    /// <summary>A5: what was typed while <see cref="Starting"/> with no session open; it becomes the new session's draft.</summary>
+    public string StartingDraft { get; set; } = "";
+
+    /// <summary>Raised when <see cref="Starting"/> changes.</summary>
+    public event EventHandler? StartingChanged;
+
+    private void SetStarting(bool starting)
+    {
+        if (Starting == starting)
+            return;
+        Starting = starting;
+        StartingChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -181,6 +224,8 @@ public sealed class SessionHub : IDisposable
     /// </summary>
     public async void StartNew()
     {
+        // A5: the Sessions area at once, where the composer takes what is typed while the session starts.
+        _shell.Navigate(Area.Sessions);
         try
         {
             await CreateAsync().ConfigureAwait(true);

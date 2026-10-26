@@ -202,7 +202,8 @@
         "text": 42
       },
       "round": 1,
-      "read_only": false
+      "read_only": false,
+      "generator": "gen-small"
     },
     {
       "type": "tool_result",
@@ -255,7 +256,8 @@
         "text": "buy milk"
       },
       "round": 2,
-      "read_only": false
+      "read_only": false,
+      "generator": "gen-small"
     },
     {
       "type": "decision",
@@ -521,7 +523,8 @@
                 "text": 42
               },
               "round": 1,
-              "read_only": false
+              "read_only": false,
+              "generator": "gen-small"
             }
           },
           {
@@ -582,7 +585,8 @@
                 "text": "buy milk"
               },
               "round": 2,
-              "read_only": false
+              "read_only": false,
+              "generator": "gen-small"
             }
           },
           {

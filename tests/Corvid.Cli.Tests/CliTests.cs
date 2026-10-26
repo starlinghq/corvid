@@ -50,9 +50,12 @@ internal sealed class CliRun : IDisposable
         return [.. settings.SelectMany(pair => new[] { "--set", $"{pair.Key["Corvid:".Length..]}={pair.Value}" }), "--config", ConfigFile];
     }
 
-    public async Task<int> RunAsync(string[] args, params string?[] input)
+    public Task<int> RunAsync(string[] args, params string?[] input) => RunAsync(args, new ScriptedChatInput(input));
+
+    /// <summary>A5: with a scripted input built by the test (lines typed during a turn).</summary>
+    public async Task<int> RunAsync(string[] args, ScriptedChatInput input)
     {
-        var context = new CliContext(Console, new ScriptedChatInput(input))
+        var context = new CliContext(Console, input)
         {
             ConfigureServices = services =>
             {
@@ -125,7 +128,7 @@ public sealed class ChatTests
         Assert.Contains("/model picks a model", output, StringComparison.Ordinal);
         Assert.Contains("generator: fake-gen@cpu", output, StringComparison.Ordinal);
         Assert.Contains("Switch generator to 2 fake-gen-large (Enter keeps it) ›", output, StringComparison.Ordinal);
-        Assert.Contains("generator: fake-gen@cpu → fake-gen-large@cpu.", output, StringComparison.Ordinal);
+        Assert.Contains("generator: fake-gen@cpu → fake-gen-large@cpu for this session.", output, StringComparison.Ordinal);
     }
 
     [Fact]

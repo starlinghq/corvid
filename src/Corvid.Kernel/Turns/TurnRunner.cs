@@ -165,7 +165,54 @@ public sealed class TurnRunner
     /// </summary>
     public bool Tainted { get; private set; }
 
+    /// <summary>
+    /// G-15: marks the session as holding outside content, as a fork of a tainted session does before its first turn. One
+    /// way: only a user's message at a turn's start clears taint (§10.3), so this can never weaken it.
+    /// </summary>
+    public void Taint() => Tainted = true;
+
+    // G-15: the log position through which the running turn's last completed step lies; NoBoundary while no turn runs (0 is a
+    // boundary: a `!` line that is the session's first message holds nothing before it).
+    private const long NoBoundary = -1;
+    private long _stepBoundary = NoBoundary;
+
+    /// <summary>
+    /// G-15: while a turn runs, the log position a fork may copy through without splitting a step: the turn's message
+    /// until its first round of tool calls has its results (the head before the message for a <c>!</c> line's turn), then
+    /// the head after each round's results. Every call issued by then has its result and no approval waits. 0 while a
+    /// <c>!</c> line that is the session's first message runs (nothing comes before it). Null between turns. A snapshot,
+    /// thread-safe: a surface reads it beside the running turn.
+    /// </summary>
+    public long? StepBoundary => Volatile.Read(ref _stepBoundary) is >= 0 and var boundary ? boundary : null;
+
+    private void MarkStepBoundary(long sequence) => Volatile.Write(ref _stepBoundary, sequence);
+
+    private void MarkStepBoundary() => MarkStepBoundary(_services.Log.GetHead(SessionId));
+
     private int _approvalMode = -1;
+
+    private int _stepLimit = int.MaxValue;
+
+    /// <summary>
+    /// A5: a step budget below <see cref="TurnOptions.MaxSteps"/> for the turns that start from now on, or null for the
+    /// options' own. A child session's output-schema repair turn gets what its first turn left of the budget the person
+    /// approved, so the two turns together stay within it. It only lowers the budget: a value above the options' has no
+    /// effect. Thread-safe; a running turn keeps the budget it started with.
+    /// </summary>
+    public int? StepLimit
+    {
+        get => Volatile.Read(ref _stepLimit) is var limit && limit < _options.MaxSteps ? limit : null;
+        set
+        {
+            if (value is < 1)
+                throw new ArgumentOutOfRangeException(nameof(value), value, "A step limit is one or more.");
+            Volatile.Write(ref _stepLimit, value ?? int.MaxValue);
+        }
+    }
+
+    // The options a turn starting now runs with: StepLimit applied.
+    private TurnOptions OptionsNow() =>
+        Volatile.Read(ref _stepLimit) is var limit && limit < _options.MaxSteps ? _options with { MaxSteps = limit } : _options;
 
     /// <summary>
     /// The approval mode this session's calls are assessed under (G-10): <see cref="TurnOptions.ApprovalMode"/> until a
@@ -283,6 +330,7 @@ public sealed class TurnRunner
         finally
         {
             // Steers the turn ended without taking go back to the surface, which sends them as messages.
+            Volatile.Write(ref _stepBoundary, NoBoundary);
             List<PendingSteer> left;
             lock (_steerGate)
                 (left, _steers) = (_steers ?? [], null);
@@ -412,7 +460,7 @@ public sealed class TurnRunner
     private sealed class Turn(TurnRunner runner, Envelope envelope)
     {
         private readonly TurnServices _services = runner._services;
-        private readonly TurnOptions _options = runner._options;
+        private readonly TurnOptions _options = runner.OptionsNow();
         private readonly Lock _gate = new();
         private readonly HashSet<string> _open = new(StringComparer.Ordinal);
         private readonly List<string> _escalations = [];
@@ -425,6 +473,9 @@ public sealed class TurnRunner
         private readonly Dictionary<string, Offered> _catalogue = new(StringComparer.Ordinal);
         // The calls of the latest generator response: budget clearing spares their results, and injection is asked about them.
         private readonly HashSet<string> _lastRound = new(StringComparer.Ordinal);
+        // A5 review (security M2): calls whose tool said its result is outside content (ToolCallContext.MarkResultTainted:
+        // a delegated child that read the web, a hub skill's file), asked injection as a network tool's are. Under _gate.
+        private readonly HashSet<string> _taintedResults = new(StringComparer.Ordinal);
         private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
         private ImmutableArray<Offered> _shortlist = [];
         private ImmutableArray<RetrievedItem> _recalled = [];
@@ -437,6 +488,8 @@ public sealed class TurnRunner
         private bool _heldLocalOnly;
         private string? _lastToolResult;
         private int _steps;
+        // A5: the generator the latest response came from, logged on the calls it asked for (ToolCallIssued.Generator).
+        private string? _generatorId;
         private int _toolCalls;
         private bool _prefillChecked;
         private string? _memoryWrite;
@@ -449,6 +502,8 @@ public sealed class TurnRunner
         private ClarifyingQuestion? _question;
         // A4: a `!!` line's turn, whose call and result are logged local-only.
         private bool _localOnly;
+        // A5: the generator calls' tokens not yet on an event: the next answer or first issued call carries them.
+        private TokenUsage? _usage;
 
         public async Task<TurnResult> RunAsync(CancellationToken cancellationToken)
         {
@@ -468,13 +523,18 @@ public sealed class TurnRunner
             {
                 _turnStart = runner.Append(new UserMessage(envelope.Text, From: envelope.From)).Sequence;
             }
+            // G-15: until its first round has its results, a fork while the turn runs holds the turn's message.
+            runner.MarkStepBoundary(_turnStart);
 
             await ExtractEntitiesAsync(cancellationToken).ConfigureAwait(false);
             await BuildShortlistAsync(cancellationToken).ConfigureAwait(false);
             await BuildSkillShortlistAsync(cancellationToken).ConfigureAwait(false);
 
             // Ingress: one request for every question this turn needs before the first generator call.
-            var ingress = new List<KeyValuePair<string, DecisionQuestion>> { Ask("intent"), Ask("difficulty"), Ask("clarify") };
+            var ingress = new List<KeyValuePair<string, DecisionQuestion>> { Ask("intent"), Ask("difficulty") };
+            // A5: a turn that may not ask the person anything (a child session's) is never diverted into a question.
+            if (_options.AsksQuestions)
+                ingress.Add(Ask("clarify"));
             // A guest's turn (C-020) recalls none of the user's memory: what it retrieved would be read out to the guest.
             if (_services.Retriever is not null && envelope.Guest is null)
                 ingress.Add(Ask("needs_recall"));
@@ -483,7 +543,13 @@ public sealed class TurnRunner
             if (!_skills.IsEmpty)
                 ingress.Add(SkillQuestion());
             ingress.AddRange(DescriptionQuestions());
-            var verdicts = await DecideAsync(Checkpoint.Ingress, ingress, cancellationToken).ConfigureAwait(false);
+            // A5 (plan §5.2's delegate row): would a child session do this better? Asked only where it could act: a
+            // calibrated decider, a generator with native tool calls, and delegate_task in the turn's tools.
+            var delegates = DelegationCondition();
+            if (delegates)
+                ingress.Add(Ask("delegate"));
+            var verdicts = await DecideAsync(Checkpoint.Ingress, ingress, cancellationToken,
+                delegates ? [FabricConditions.GeneratorSupportsDelegation] : []).ConfigureAwait(false);
             await LoadSkillAsync(verdicts, cancellationToken).ConfigureAwait(false);
 
             if (Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed)
@@ -493,9 +559,9 @@ public sealed class TurnRunner
 
             // An embedding pick of ask_clarifying_question is no confidence either: like clarify itself (BlocksTurn), only a
             // calibrated answer diverts the turn unless the floors allow the degraded tier to.
-            var clarify = Acted(verdicts, "clarify", out _)
+            var clarify = _options.AsksQuestions && (Acted(verdicts, "clarify", out _)
                 || Acted(verdicts, "intent", out var intent) && intent == "ask_clarifying_question"
-                    && (verdicts["intent"].Answer?.Calibrated == true || _services.Fabric.Policy.Floors.DegradedTurnBlocking);
+                    && (verdicts["intent"].Answer?.Calibrated == true || _services.CurrentFabric().Policy.Floors.DegradedTurnBlocking));
             if (clarify)
             {
                 var question = Text(await GenerateAsync([], NudgeClarify, required: null, cancellationToken).ConfigureAwait(false));
@@ -506,6 +572,10 @@ public sealed class TurnRunner
             var offered = OfferFrom(verdicts, "tool");
             if (offered is null && Acted(verdicts, "intent", out var route) && route == "answer_directly")
                 offered = [];
+            // A5: a confident delegate offers delegate_task beside whatever else the turn is offered.
+            if (delegates && Acted(verdicts, "delegate", out _) && _catalogue.TryGetValue(DelegateTaskTool.ToolName, out var delegation)
+                && !(offered ?? _shortlist).Any(tool => tool.Function.Name == DelegateTaskTool.ToolName))
+                offered = (offered ?? _shortlist).Add(delegation);
             return await LoopAsync(offered ?? _shortlist, cancellationToken).ConfigureAwait(false);
         }
 
@@ -523,6 +593,8 @@ public sealed class TurnRunner
             if (envelope.Origin != EnvelopeOrigin.User || envelope.Guest is not null)
                 return Result(TurnStatus.Failed, "Only the session's own user can run a shell line.");
             _localOnly = shell.LocalOnly;
+            // G-15: a fork while the line runs holds what came before it; its call has no step to wait for.
+            runner.MarkStepBoundary();
             _turnStart = runner.Append(new UserMessage(envelope.Text, shell.LocalOnly ? true : null)).Sequence;
             var function = _services.Tools.GetFunctions(_options.SecretNames).FirstOrDefault(candidate => candidate.Name == ShellTool);
             if (function?.GetService(typeof(ToolDescriptor)) is not ToolDescriptor descriptor)
@@ -598,6 +670,8 @@ public sealed class TurnRunner
                 _steps++;
                 Listen(listener => listener.StepStarted(runner.SessionId, _steps, _options.MaxSteps));
                 var (anyRan, failed) = await RunCallsAsync(calls, tools, cancellationToken).ConfigureAwait(false);
+                // G-15: the round is done, every call with its result: a step boundary a fork may copy through.
+                runner.MarkStepBoundary();
                 // K-6: the generator asked the user (ask_user); the round's other calls ran, and the question ends the turn.
                 if (_question is { } asked)
                     return await FinishAsync(TurnStatus.Clarifying, asked.Text, cancellationToken, asked).ConfigureAwait(false);
@@ -642,6 +716,7 @@ public sealed class TurnRunner
         {
             var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
             var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
+            _generatorId = profile.Id;
             var counter = Counter(generator);
             var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
             var toolTokens = tools.Sum(tool => counter.CountTokens(tool.Function.Name) + counter.CountTokens(tool.Function.Description)
@@ -695,7 +770,9 @@ public sealed class TurnRunner
                     try
                     {
                         var answer = await generator.GetResponseAsync(messages, forced, cancellationToken).ConfigureAwait(false);
+                        NoteUsage(answer.Usage);
                         NotePrivacyRetreat(head, cancellationToken);
+                        _generatorId = ModelResponses.AnsweredBy(answer) ?? _generatorId;
                         return answer;
                     }
                     catch (NotSupportedException)
@@ -705,8 +782,41 @@ public sealed class TurnRunner
                 messages.Add(new ChatMessage(ChatRole.User, string.Format(CultureInfo.InvariantCulture, NudgeRequired, required)));
             }
             var response = await generator.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            NoteUsage(response.Usage);
             NotePrivacyRetreat(head, cancellationToken);
+            // A5 review: the calls this response issues name the model that answered (after a fallback, a privacy retreat or a
+            // switch), not the one the call started on.
+            _generatorId = ModelResponses.AnsweredBy(response) ?? _generatorId;
             return response;
+        }
+
+        /// <summary>
+        /// A5 (K-5 in the log): a generator call's tokens, as its provider reported them, held until the next event this turn
+        /// appends for a response (its answer, or its first call), so a replay shows the turn's tokens and the context gauge.
+        /// </summary>
+        private void NoteUsage(UsageDetails? usage)
+        {
+            if (usage is null || usage.InputTokenCount is null && usage.OutputTokenCount is null)
+                return;
+            lock (_gate)
+            {
+                var held = _usage;
+                _usage = new TokenUsage(Sum(held?.InputTokens, usage.InputTokenCount), Sum(held?.OutputTokens, usage.OutputTokenCount),
+                    (held?.Calls ?? 0) + 1, usage.InputTokenCount ?? held?.PromptTokens);
+            }
+
+            static long? Sum(long? a, long? b) => a is null && b is null ? null : (a ?? 0) + (b ?? 0);
+        }
+
+        /// <summary>The held usage, once: the event that takes it carries it.</summary>
+        private TokenUsage? TakeUsage()
+        {
+            lock (_gate)
+            {
+                var usage = _usage;
+                _usage = null;
+                return usage;
+            }
         }
 
         // The egress gate refused the cloud model and the slot moved to a local one (plan §10.4); the user is told, as
@@ -900,7 +1010,9 @@ public sealed class TurnRunner
                 // ends with its question after the round. A second one in the round is told the first was asked.
                 if (tool!.Function is AskUserTool && _options.Interactive)
                 {
-                    AskUser(callId, call.Name, arguments);
+                    // A5: asked inside the turn when a surface can answer now; otherwise (or put aside) K-6's path.
+                    if (!await AskInTurnAsync(callId, call.Name, arguments, cancellationToken).ConfigureAwait(false))
+                        AskUser(callId, call.Name, arguments);
                     continue;
                 }
                 var risk = tool.Descriptor.Risk;
@@ -1056,6 +1168,8 @@ public sealed class TurnRunner
                         Interactive = _options.Interactive,
                         Approval = approval,
                         Output = tail is null ? null : tail.Write,
+                        // A5: what the turn may be offered, the ceiling of a delegated child's toolset.
+                        OfferedTools = new HashSet<string>(_catalogue.Keys, StringComparer.Ordinal),
                     };
                     var arguments = context.AttachTo(JsonValues.ToArguments(call.Arguments));
                     var value = await call.Tool.Function.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
@@ -1099,10 +1213,12 @@ public sealed class TurnRunner
                 // content without the network (a hub skill's file) says so on its context.
                 if (descriptor.Risk.Network || callContext?.ResultTainted == true)
                     runner.Tainted = true;
+                if (callContext?.ResultTainted == true)
+                    _taintedResults.Add(call.CallId);
                 _pickDecisions.Remove(descriptor.Name, out decisionId);
             }
             if (decisionId is not null)
-                _services.Fabric.RecordOutcome(runner.SessionId, decisionId,
+                _services.CurrentFabric().RecordOutcome(runner.SessionId, decisionId,
                     outcome == CallOutcome.Succeeded ? "tool_succeeded" : "tool_failed", CancellationToken.None);
             return outcome;
         }
@@ -1115,7 +1231,8 @@ public sealed class TurnRunner
         {
             if (_services.Approvals is not { } approvals)
                 return ("no approval pipeline is configured, so side-effecting tools do not run", null);
-            var action = new ToolAction(call.Tool.Descriptor, call.Arguments);
+            // A5 review (security L5): the turn's offer travels with the action, so a spawn's card previews the toolset it grants.
+            var action = new ToolAction(call.Tool.Descriptor, call.Arguments) { OfferedTools = new HashSet<string>(_catalogue.Keys, StringComparer.Ordinal) };
             var context = new ApprovalContext(runner.SessionId, runner.ApprovalMode, State())
             {
                 Tainted = runner.Tainted,
@@ -1123,6 +1240,8 @@ public sealed class TurnRunner
                 CallId = call.CallId,
                 Interactive = _options.Interactive,
                 Reversible = await ReversibleAsync(approvals, action).ConfigureAwait(false),
+                // A5: the session's own decider answers its risk question too.
+                Fabric = _services.Deciders is null ? null : _services.CurrentFabric(),
             };
             ApprovalResult result;
             try
@@ -1307,7 +1426,7 @@ public sealed class TurnRunner
                 lock (_gate)
                 {
                     runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
-                        _localOnly ? true : null));
+                        _localOnly ? true : null, _generatorId, TakeUsage()));
                     _open.Add(call.CallId);
                 }
             }
@@ -1335,7 +1454,7 @@ public sealed class TurnRunner
                         ? "The question goes to the user and the turn ends here; their answer comes as their next message."
                         : text.Length == 0 ? "The question was empty, so nothing was asked." : "One question per turn: the first one was asked.",
                 });
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true), new ToolResult(callId, result, IsError: !first));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Generator: _generatorId, Usage: TakeUsage()), new ToolResult(callId, result, IsError: !first));
                 if (first)
                     _question = new ClarifyingQuestion(NewQuestionId(), text, options);
                 _pickDecisions.Remove(tool, out decisionId);
@@ -1344,10 +1463,105 @@ public sealed class TurnRunner
             if (!first)
                 activity?.SetStatus(ActivityStatusCode.Error);
             if (decisionId is not null)
-                _services.Fabric.RecordOutcome(runner.SessionId, decisionId, first ? "tool_succeeded" : "tool_failed", CancellationToken.None);
+                _services.CurrentFabric().RecordOutcome(runner.SessionId, decisionId, first ? "tool_succeeded" : "tool_failed", CancellationToken.None);
         }
 
         private static string NewQuestionId() => "q-" + Guid.NewGuid().ToString("N")[..12];
+
+        /// <summary>
+        /// A5: an <c>ask_user</c> call asked inside the turn (<see cref="IQuestionAsker"/>). The call and its
+        /// <c>ClarificationAsked</c> are logged first (so every surface shows the question), the turn waits for the person, and
+        /// their answer is logged as the call's result with <c>ClarificationAnswered</c>, which closes the question; the turn
+        /// then goes on. False when nobody can answer inside the turn (or the question is empty, or one already ends this
+        /// round): the caller takes K-6's path. An answer put aside ends the round on the question as K-6 does.
+        /// </summary>
+        private async Task<bool> AskInTurnAsync(string callId, string tool, JsonElement arguments, CancellationToken cancellationToken)
+        {
+            if (_services.Questions is not { } asker || !_options.AsksQuestions || !asker.CanAsk(runner.SessionId))
+                return false;
+            var (text, options) = AskUserTool.Read(arguments);
+            var question = new ClarifyingQuestion(NewQuestionId(), text, options);
+            var prompt = new QuestionPrompt(runner.SessionId, question.Id, callId, text, options);
+            IDisposable parked;
+            lock (_gate)
+            {
+                if (text.Length == 0 || _question is not null)
+                    return false;
+                // The surface waits for the answer before the question reaches the log (and so the window): AskAsync follows.
+                asker.Expect(prompt);
+                // A5 review: parked from before it is issued until its result is logged, so a switch while the person thinks
+                // neither waits for the call nor refuses it as orphaned (it is not running: it waits on the person).
+                parked = _services.Slots.ParkToolCall(callId);
+                try
+                {
+                    runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, true, Generator: _generatorId, Usage: TakeUsage()),
+                        new ClarificationAsked(question.Id, question.Text, question.Options));
+                }
+                catch
+                {
+                    parked.Dispose();
+                    throw;
+                }
+                // Open until answered: a cancelled turn closes it with the rest.
+                _open.Add(callId);
+            }
+            using var unpark = parked;
+            using var activity = StartToolActivity(callId, tool, approval: false);
+            string? answer;
+            try
+            {
+                answer = await asker.AskAsync(prompt, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Interrupted while it waited: the question goes with the turn (an empty answer withdraws it), as every surface
+                // closes an interrupted turn's question; the call is closed as cancelled with the turn's other open calls.
+                lock (_gate)
+                    runner.Append(new ClarificationAnswered(question.Id, ""));
+                activity?.SetTag(KernelTelemetry.ToolOutcome, "cancelled");
+                throw;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // A surface that fails to ask leaves the question for the person's next message, as nobody attached would.
+                answer = null;
+            }
+            // Cancelled as the surface returned (an interrupt racing the question): the answer, if any, is not taken and the
+            // question goes with the turn, as on the cancelled wait above, so no replay shows it still open.
+            if (cancellationToken.IsCancellationRequested)
+            {
+                lock (_gate)
+                    runner.Append(new ClarificationAnswered(question.Id, ""));
+                activity?.SetTag(KernelTelemetry.ToolOutcome, "cancelled");
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            answer = answer?.Trim();
+            string? pick;
+            var answered = answer is { Length: > 0 };
+            var result = JsonValues.ToElement(new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["asked"] = true,
+                [answered ? "answer" : "note"] = answered
+                    ? answer
+                    : "The question goes to the user and the turn ends here; their answer comes as their next message.",
+            });
+            lock (_gate)
+            {
+                if (answered)
+                    runner.Append(new ToolResult(callId, result), new ClarificationAnswered(question.Id, answer!));
+                else
+                {
+                    runner.Append(new ToolResult(callId, result));
+                    _question = question;
+                }
+                _open.Remove(callId);
+                _pickDecisions.Remove(tool, out pick);
+            }
+            activity?.SetTag(KernelTelemetry.ToolOutcome, "succeeded");
+            if (pick is not null)
+                _services.CurrentFabric().RecordOutcome(runner.SessionId, pick, "tool_succeeded", CancellationToken.None);
+            return true;
+        }
 
         private void IssueRejected(string callId, string tool, JsonElement arguments, bool? readOnly, JsonElement error)
         {
@@ -1356,7 +1570,7 @@ public sealed class TurnRunner
             activity?.SetTag(KernelTelemetry.ToolOutcome, "invalid_arguments");
             activity?.SetStatus(ActivityStatusCode.Error);
             lock (_gate)
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly), new ToolResult(callId, error, IsError: true));
+                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly, Generator: _generatorId, Usage: TakeUsage()), new ToolResult(callId, error, IsError: true));
         }
 
         // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.
@@ -1429,11 +1643,15 @@ public sealed class TurnRunner
             }
             // injection is asked about content that came from outside (a network tool); either answer leaves it tainted.
             var latest = _lastRound;
+            HashSet<string> outside;
+            lock (_gate)
+                outside = [.. _taintedResults];
             foreach (var entry in results.Where(entry => latest.Contains(((ToolResult)entry.Content).CallId)))
             {
                 var result = (ToolResult)entry.Content;
                 var tool = names.GetValueOrDefault(result.CallId, "");
-                if (_catalogue.TryGetValue(tool, out var offered) && offered.Descriptor.Risk.Network && !result.IsError)
+                // Security M2: and a tool that said its result is outside content, though it reads no network itself.
+                if (_catalogue.TryGetValue(tool, out var offered) && (offered.Descriptor.Risk.Network || outside.Contains(result.CallId)) && !result.IsError)
                     questions.Add(KeyValuePair.Create("injection/" + result.CallId,
                         Catalogue["injection"].ToQuestion(instructions: Instructions(Catalogue["injection"], tool, result, entry.FromSequence))));
             }
@@ -1471,7 +1689,7 @@ public sealed class TurnRunner
                 conditions.Add(FabricConditions.EscalationAllowed);
             CheckpointResult result;
             using (RequestScope())
-                result = await _services.Fabric.DecideAsync(runner.SessionId, checkpoint, State(BudgetFor(checkpoint, questions)), questions,
+                result = await _services.CurrentFabric().DecideAsync(runner.SessionId, checkpoint, State(BudgetFor(checkpoint, questions)), questions,
                     conditions, skip, cancellationToken).ConfigureAwait(false);
             if (result.Verdicts.TryGetValue("tool", out var tool) && tool.Verdict.Acted && tool.Verdict.Option is { } pick && pick != None)
                 lock (_gate)
@@ -1479,7 +1697,7 @@ public sealed class TurnRunner
             return result;
         }
 
-        private QuestionCatalogue Catalogue => _services.Fabric.Policy.Catalogue;
+        private QuestionCatalogue Catalogue => _services.CurrentFabric().Policy.Catalogue;
 
         private KeyValuePair<string, DecisionQuestion> Ask(string id) =>
             KeyValuePair.Create(id, Catalogue[id].ToQuestion());
@@ -1563,6 +1781,16 @@ public sealed class TurnRunner
         }
 
         /// <summary>What the generator may see after a <c>tool</c> verdict: one tool, none, or null for the shortlist (§5.3 rule 2).</summary>
+        /// <summary>
+        /// A5: <see cref="FabricConditions.GeneratorSupportsDelegation"/>. The turn has <c>delegate_task</c> (never a guest's or a
+        /// child's), the generator calls tools natively, and a calibrated decider would answer: the degraded tier's yes/no
+        /// would cost a generator call on every turn for a routing hint.
+        /// </summary>
+        private bool DelegationCondition() =>
+            _catalogue.ContainsKey(DelegateTaskTool.ToolName) && _options.AsksQuestions
+            && _services.Slots.Current(ModelSlots.Generator).Profile.ToolCalls == ToolCallSupport.Native
+            && _services.CurrentFabric().CalibratedDecider is not null;
+
         private ImmutableArray<Offered>? OfferFrom(CheckpointResult result, string key)
         {
             if (!Acted(result, key, out var pick) || pick is null)
@@ -1674,8 +1902,10 @@ public sealed class TurnRunner
             foreach (var function in _services.Tools.GetFunctions(_options.SecretNames))
                 if (function.GetService(typeof(ToolDescriptor)) is ToolDescriptor descriptor
                     // K-6: a turn nobody watches (a scheduled run) has nobody to ask.
-                    && (_options.Interactive || function is not AskUserTool)
-                    && (envelope.Guest is null || envelope.Guest.Allows(function.Name) && !descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory)))
+                    && (_options.Interactive && _options.AsksQuestions || function is not AskUserTool)
+                    && (envelope.Guest is null || envelope.Guest.Allows(function.Name) && !descriptor.Risk.SideEffects.HasFlag(SideEffects.Memory)
+                        // A5: a guest never starts child sessions, whatever its allowlist says.
+                        && function.Name != DelegateTaskTool.ToolName))
                     _catalogue[function.Name] = new Offered(function, descriptor);
             if (_catalogue.Count == 0 || !_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
                 || binding.Service is not IEmbeddingGenerator<string, Embedding<float>> embedder)
@@ -1765,7 +1995,7 @@ public sealed class TurnRunner
             var key = "injection/skill:" + body.Name;
             // C-030: the verdict is never read (the body has tainted the turn already), so with reduced checkpoints the whole
             // request is saved; the question is still logged, as skipped.
-            IReadOnlyDictionary<string, string>? skip = _services.Fabric.Reduction is { } reduction
+            IReadOnlyDictionary<string, string>? skip = _services.CurrentFabric().Reduction is { } reduction
                 ? new Dictionary<string, string>(StringComparer.Ordinal) { [key] = "verdict unused, the skill body taints the turn; " + reduction.Reason }
                 : null;
             await DecideAsync(Checkpoint.Ingress, [KeyValuePair.Create(key, question.ToQuestion(instructions: instructions))], skip,
@@ -1814,9 +2044,10 @@ public sealed class TurnRunner
             // K-6: a clarifying turn's question is logged with its answer, structured, so every surface shows it as a question.
             if (status == TurnStatus.Clarifying)
                 question ??= new ClarifyingQuestion(NewQuestionId(), text, []);
+            var usage = TakeUsage();
             var answer = question is null
-                ? runner.Append(new AssistantMessage(text)).Sequence
-                : runner.Append(new AssistantMessage(text), new ClarificationAsked(question.Id, question.Text, question.Options))[0].Sequence;
+                ? runner.Append(new AssistantMessage(text, usage)).Sequence
+                : runner.Append(new AssistantMessage(text, usage), new ClarificationAsked(question.Id, question.Text, question.Options))[0].Sequence;
             _question = question;
             var deliver = "reply";
             var egress = new List<KeyValuePair<string, DecisionQuestion>>();
@@ -1863,7 +2094,7 @@ public sealed class TurnRunner
                 // An embedding pick is no confidence: only a calibrated answer sends the reply anywhere but back (C-020), so
                 // the degraded tier never silences an answer or moves it to another channel.
                 if (Acted(verdicts, "deliver", out var target) && target is not null
-                    && (verdicts["deliver"].Answer?.Calibrated == true || _services.Fabric.Policy.Floors.DegradedTurnBlocking))
+                    && (verdicts["deliver"].Answer?.Calibrated == true || _services.CurrentFabric().Policy.Floors.DegradedTurnBlocking))
                     deliver = target;
                 if (Acted(verdicts, "remember", out _))
                     await RememberAsync(cancellationToken).ConfigureAwait(false);

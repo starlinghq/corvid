@@ -4,6 +4,7 @@
       xmlns:controls="using:Corvid.App.Controls"
       xmlns:core="using:Corvid.App.Core"
       xmlns:sessions="using:Corvid.App.Core.Sessions"
+      xmlns:board="using:Corvid.App.Core.Board"
       xmlns:diffs="using:Corvid.App.Core.Diffs"
       xmlns:local="using:Corvid.App.Pages"
       xmlns:ui="using:Corvid.App.Infrastructure"
@@ -280,6 +281,9 @@
           </Grid>
           <TextBlock controls:RichText.Runs="{x:Bind Why, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(HasWhy), Mode=OneWay}"
                      Style="{StaticResource CorvidSmallText}" Margin="38,0,12,8" />
+          <!-- A5: which generator asked for the call, once the turn has switched. -->
+          <TextBlock Text="{x:Bind GeneratedBy, Mode=OneWay}" Visibility="{x:Bind ui:Ui.VisibleIf(ShowGeneratedBy), Mode=OneWay}"
+                     Style="{StaticResource CorvidSmallText}" Margin="38,0,12,8" />
           <Border Margin="1,0,1,1" Padding="10,8" CornerRadius="0,0,7,7" Background="{ThemeResource CorvidCodeBg}" MaxHeight="120"
                   Visibility="{x:Bind ui:Ui.VisibleIf(HasTail), Mode=OneWay}">
             <ScrollViewer HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Auto" VerticalScrollBarVisibility="Auto">
@@ -353,6 +357,18 @@
               </ScrollViewer>
             </Border>
             <TextBlock Text="{x:Bind Unparsed}" Style="{StaticResource CorvidSmallText}" Visibility="{x:Bind ui:Ui.VisibleIfText(Unparsed)}" />
+            <!-- A5: a spawn's children as they would start (goal, tools, budget, models), or the child that asks. -->
+            <Border Padding="12,10" CornerRadius="6" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1"
+                    Visibility="{x:Bind ui:Ui.VisibleIfText(DelegationText), Mode=OneWay}">
+              <StackPanel Spacing="6">
+                <TextBlock Text="{x:Bind DelegationText, Mode=OneWay}" Style="{StaticResource CorvidMonoText}" TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                           AutomationProperties.Name="Child sessions this starts" />
+                <!-- A5 review (security L5): a goal cut for the card says how much it leaves out; this shows all of it. -->
+                <controls:CorvidButton Content="Show the whole goal" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" HorizontalAlignment="Left"
+                                       Command="{x:Bind ShowWholeGoalCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(CanShowWholeGoal), Mode=OneWay}"
+                                       ToolTipService.ToolTip="Show each child's goal in full" />
+              </StackPanel>
+            </Border>
             <ItemsControl ItemsSource="{x:Bind Commands}" IsTabStop="False"
                           Visibility="{x:Bind local:SessionsPage.WhenAny(local:SessionsLayout.Current.IsPhone, false, Commands)}">
               <ItemsControl.ItemsPanel>
@@ -851,6 +867,71 @@
             <TextBlock Text="{x:Bind ViewModel.Session.ForkText, Mode=OneWay, FallbackValue=''}" FontSize="12" Foreground="{ThemeResource CorvidText2}"
                        VerticalAlignment="Center" TextWrapping="NoWrap" />
           </Border>
+          <!-- A5: this session's generator and decider, live as they switch. -->
+          <Border x:Name="ModelsPill" Style="{StaticResource Pill}" SizeChanged="OnHeaderSizeChanged"
+                  Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.HasModels), Mode=OneWay, FallbackValue=Collapsed}"
+                  ToolTipService.ToolTip="This session's generator and decider. Alt+P switches the generator; Models › Switch… › This session switches either."
+                  AutomationProperties.Name="{x:Bind ViewModel.Session.ModelsText, Mode=OneWay, FallbackValue=''}">
+            <TextBlock x:Name="ModelsPillText" Text="{x:Bind ViewModel.Session.ModelsText, Mode=OneWay, FallbackValue=''}" FontSize="12" FontFamily="{StaticResource CorvidMono}"
+                       Foreground="{ThemeResource CorvidText2}" VerticalAlignment="Center" TextWrapping="NoWrap" />
+          </Border>
+          <!-- A5: a child links its parent (it is read-only); a parent lists its children. -->
+          <HyperlinkButton x:Name="ParentLink" Padding="8,2" SizeChanged="OnHeaderSizeChanged" Command="{x:Bind ViewModel.Session.OpenParentCommand, Mode=OneWay}"
+                           Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.HasParent), Mode=OneWay, FallbackValue=Collapsed}"
+                           ToolTipService.ToolTip="{x:Bind ViewModel.Session.ChildGoal, Mode=OneWay, FallbackValue=''}"
+                           AutomationProperties.Name="Open the parent session">
+            <TextBlock Text="{x:Bind ViewModel.Session.ParentText, Mode=OneWay, FallbackValue=''}" FontSize="12" TextWrapping="NoWrap" />
+          </HyperlinkButton>
+          <controls:CorvidButton x:Name="ChildrenButton" Variant="Ghost" SizeChanged="OnHeaderSizeChanged" Style="{StaticResource CorvidSmallButton}"
+                                 Content="{x:Bind ViewModel.Session.ChildrenText, Mode=OneWay, FallbackValue=''}"
+                                 Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.Session.HasChildren), Mode=OneWay, FallbackValue=Collapsed}"
+                                 ToolTipService.ToolTip="This session's child sessions: goal, tools, budget, models and answer">
+            <controls:CorvidButton.Flyout>
+              <Flyout x:Name="ChildrenFlyout" Placement="BottomEdgeAlignedLeft">
+                <StackPanel Spacing="8" Width="410">
+                  <TextBlock Text="Child sessions" FontWeight="SemiBold" />
+                  <ItemsControl ItemsSource="{x:Bind ViewModel.Session.Children, Mode=OneWay}" IsTabStop="False">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Spacing="8" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="board:ChildRowViewModel">
+                    <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="2,0,0,0" Padding="10,4,0,4" Margin="4,0,0,0"
+                            AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}">
+                      <StackPanel Spacing="3">
+                        <Grid ColumnSpacing="8">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <local:ToneDot Tone="{x:Bind StatusTone, Mode=OneWay}" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="1" Text="{x:Bind Goal, Mode=OneWay}" FontSize="12.5" FontWeight="Medium" TextWrapping="NoWrap"
+                                     TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTipService.ToolTip="{x:Bind Goal, Mode=OneWay}" />
+                          <TextBlock Grid.Column="2" Text="{x:Bind Status, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" VerticalAlignment="Center" />
+                          <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6">
+                            <controls:CorvidButton Content="Open" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Foreground="{ThemeResource CorvidAccent}"
+                                                   Command="{x:Bind OpenCommand}" ToolTipService.ToolTip="Open the child read-only, with its parent linked" />
+                            <controls:CorvidButton Content="Stop" Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
+                                                   Command="{x:Bind StopCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(IsRunning), Mode=OneWay}"
+                                                   ToolTipService.ToolTip="Stop this child: its turn is cancelled and it ends cancelled" />
+                          </StackPanel>
+                        </Grid>
+                        <TextBlock Text="{x:Bind Details, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind Output, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap" MaxLines="3"
+                                   TextTrimming="CharacterEllipsis" Visibility="{x:Bind ui:Ui.VisibleIf(HasOutput), Mode=OneWay}" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Flyout>
+            </controls:CorvidButton.Flyout>
+          </controls:CorvidButton>
         </StackPanel>
         <StackPanel x:Name="HeaderActions" Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" SizeChanged="OnHeaderSizeChanged">
           <Border x:Name="GoalPill" Style="{StaticResource Pill}" Background="{ThemeResource CorvidAccentBg}"
@@ -936,7 +1017,7 @@
             </ItemsRepeater.Layout>
           </ItemsRepeater>
           <StackPanel Spacing="10" Visibility="{x:Bind ui:Ui.CollapsedIf(ViewModel.HasSession), Mode=OneWay}">
-            <TextBlock Text="{x:Bind ViewModel.EmptyText}" Style="{StaticResource CorvidMutedText}" TextWrapping="Wrap" />
+            <TextBlock Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" TextWrapping="Wrap" />
             <!-- The engine starts one in the window's workspace (Ctrl+N); the demo always has a session open. -->
             <controls:CorvidButton Content="New session" Variant="Primary" Style="{StaticResource CorvidSmallButton}" HorizontalAlignment="Left"
                                    Command="{x:Bind ViewModel.NewSessionCommand}"

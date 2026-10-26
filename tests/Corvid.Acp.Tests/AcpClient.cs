@@ -17,6 +17,7 @@ namespace Corvid.Acp.Tests;
 internal sealed class AcpClient : IAsyncDisposable
 {
     private readonly Pipe _toAgent = new();
+    private TaskCompletionSource _updated = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Pipe _fromAgent = new();
     private readonly Stream _input;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource<JsonObject>> _responses = new();
@@ -121,8 +122,21 @@ internal sealed class AcpClient : IAsyncDisposable
     public List<JsonObject> UpdatesFor(string sessionId)
     {
         lock (Updates)
-            return [.. Updates.Where(update => update["params"]?["sessionId"]?.GetValue<string>() == sessionId)
+            return [.. Updates.Where(update => update["method"]?.GetValue<string>() == "session/update" && update["params"]?["sessionId"]?.GetValue<string>() == sessionId)
                 .Select(update => update["params"]!["update"]!.AsObject())];
+    }
+
+    /// <summary>A5: the first update for a session that <paramref name="match"/> takes, waiting for one to arrive (at most 30 s).</summary>
+    public async Task<JsonObject> WaitForUpdateAsync(string sessionId, Func<JsonObject, bool> match)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        while (true)
+        {
+            var arrived = Volatile.Read(ref _updated).Task;
+            if (UpdatesFor(sessionId).FirstOrDefault(match) is { } found)
+                return found;
+            await arrived.WaitAsync(timeout.Token);
+        }
     }
 
     public async Task<string> NewSessionAsync()
@@ -178,6 +192,7 @@ internal sealed class AcpClient : IAsyncDisposable
                 {
                     lock (Updates)
                         Updates.Add(message);
+                    Interlocked.Exchange(ref _updated, new(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();
                 }
             }
             else if (message["id"] is JsonValue value && value.TryGetValue<int>(out var number) && _responses.TryGetValue(number, out var waiter))

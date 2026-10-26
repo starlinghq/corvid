@@ -44,6 +44,23 @@
     <ProjectReference Include="../Corvid.App.Engine/Corvid.App.Engine.csproj" />
   </ItemGroup>
 
+  <!-- A5: corvid-sandbox beside the desktop app, where BubblewrapSandbox and doctor look for it when Sandbox:LauncherPath is
+       unset. The launcher is started by path and never referenced (the checker refuses a ProjectReference), so it is built
+       and copied after the app's own build. -->
+  <Target Name="CopyCorvidSandbox" AfterTargets="Build" Condition="$(TargetFramework.Contains('-desktop'))">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../../sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj" Targets="Build"
+             Properties="Configuration=$(Configuration)" RemoveProperties="TargetFramework;RuntimeIdentifier;SelfContained">
+      <Output TaskParameter="TargetOutputs" ItemName="_CorvidSandboxAssembly" />
+    </MSBuild>
+    <PropertyGroup>
+      <_CorvidSandboxDirectory>@(_CorvidSandboxAssembly->'%(RootDir)%(Directory)')</_CorvidSandboxDirectory>
+    </PropertyGroup>
+    <ItemGroup>
+      <_CorvidSandboxFiles Include="$(_CorvidSandboxDirectory)corvid-sandbox;$(_CorvidSandboxDirectory)corvid-sandbox.dll;$(_CorvidSandboxDirectory)corvid-sandbox.runtimeconfig.json;$(_CorvidSandboxDirectory)corvid-sandbox.deps.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_CorvidSandboxFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup Condition="'$(IsBrowserWasm)' == 'true'">
     <!-- Security pins (Directory.Packages.props). Uno.Sdk gives a WebAssembly head Microsoft.Windows.Compatibility, which
          resolves these at 10.0.12, a release with known advisories (NU1902, NU1903). Referencing the patched release

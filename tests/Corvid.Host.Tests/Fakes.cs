@@ -37,6 +37,9 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
 
     public ITokenCounter? Counter { get; init; }
 
+    /// <summary>False: answers carry no usage, as a provider that reports none (A5 review, L3).</summary>
+    public bool ReportsUsage { get; init; } = true;
+
     public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
@@ -51,7 +54,8 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
         }
         var step = Interlocked.Increment(ref _next) - 1;
         var response = step < script.Length ? script[step](list) : Reply.Text("Done.");
-        response.Usage = new UsageDetails { InputTokenCount = 42, OutputTokenCount = 7 };
+        if (ReportsUsage)
+            response.Usage = new UsageDetails { InputTokenCount = 42, OutputTokenCount = 7 };
         response.ModelId = "fake-gen";
         return Hold?.Invoke(step, cancellationToken) is { } hold ? HeldAsync(hold, response) : Task.FromResult(response);
     }
@@ -81,7 +85,9 @@ internal sealed class FakeGenerator(params Func<IReadOnlyList<ChatMessage>, Chat
                     yield return new ChatResponseUpdate(ChatRole.Assistant, [content]) { MessageId = "m1", ModelId = response.ModelId };
             }
         }
-        yield return new ChatResponseUpdate(ChatRole.Assistant, [new UsageContent(response.Usage!)]) { MessageId = "m1", FinishReason = ChatFinishReason.Stop };
+        yield return response.Usage is { } usage
+            ? new ChatResponseUpdate(ChatRole.Assistant, [new UsageContent(usage)]) { MessageId = "m1", FinishReason = ChatFinishReason.Stop }
+            : new ChatResponseUpdate(ChatRole.Assistant, []) { MessageId = "m1", FinishReason = ChatFinishReason.Stop };
     }
 
     private static IEnumerable<string> SplitWords(string text)
@@ -210,10 +216,10 @@ internal sealed class FakeModelProvider : IModelProvider
     public IReadOnlyList<ModelDescriptor> Models => [.. _models.Values.Select(entry => entry.Model)];
 
     public FakeModelProvider Add(string name, string[] slots, Func<object> create, int context = 8_192,
-        ToolCallSupport tools = ToolCallSupport.TemplateRendered, bool ready = true)
+        ToolCallSupport tools = ToolCallSupport.TemplateRendered, bool ready = true, PrivacyClass privacy = PrivacyClass.Local)
     {
         var profile = new ModelProfile(name + "@cpu", context, context, tools, StructuredOutputSupport.None, PromptCachingStyle.None,
-            ModelCost.Free, PrivacyClass.Local, "cpu");
+            ModelCost.Free, privacy, privacy == PrivacyClass.Local ? "cpu" : "remote");
         _models[name] = (new ModelDescriptor(name, [.. slots], profile, Name, 1L << 20), create);
         if (!ready)
             _missing.Add(name);
@@ -320,6 +326,8 @@ internal sealed class FakeModels
         ["Corvid:Models:Slots:decider:Model"] = "",
         // The fake scripts would be consumed by tools and jobs they do not expect; tests that want them turn them on.
         ["Corvid:Tools:Builtin"] = "false",
+        // A5: delegate_task too; its tests turn it on.
+        ["Corvid:Tools:Delegate"] = "false",
         ["Corvid:Scheduler:Enabled"] = "false",
         // G-6: titles and recaps would take the generator's script too; tests of them turn them on.
         ["Corvid:Sessions:Titles"] = "false",

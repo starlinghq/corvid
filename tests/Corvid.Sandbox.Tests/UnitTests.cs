@@ -165,6 +165,44 @@ public sealed class LauncherTests
         Assert.Throws<RefusedException>(() => Arguments.ParseLaunch(args.Split(' ')));
     }
 
+    // A5: a deny list naming the launcher (Corvid's state protection once did, for Sandbox:LauncherPath) hid it from its own
+    // stage 2, so every command failed with execve's "Permission denied". The plan refuses with the reason instead.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Denying_the_launcher_itself_is_refused_with_the_reason(bool directory)
+    {
+        if (!OperatingSystem.IsLinux() || !File.Exists("/usr/bin/bwrap"))
+        {
+            Assert.Skip("needs Linux and bubblewrap at /usr/bin/bwrap");
+        }
+
+        string root = Corvid.Tests.ShortTemp.Create("cv-launch-");
+        try
+        {
+            string home = Directory.CreateDirectory(Path.Combine(root, "home")).FullName;
+            string workspace = Directory.CreateDirectory(Path.Combine(root, "work")).FullName;
+            string bin = Directory.CreateDirectory(Path.Combine(root, "bin")).FullName;
+            string launcher = Path.Combine(bin, "corvid-sandbox");
+            File.WriteAllText(launcher, "");
+            string? Env(string name) => name switch { "HOME" => home, "PATH" => "/usr/bin:/bin", _ => null };
+            var location = new LauncherLocation(launcher, bin, [launcher]);
+
+            LaunchRequest request = Arguments.ParseLaunch(["--workspace", workspace, "--deny", directory ? bin : launcher, "--", "true"]);
+            var refused = Assert.Throws<RefusedException>(() => SandboxPlan.Create(request, Env, location));
+            Assert.Contains("hides corvid-sandbox itself", refused.Message, StringComparison.Ordinal);
+
+            // Another path in the same place is hidden as before.
+            File.WriteAllText(Path.Combine(bin, "other"), "");
+            LaunchRequest other = Arguments.ParseLaunch(["--workspace", workspace, "--deny", Path.Combine(bin, "other"), "--", "true"]);
+            Assert.Contains(Path.Combine(bin, "other"), SandboxPlan.Create(other, Env, location).MaskedFiles);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void Stage_2_reads_its_options()
     {

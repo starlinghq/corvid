@@ -286,6 +286,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         return delivered ? null : taken?.Text;
     }
 
+    /// <summary>Tests only: awaited by an interrupt once it has marked the window cancelling, before it cancels the turn.</summary>
+    internal Func<Task>? InterruptCancelling { get; set; }
+
     /// <summary>
     /// Interrupts the window's running turn: the work so far stays, open prompts close as cancelled, and the queue goes next.
     /// A turn whose message the session has not begun yet (it is starting, or waits behind another surface's turn) is
@@ -305,6 +308,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             channel.Cancelling = true;
             begun = channel.TurnBegun;
         }
+        if (InterruptCancelling is { } hook)
+            await hook().ConfigureAwait(false);
         // The turn's token first, so the pipeline records each open prompt as cancelled rather than denied; then the cards close.
         if (begun && runtime.TryGetSession(sessionId, out var session))
             session.Cancel();
@@ -354,7 +359,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// <summary>
     /// Forks the session into a new one. A position is a message's (the fork point "edit and resend" and "branch from here"
     /// pass): the fork holds everything before that message, so the message can be sent again, changed or not. Null forks
-    /// at the head, after the running turn when one runs.
+    /// at the head; while a turn runs, at its last completed step, without waiting for it (G-15).
     /// </summary>
     public async Task<string> ForkAsync(string sessionId, long? throughPosition, CancellationToken cancellationToken = default)
     {
@@ -410,6 +415,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         UnwatchRecords();
         StopWatchingLog();
         StopTails();
+        foreach (var id in _childPrompters.Keys)
+            if (_childPrompters.TryRemove(id, out var child))
+                child.Dispose();
         foreach (var channel in _channels.Values)
         {
             PendingApproval[] open;
@@ -483,17 +491,20 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 reason => Log("corvid app: could not report a session update: " + reason), _time, () => session.Tainted);
             lock (channel.Gate)
             {
-                channel.Translator.Model = Generator(runtime);
+                // A5: the session's own generator (its choice for the session lasts past the turn), not only the runtime's default.
+                channel.Translator.Model = CurrentGenerator(runtime, session);
                 // A4V2-5: a ! line's turn runs its command, no generator.
                 channel.Translator.ShellLine = !verbatim && ComposerLine.Parse(text) is ComposerLine.Shell;
                 channel.Translator.MaxSteps = runtime.Options.Turn.MaxSteps;
-                channel.Translator.ContextWindow = session.Slots.TryCurrent(ModelSlots.Generator, out var generator) ? generator.Profile.AcceptedContext : null;
+                channel.Translator.ContextWindow = ContextWindow(runtime, session);
                 channel.TurnBegun = false;
                 channel.Sent = text;
                 channel.Reporter = reporter;
             }
             feed = runtime.Feed.Subscribe(sessionId, reporter);
-            prompter = runtime.AttachPrompter(sessionId, new CardPrompter(this, channel, runtime, tools, reporter));
+            // A5: and the turn's ask_user questions, answered inside the turn while this window runs it.
+            prompter = new Attached(runtime.AttachPrompter(sessionId, new CardPrompter(this, channel, runtime, tools, reporter)),
+                runtime.AttachQuestioner(sessionId, new WindowQuestioner(this, channel, reporter)));
             // Kept on the channel too, so closing the window lets go of them even while the turn runs on.
             lock (channel.Gate)
                 (channel.Feed, channel.Prompter) = (feed, prompter);
@@ -726,7 +737,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var tools = await _engine.ToolsAsync().ConfigureAwait(false);
         while (true)
         {
-            var channel = _channels.GetOrAdd(sessionId, id => new Channel(id, new SessionUpdateTranslator(tools.WorkspaceRoot)));
+            var channel = _channels.GetOrAdd(sessionId, id => new Channel(id, new SessionUpdateTranslator(tools.WorkspaceRoot) { IsChildRunning = runtime.IsChildRunning }));
             Task loading;
             lock (channel.Gate)
             {
@@ -776,8 +787,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var driven = IsJobRun(id) ? Corvid.Host.Composition.LockState.Free : runtime.Driver(id).State;
         var elsewhere = driven == Corvid.Host.Composition.LockState.HeldElsewhere;
         var runningHere = runtime.IsTurnRunning(id);
-        var options = elsewhere ? TailOptions(0)
-            : runningHere ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full;
+        // A5: the log's model switches (their rows, the per-step model and the slots' state) and its children. A child runs in
+        // its parent's turn, here or not: its open calls are still running, as another process's are.
+        var options = elsewhere || IsChild(id) && runningHere ? TailOptions(0)
+            : (runningHere ? ReplayOptions.Full with { UnfinishedCalls = false } : ReplayOptions.Full) with { Models = true, Children = true };
         var history = await SessionReplay.ReadAsync(runtime, id, tools, options).ConfigureAwait(false);
         var goal = Corvid.Kernel.Events.SessionProjection.Load(runtime.Log, id).Goal;
         var summary = Summarize(runtime, id) ?? Empty(runtime, id, _time.GetUtcNow());
@@ -793,6 +806,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // A job's run is the scheduler's: the window shows it as it ran and sends nothing into it.
             if (summary.ReadOnly)
                 updates.Add(new DriverChanged(true) { Holder = summary.Holder, At = at });
+            // A5: the replayed usage fills the context gauge against the window of the generator the next turn starts on.
+            channel.Translator.ContextWindow ??= ContextWindow(runtime, open ? session : null);
             foreach (var update in history.Updates)
                 updates.AddRange(channel.Translator.Translate(update));
             // A turn running in this runtime that the window did not start (a job's run, another surface's) is still running,
@@ -810,6 +825,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             // its approval mode, whether outside content is in its context, and the commands the composer offers.
             if (_forks.TryGetValue(id, out var fork))
                 updates.Add(new SessionForked(fork.From, fork.AtTurn) { At = at });
+            // A5: a child links its parent.
+            if (summary.ParentId is { } parentId)
+                updates.Add(new ChildOfSession(parentId, summary.Child?.Goal ?? "") { At = at });
             if (goal is not null)
                 updates.Add(new GoalChanged(goal) { At = at });
             updates.Add(new ApprovalModeChanged(mode) { At = at });
@@ -820,8 +838,13 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 updates.Add(new TaintChanged(tainted) { At = at });
             channel.Tainted = tainted;
             // The status bar's generator before a turn runs: what the next one starts on.
-            if (CurrentGenerator(runtime, open ? session : null) is { Length: > 0 } generator)
-                updates.Add(new EngineStatus { Model = generator, At = at });
+            // A5: with the session's decider (per session now), for the header beside the generator; for a session not open
+            // here, the choices its log holds, which it starts on when it opens.
+            var choices = open ? null : runtime.ModelChoices(id);
+            var decider = choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Decider)?.Split('@')[0] ?? DeciderLabel(runtime, open ? session : null);
+            updates.Add((choices?.GetValueOrDefault(Corvid.Models.ModelSlots.Generator)?.Split('@')[0] ?? CurrentGenerator(runtime, open ? session : null)) is { Length: > 0 } generator
+                ? new EngineStatus { Model = generator, Decider = decider, At = at }
+                : new EngineStatus { Decider = decider, At = at });
             updates.Add(new AvailableCommandsUpdate(commands) { At = at });
             channel.ReadOnly = summary.ReadOnly;
             channel.Holder = summary.Holder;
@@ -837,7 +860,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                     Keep(channel, update);
         }
         // G-12: follow what another process appends to a session this one does not drive, and who drives it.
-        if (!IsJobRun(id) && driven != Corvid.Host.Composition.LockState.HeldHere)
+        if (!IsJobRun(id) && (driven != Corvid.Host.Composition.LockState.HeldHere || IsChild(id)))
             StartTail(runtime, tools, channel, history.Head);
     }
 
@@ -1099,14 +1122,18 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var drivenElsewhere = driver is { State: Corvid.Host.Composition.LockState.HeldElsewhere };
         if (drivenElsewhere)
             WatchHeld(runtime, id);
+        // A5: a child is its parent's record: read-only here, shown under its parent.
+        var child = ChildFacts(runtime, id);
         // A session this window made holding no message yet (a fork before the first one) is new, not its id.
         return new SessionSummary(id, title ?? (_created.ContainsKey(id) || _forks.ContainsKey(id) ? "New session" : id))
         {
+            Child = child?.Child,
+            ParentId = child?.ParentId,
             // G-7: pinned in ui.db, by this window or the CLI's /pin.
             Pinned = (pinned ?? Pins()).Contains(id),
             // A job's run is the scheduler's: read-only here, as the demo's run is, and listed as the job's.
-            ReadOnly = job.Name is not null || drivenElsewhere,
-            Holder = job.Name is not null ? JobHolder : drivenElsewhere ? DriverHolder(driver!.Holder) : null,
+            ReadOnly = job.Name is not null || drivenElsewhere || child is not null,
+            Holder = job.Name is not null ? JobHolder : child is { } of ? ChildHolder(of.ParentId) : drivenElsewhere ? DriverHolder(driver!.Holder) : null,
             Job = job.Name,
             Schedule = job.Schedule,
             RunAt = job.Name is not null ? job.RunAt ?? last : null,
@@ -1188,6 +1215,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// </summary>
     private CorvidSession Session(CorvidRuntime runtime, string sessionId)
     {
+        RefuseChild(sessionId);
         if (runtime.TryGetSession(sessionId, out var session))
             return session;
         try
@@ -1204,7 +1232,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
     /// <summary><see cref="Session"/> on the pool: the request methods are called on the UI thread.</summary>
     private Task<CorvidSession> SessionAsync(CorvidRuntime runtime, string sessionId, CancellationToken cancellationToken) =>
-        runtime.TryGetSession(sessionId, out var session)
+        !IsChild(sessionId) && runtime.TryGetSession(sessionId, out var session)
             ? Task.FromResult(session)
             : Task.Run(() => Session(runtime, sessionId), cancellationToken);
 
@@ -1236,6 +1264,14 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// <summary>The generator the session's next turn starts on: its own slot when it is open here (a <c>/model</c> switch), the runtime's otherwise.</summary>
     private static string CurrentGenerator(CorvidRuntime runtime, CorvidSession? session) =>
         session is not null && session.Slots.TryCurrent(ModelSlots.Generator, out var current) ? current.Profile.Id.Split('@')[0] : Generator(runtime);
+
+    /// <summary>A5: the accepted context of the session's generator, or the registry default's for a session not open here.</summary>
+    private static int? ContextWindow(CorvidRuntime runtime, CorvidSession? session)
+    {
+        if (session is not null && session.Slots.TryCurrent(ModelSlots.Generator, out var current))
+            return current.Profile.AcceptedContext;
+        return runtime.Registry.TryGet(ModelSlots.Generator, out var slot) ? slot.Default.Profile.AcceptedContext : null;
+    }
 
     private static AppMode Mode(PipelineMode mode) => mode switch
     {
@@ -1314,6 +1350,16 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         public IDisposable? Feed { get; set; }
 
         public IDisposable? Prompter { get; set; }
+
+        /// <summary>A5: the question the running turn waits on inside the turn, or null.</summary>
+        public InTurnQuestion? AskedInTurn { get; set; }
+
+        /// <summary>
+        /// A5: the in-turn question the kernel is about to log (<see cref="Corvid.Kernel.Turns.IQuestionAsker.Expect"/>), until its
+        /// <see cref="Corvid.Kernel.Turns.IQuestionAsker.AskAsync"/> makes it <see cref="AskedInTurn"/>. A field for <see cref="Volatile"/>: it is
+        /// written under the turn's lock, not the channel's.
+        /// </summary>
+        public InTurnQuestion? Expected;
 
         /// <summary>The running turn is being interrupted: its open prompts close as cancelled.</summary>
         public bool Cancelling { get; set; }

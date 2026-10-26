@@ -151,6 +151,19 @@ public sealed record ApprovalRequested(string ApprovalId, string Tool, string Te
 
     /// <summary>Detection matches that forced this ask, with the events they matched.</summary>
     public ImmutableArray<DetectionInfo> Detections { get; init; } = [];
+
+    /// <summary>
+    /// A5: for a <c>delegate_task</c> spawn, each child's plan (goal, toolset and what was left out, budget, model mix,
+    /// approval mode); for a child's own call, which child asks. Lines as the host's card has them, hidden characters
+    /// already shown as escapes.
+    /// </summary>
+    public ImmutableArray<string> Delegation { get; init; } = [];
+
+    /// <summary>
+    /// A5 review (security L5): <see cref="Delegation"/> with every goal in full, when a goal is longer than a card line
+    /// shows (the cut line says how many characters it leaves out); empty when nothing was cut.
+    /// </summary>
+    public ImmutableArray<string> DelegationWhole { get; init; } = [];
 }
 
 /// <summary>How a prompt closed.</summary>

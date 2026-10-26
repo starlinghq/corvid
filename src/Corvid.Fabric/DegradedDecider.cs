@@ -28,7 +28,8 @@ public sealed class DegradedDecider : IDecider
     // Similarities become probabilities only for the decision log; the margin, not these, decides.
     private const double SoftmaxTemperature = 0.05;
 
-    private const string SystemPrompt =
+    /// <summary>Its fixed system prompt, Corvid's own text (A5: the egress gate neither scans nor rewrites it).</summary>
+    public const string SystemPrompt =
         "You answer one question about an assistant's current turn. Reply with exactly one word: yes or no.";
 
     private readonly IEmbeddingGenerator<string, Embedding<float>> _embedder;

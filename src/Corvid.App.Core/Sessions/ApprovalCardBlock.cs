@@ -307,6 +307,13 @@ public sealed class ApprovalCardBlock : TranscriptBlock
         ConfirmRuleCommand = new RelayCommand(ConfirmRule, () => _isRulePreviewOpen && !_isAnswering && RulePreview?.Rows.All(row => !row.HasPathsError) != false);
         SendDenyReasonCommand = new RelayCommand(SendDenyReason, () => _isAskingWhy && !_isAnswering && _denyReason.Trim().Length > 0);
         BackCommand = new RelayCommand(Back, () => _isRulePreviewOpen || _isAskingWhy);
+        ShowWholeGoalCommand = new RelayCommand(() =>
+        {
+            if (!CanShowWholeGoal)
+                return;
+            DelegationText = _delegationWhole;
+            CanShowWholeGoal = false;
+        });
         Build(entry);
         Apply(entry, context);
     }
@@ -391,6 +398,23 @@ public sealed class ApprovalCardBlock : TranscriptBlock
 
     /// <summary>"MCP server notes · trust: untrusted"; empty for other tools.</summary>
     public string McpText { get; private set; } = "";
+
+    /// <summary>
+    /// A5: a <c>delegate_task</c> spawn's children (goal, tools and what was left out, budget, model mix, approval mode), or
+    /// the child a child's prompt comes from, one per line; empty for other prompts.
+    /// </summary>
+    public string DelegationText { get => _delegationText; private set => SetProperty(ref _delegationText, value); }
+
+    private string _delegationText = "";
+    private string _delegationWhole = "";
+
+    /// <summary>A5 review (security L5): a goal on the card is cut, and the whole of it can be shown.</summary>
+    public bool CanShowWholeGoal { get => _canShowWholeGoal; private set => SetProperty(ref _canShowWholeGoal, value); }
+
+    private bool _canShowWholeGoal;
+
+    /// <summary>Shows every goal on the card in full, so the person reads all of what they grant.</summary>
+    public RelayCommand ShowWholeGoalCommand { get; }
 
     /// <summary>"Next in the queue: `patch_file src/Corvid.Sandbox/BubblewrapSandbox.cs` (diff ready) · 2 of 2".</summary>
     public IReadOnlyList<MarkdownRun> NextText
@@ -511,6 +535,10 @@ public sealed class ApprovalCardBlock : TranscriptBlock
         Detections = [.. request.Detections.Select(detection => new DetectionView($"detection: {SafeText.Clean(detection.RuleId)}",
             DetectionText.Detail(detection), SafeText.Clean(detection.Reason), DetectionText.Events(detection)))];
         McpText = request.Mcp is { } mcp ? $"MCP server {SafeText.Clean(mcp.Server)} · trust: {SafeText.Clean(mcp.Trust)}" : "";
+        // A5: the host's lines already show hidden characters as escapes; revealed again, nothing slips through.
+        DelegationText = string.Join("\n", request.Delegation.Select(line => SafeText.Reveal(line)));
+        _delegationWhole = string.Join("\n", request.DelegationWhole.Select(line => SafeText.Reveal(line)));
+        CanShowWholeGoal = _delegationWhole.Length > 0;
 
         var options = new List<ApprovalOptionView>
         {

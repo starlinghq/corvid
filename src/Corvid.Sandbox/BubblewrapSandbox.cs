@@ -244,7 +244,7 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
             ?? Path.Combine(AppContext.BaseDirectory, "corvid-sandbox");
         return File.Exists(path)
             ? path
-            : throw new SandboxRefusedException($"corvid-sandbox not found at {path}; refusing to run unsandboxed. Set SandboxOptions.LauncherPath or CORVID_SANDBOX.");
+            : throw new SandboxRefusedException($"corvid-sandbox not found at {path}; refusing to run unsandboxed. Set Corvid:Sandbox:LauncherPath (SandboxOptions.LauncherPath) or CORVID_SANDBOX.");
     }
 
     private static async Task WriteInputAsync(Process process, string? input, CancellationToken cancellationToken)

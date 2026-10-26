@@ -22,10 +22,29 @@ public interface IModelService
     /// <summary>Replaces a slot's escalation ladder (the order a hard step goes up it), validated and written.</summary>
     Task<ConfigWrite> SetLadderAsync(string slot, IReadOnlyList<string> ladder, CancellationToken cancellationToken = default);
 
-    /// <summary>Binds another model to a slot; it applies to new sessions, and to this one at its next step.</summary>
+    /// <summary>
+    /// The default for new sessions (A5): binds another model to a slot in <c>corvid.json</c>, as <c>corvid model switch</c>
+    /// does, and new sessions start on it. An open session keeps its own choice; one that chose nothing follows it when its
+    /// turn ends. "This session" is <see cref="SwitchSessionAsync"/>, a separate choice.
+    /// </summary>
     Task<ConfigWrite> SwitchAsync(string slot, string model, CancellationToken cancellationToken = default);
 
-    /// <summary>Pins a slot's model for this session, so escalation and a switch elsewhere leave it alone.</summary>
+    /// <summary>
+    /// A5, this session: switches one slot of the window's open session (any slot, the decider included) until the person
+    /// changes it; escalation and fallback still move off it and the turn's end returns to it. A running turn takes it at its
+    /// next step, after its issued tool calls. Nothing is written to <c>corvid.json</c>.
+    /// </summary>
+    Task<ConfigWrite> SwitchSessionAsync(string slot, string model, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ConfigWrite(false, "Switching one session's model comes with the engine."));
+
+    /// <summary>A5: forgets the open session's choice for a slot, so it follows the default for new sessions again.</summary>
+    Task<ConfigWrite> ClearSessionChoiceAsync(string slot, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ConfigWrite(false, "Switching one session's model comes with the engine."));
+
+    /// <summary>
+    /// Pins a slot's model for this session: a turn's end leaves the slot where it is instead of returning it to the session's
+    /// choice. Escalation and fallback still move a pinned slot (plan §6, C-006); a pin only stops de-escalation.
+    /// </summary>
     Task<ConfigWrite> SetPinnedAsync(string slot, bool pinned, CancellationToken cancellationToken = default);
 
     /// <summary>Places a local model on a device (<c>cuda:0</c>, <c>cpu</c>).</summary>

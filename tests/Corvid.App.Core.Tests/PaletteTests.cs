@@ -287,13 +287,41 @@ public sealed class PaletteTests
 
         Assert.Equal(PaletteMode.Generator, palette.Mode);
         Assert.Contains(palette.Items, item => item.Title == before && item.Detail.EndsWith("in use", StringComparison.Ordinal) && !item.IsEnabled);
-        var target = palette.Items.First(item => item.IsEnabled);
+        // A5: two groups, "This session" first, then "Default for new sessions": separate choices.
+        Assert.Equal([PaletteViewModel.ThisSessionGroup, PaletteViewModel.NewSessionsGroup], palette.Items.Select(item => item.Group).Distinct());
+        var target = palette.Items.First(item => item.IsEnabled && item.Group == PaletteViewModel.ThisSessionGroup);
         palette.Choose(target);
 
         Assert.True(palette.IsOpen);
         Assert.Equal(Tone.Green, palette.NoteTone);
-        Assert.Equal(target.Title, models.Snapshot.Slot(ModelSlotNames.Generator)!.Model);
-        Assert.Contains(palette.Items, item => item.Title == target.Title && item.Detail.EndsWith("in use", StringComparison.Ordinal));
+        Assert.Contains("This session's generator is", palette.Note, StringComparison.Ordinal);
+        Assert.Equal(target.Title, models.Snapshot.Slot(ModelSlotNames.Generator)!.SessionModel);
+        Assert.Equal(before, models.Snapshot.Slot(ModelSlotNames.Generator)!.Model);
+        Assert.Contains(palette.Items, item => item.Group == PaletteViewModel.ThisSessionGroup && item.Title == target.Title && item.Detail.EndsWith("in use", StringComparison.Ordinal));
+
+        var other = palette.Items.First(item => item.IsEnabled && item.Group == PaletteViewModel.NewSessionsGroup);
+        palette.Choose(other);
+        Assert.Contains("New sessions start on", palette.Note, StringComparison.Ordinal);
+        Assert.Equal(other.Title, models.Snapshot.Slot(ModelSlotNames.Generator)!.Model);
+        Assert.Equal(target.Title, models.Snapshot.Slot(ModelSlotNames.Generator)!.SessionModel);
+    }
+
+    [Fact]
+    public async Task AltPFilteredKeepsItsTwoScopesApartUnderTheirHeaders()
+    {
+        using var composition = Compose();
+        var palette = composition.Palette;
+        await composition.ModelService.LoadAsync(TestContext.Current.CancellationToken);
+        palette.Execute(KeyCommands.SwitchGenerator);
+        var name = palette.Items.First(item => item.IsEnabled && item.Group == PaletteViewModel.ThisSessionGroup).Title;
+
+        palette.Query = name;
+
+        // A model is listed in both scopes; filtered, each row still sits under the header saying which choice it makes.
+        var rows = palette.Items.Where(item => item.Title == name).ToList();
+        Assert.Equal([PaletteViewModel.ThisSessionGroup, PaletteViewModel.NewSessionsGroup], rows.Select(item => item.Group));
+        Assert.Equal([PaletteViewModel.ThisSessionGroup, PaletteViewModel.NewSessionsGroup],
+            palette.Items.Select(item => item.GroupHeader).Where(header => header.Length > 0));
     }
 
     [Theory]
@@ -314,6 +342,30 @@ public sealed class PaletteTests
         Assert.Contains(says, palette.Note, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("", palette.CountText);
         Assert.NotEmpty(palette.Items);
+    }
+
+    [Fact]
+    public void ForkForksTheOpenSessionAtItsHeadAndOpensTheFork()
+    {
+        // G-15: Fork… is the session's, at its head (during a running turn, its last completed step).
+        using var composition = Compose();
+        var palette = composition.Palette;
+        var source = composition.Sessions.Session!.SessionId;
+        // The aside's surface offers the same fork to ask in, until the scratch fork (F7) comes.
+        palette.Execute(KeyCommands.Aside);
+        Assert.Contains(palette.Items, item => item.Title == "Fork it and ask there" && item.IsEnabled);
+        palette.Close();
+
+        palette.Execute(KeyCommands.Palette);
+        palette.Query = "fork";
+        var fork = Assert.Single(palette.Items, item => item.Title == "Fork…");
+        Assert.Equal("Session", fork.Group);
+        palette.Choose(fork);
+
+        Assert.False(palette.IsOpen);
+        var opened = composition.Sessions.Session!;
+        Assert.NotEqual(source, opened.SessionId);
+        Assert.Contains($"fork of {source}", opened.ForkText, StringComparison.Ordinal);
     }
 
     [Fact]

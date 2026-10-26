@@ -269,7 +269,7 @@ public sealed class PaletteViewModel : ObservableObject
                 Note = "F1 or ? anywhere outside a text field. Settings › Keybindings remaps the window's own keys.";
                 break;
             case PaletteMode.Generator:
-                Present("Switch the generator", "Pick a model for this session's generator…", "No model can serve as the generator.", []);
+                Present("Switch the generator", "Pick a model for this session, or the default for new sessions…", "No model can serve as the generator.", []);
                 Load(LoadGeneratorAsync);
                 break;
             default:
@@ -386,6 +386,12 @@ public sealed class PaletteViewModel : ObservableObject
             {
                 Note = session.IsReadOnly ? "This session is read-only here." : "",
             });
+            // G-15: at the head; while a turn runs, at its last completed step, and the turn goes on here.
+            items.Add(new PaletteItem("Fork…", session.IsRunning ? $"{title} at its last completed step; the turn goes on" : $"A new session from {title} at its head",
+                Then(session.ForkAtHead), "Session", "", IconKind.Chat)
+            {
+                Keywords = "branch fork copy aside",
+            });
             items.Add(new PaletteItem("Expand the latest output", title, Then(() => { shell.Navigate(Area.Sessions); session.ExpandLatestOutputCommand.Execute(null); }), "Session", "Ctrl+O", IconKind.Terminal));
             items.Add(new PaletteItem("Show the thoughts", title, Then(() => { shell.Navigate(Area.Sessions); session.ToggleThoughtsCommand.Execute(null); }), "Session", "Ctrl+T", IconKind.Sparkle));
             foreach (var (slash, what) in new[] { ("/compact ", "Summarise older context, with a focus"), ("/model ", "Switch a slot's model"), ("/rollback ", "Roll back N turns"), ("/goal ", "Set the standing goal") })
@@ -447,12 +453,15 @@ public sealed class PaletteViewModel : ObservableObject
         var session = _host.CurrentSession();
         var note = session is null
             ? "An aside asks about the open session, so it opens with one: open a session first."
-            : $"An aside asks a side question in a scratch fork of {SafeText.Clean(session.Title)} at its head, and writes nothing back. It comes with the scratch fork (F7); during a running turn it waits on G-15.";
+            : $"An aside asks a side question in a scratch fork of {SafeText.Clean(session.Title)} at its head, and writes nothing back. It comes with the scratch fork (F7). Fork… already forks at the head, during a running turn too.";
         IReadOnlyList<PaletteItem> items = session is null
             ? [Go("Open Sessions", "Pick a session in the rail", Area.Sessions)]
             : [new PaletteItem("Put the question in the composer", "Ask it in the session itself for now",
                 session.IsReadOnly ? null : () => Compose(session, ""), "", "", IconKind.Chat)
-                { Note = session.IsReadOnly ? "This session is read-only here." : "" }];
+                { Note = session.IsReadOnly ? "This session is read-only here." : "" },
+              // G-15: a fork at the head, the running turn's last completed step while one runs, to ask the question in.
+              new PaletteItem("Fork it and ask there", session.IsRunning ? "At the running turn's last completed step; the turn goes on" : "A new session at its head",
+                Then(session.ForkAtHead), "", "", IconKind.Chat)];
         OpenPending("Aside", note, items);
     }
 
@@ -535,6 +544,11 @@ public sealed class PaletteViewModel : ObservableObject
         Refilter();
     }
 
+    /// <summary>The Alt+P list's two groups (A5): a pick in the first switches the open session, in the second the default for new sessions.</summary>
+    public const string ThisSessionGroup = "This session";
+
+    public const string NewSessionsGroup = "Default for new sessions";
+
     private async Task LoadGeneratorAsync(CancellationToken cancellationToken)
     {
         if (_host.Models?.Invoke() is not { } models)
@@ -546,40 +560,55 @@ public sealed class PaletteViewModel : ObservableObject
         var snapshot = await models.LoadAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var slot = snapshot.Slot(ModelSlotNames.Generator);
-        _source = [.. snapshot.Catalogue.Where(model => model.CanServe.Contains(ModelSlotNames.Generator)).Select(model =>
-        {
-            var inUse = string.Equals(slot?.Model, model.Name, StringComparison.Ordinal);
-            var where = SafeText.Clean(Spans.Plain(model.Where));
-            var note = model.IsAvailable ? "" : model.Kind switch
-            {
-                ModelKind.Local => "Not downloaded: Models › Download… fetches it.",
-                ModelKind.Cloud when model.Secret is { } secret => $"No key: set {SafeText.Clean(secret)} in Vault first (Secrets).",
-                ModelKind.Server => "Not answering: Models checks the server.",
-                _ => "Unavailable now: Models says why.",
-            };
-            var name = model.Name;
-            // Enter switches in one step, so a name holding hidden characters is shown with them made visible and
-            // cannot be picked here: it could read as another model's name.
-            if (SafeText.HasHidden(name))
-            {
-                return new PaletteItem(SafeText.Reveal(name), where, null, "", "", model.Kind == ModelKind.Cloud ? IconKind.Cloud : IconKind.Chip)
-                {
-                    Note = "This name holds hidden characters, shown marked, so it is not switched to here. Check it in Models.",
-                };
-            }
-
-            return new PaletteItem(SafeText.Clean(name), inUse ? $"{where} · in use" : where,
-                model.IsAvailable && !inUse ? () => Switch(models, name) : null, "", "", model.Kind == ModelKind.Cloud ? IconKind.Cloud : IconKind.Chip)
-            {
-                Note = inUse ? "" : note,
-            };
-        })];
+        var generators = snapshot.Catalogue.Where(model => model.CanServe.Contains(ModelSlotNames.Generator)).ToList();
+        // A5: "This session" and "Default for new sessions" are separate choices, as /model and /model --default are.
+        var session = _host.CurrentSession() is { IsReadOnly: false };
+        var items = new List<PaletteItem>();
+        if (session)
+            items.AddRange(generators.Select(model => Generator(models, model, slot?.InSession, forSession: true)));
+        items.AddRange(generators.Select(model => Generator(models, model, slot?.Model, forSession: false)));
+        _source = items;
+        if (!session)
+            Note = "No session of yours is open here, so a pick sets the default for new sessions.";
         Refilter();
     }
 
-    private void Switch(IModelService models, string model) => Load(async cancellationToken =>
+    private PaletteItem Generator(IModelService models, CatalogueModel model, string? current, bool forSession)
     {
-        var result = await models.SwitchAsync(ModelSlotNames.Generator, model, cancellationToken);
+        var inUse = string.Equals(current, model.Name, StringComparison.Ordinal);
+        var where = SafeText.Clean(Spans.Plain(model.Where));
+        var group = forSession ? ThisSessionGroup : NewSessionsGroup;
+        var icon = model.Kind == ModelKind.Cloud ? IconKind.Cloud : IconKind.Chip;
+        var note = model.IsAvailable ? "" : model.Kind switch
+        {
+            ModelKind.Local => "Not downloaded: Models › Download… fetches it.",
+            ModelKind.Cloud when model.Secret is { } secret => $"No key: set {SafeText.Clean(secret)} in Vault first (Secrets).",
+            ModelKind.Server => "Not answering: Models checks the server.",
+            _ => "Unavailable now: Models says why.",
+        };
+        var name = model.Name;
+        // Enter switches in one step, so a name holding hidden characters is shown with them made visible and
+        // cannot be picked here: it could read as another model's name.
+        if (SafeText.HasHidden(name))
+        {
+            return new PaletteItem(SafeText.Reveal(name), where, null, group, "", icon)
+            {
+                Note = "This name holds hidden characters, shown marked, so it is not switched to here. Check it in Models.",
+            };
+        }
+
+        return new PaletteItem(SafeText.Clean(name), inUse ? $"{where} · in use" : where,
+            model.IsAvailable && !inUse ? () => Switch(models, name, forSession) : null, group, "", icon)
+        {
+            Note = inUse ? "" : note,
+        };
+    }
+
+    private void Switch(IModelService models, string model, bool forSession) => Load(async cancellationToken =>
+    {
+        var result = forSession
+            ? await models.SwitchSessionAsync(ModelSlotNames.Generator, model, cancellationToken)
+            : await models.SwitchAsync(ModelSlotNames.Generator, model, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (!result.Written)
         {
@@ -587,10 +616,14 @@ public sealed class PaletteViewModel : ObservableObject
             return;
         }
 
+        var running = _host.CurrentSession()?.IsRunning == true;
         await LoadGeneratorAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         // Said here rather than in the service's words, which name the file it writes; Models shows those.
-        Show($"The generator is now {SafeText.Clean(model)}: new sessions start on it, and this one switches after its issued tool calls.", Tone.Green);
+        Show(forSession
+            ? $"This session's generator is {SafeText.Clean(model)} until you change it" +
+                (running ? ": the running turn takes it at its next step." : ".")
+            : $"New sessions start on {SafeText.Clean(model)}; this session keeps its own generator.", Tone.Green);
     });
 
     // ---- Choosing ----
@@ -673,8 +706,9 @@ public sealed class PaletteViewModel : ObservableObject
             var scored = _source
                 .Select((item, index) => (item, index, score: FuzzyMatch.Best(_query, item.Title, item.Detail, item.Group, item.Keywords)))
                 .Where(entry => entry.score is not null);
-            // The shortcuts keep their grouping; everything else ranks best first.
-            matched = (_mode == PaletteMode.Help ? scored : scored.OrderByDescending(entry => entry.score).ThenBy(entry => entry.index))
+            // The shortcuts keep their grouping, and so do the generator's two scopes (A5: a model is in both, and only its
+            // group says which choice a row makes); everything else ranks best first.
+            matched = (KeepsGroups ? scored : scored.OrderByDescending(entry => entry.score).ThenBy(entry => entry.index))
                 .Select(entry => entry.item);
         }
 
@@ -686,7 +720,7 @@ public sealed class PaletteViewModel : ObservableObject
         _selected = -1;
         foreach (var item in all)
             item.IsSelected = false;
-        var grouped = _mode == PaletteMode.Help || _query.Trim().Length == 0;
+        var grouped = KeepsGroups || _query.Trim().Length == 0;
         foreach (var item in all)
             item.Choose = ChooseCommand;
         for (var i = 0; i < all.Count; i++)
@@ -697,6 +731,8 @@ public sealed class PaletteViewModel : ObservableObject
         OnPropertyChanged(nameof(CountText));
         Select(_items.Count == 0 ? -1 : FirstEnabled());
     }
+
+    private bool KeepsGroups => _mode is PaletteMode.Help or PaletteMode.Generator;
 
     private IEnumerable<PaletteItem> FindInSession()
     {

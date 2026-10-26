@@ -41,17 +41,28 @@ public sealed record SteerSent(string Text, long Sequence) : SessionStreamUpdate
 
 /// <summary>
 /// The clarifying question a turn ended on (K-6), from its <c>ClarificationAsked</c> event (after the answer that carries
-/// the same text). Model text: untrusted. The person's next message answers it.
+/// the same text). Model text: untrusted. The person's next message answers it; A5: or, asked inside the turn where a
+/// surface could answer, <see cref="QuestionClosed"/> follows with their answer.
 /// </summary>
 /// <param name="Options">Answers to pick from; empty for free text.</param>
 public sealed record QuestionRaised(string QuestionId, string Text, ImmutableArray<string> Options) : SessionStreamUpdate;
+
+/// <summary>
+/// A5: the person answered a question inside the running turn (the log's <c>ClarificationAnswered</c>), so it is closed and
+/// the turn went on with the answer; live and on replay (<see cref="ReplayOptions.Questions"/>). The answer is the person's.
+/// </summary>
+public sealed record QuestionClosed(string QuestionId, string Answer) : SessionStreamUpdate;
 
 /// <summary>
 /// The running turn began a step (a generator response with tool calls), live from the turn loop; on replay from the step
 /// its calls record, with no budget.
 /// </summary>
 /// <param name="MaxSteps">The turn's step budget; null on replay.</param>
-public sealed record TurnStepped(int Step, int? MaxSteps) : SessionStreamUpdate;
+public sealed record TurnStepped(int Step, int? MaxSteps) : SessionStreamUpdate
+{
+    /// <summary>A5: the generator's profile id whose response began the step; on replay from its calls' log, live unknown (null).</summary>
+    public string? Generator { get; init; }
+}
 
 /// <summary>Answer text (ACP <c>agent_message_chunk</c>): a streamed delta live, the whole message on replay.</summary>
 public sealed record AnswerChunk(string Text) : SessionStreamUpdate;
@@ -63,10 +74,18 @@ public sealed record AnswerChunk(string Text) : SessionStreamUpdate;
 public sealed record ThoughtChunk(string Text) : SessionStreamUpdate;
 
 /// <summary>
-/// One generator call's tokens as its provider reported them (K-5, live only: the log does not keep usage yet). The
-/// prompt's count is the rendered prompt the call sent, which is what a context gauge shows.
+/// A generator call's tokens as its provider reported them (K-5): live, one call's; on replay (A5,
+/// <see cref="ReplayOptions.Usage"/>) what the log records on the answer or call that followed, which can sum several calls.
+/// The prompt's count is the rendered prompt the call sent, which is what a context gauge shows.
 /// </summary>
-public sealed record UsageReported(long? InputTokens, long? OutputTokens) : SessionStreamUpdate;
+public sealed record UsageReported(long? InputTokens, long? OutputTokens) : SessionStreamUpdate
+{
+    /// <summary>A5, replay: the latest call's prompt when this sums several calls (<see cref="Calls"/>); null live.</summary>
+    public long? PromptTokens { get; init; }
+
+    /// <summary>A5, replay: how many generator calls this covers.</summary>
+    public int Calls { get; init; } = 1;
+}
 
 /// <summary>A tool call's state, as ACP names it.</summary>
 public enum ToolCallState
@@ -93,11 +112,17 @@ public sealed record ToolCallStarted(string CallId, string Title, string Kind, T
 
     /// <summary>Files it names, as absolute paths the tools may open.</summary>
     public ImmutableArray<string> Locations { get; init; } = [];
+
+    /// <summary>A5: the profile id of the generator that asked for it, from the log (<c>ToolCallIssued.Generator</c>); null when unknown.</summary>
+    public string? Generator { get; init; }
 }
 
 /// <summary>A tool call changed (ACP <c>tool_call_update</c>): it finished, with what it did. Null or empty leaves a part as it was.</summary>
 public sealed record ToolCallChanged(string CallId) : SessionStreamUpdate
 {
+    /// <summary>A5: the profile id of the generator that asked for it, from the log, when the change brings the call's input.</summary>
+    public string? Generator { get; init; }
+
     public string? Title { get; init; }
 
     public string? Tool { get; init; }
@@ -205,3 +230,36 @@ public sealed record CompactionLogged(Compacted Compaction, long Sequence) : Ses
 
 /// <summary>A write-ledger checkpoint was recorded (<c>CheckpointTaken</c>), for a rewind timeline.</summary>
 public sealed record CheckpointLogged(CheckpointTaken Checkpoint, long Sequence) : SessionStreamUpdate;
+
+/// <summary>
+/// A5: a slot's model changed, or the person's choice of it for the session did (any slot: generator, decider, extractor…).
+/// Live from <see cref="Composition.CorvidRuntime.ModelChanged"/> for every switch made in this process, inside a turn
+/// (escalation, fallback, a privacy retreat, de-escalation) or between turns (<c>/model</c>,
+/// <see cref="Composition.CorvidSession.SetModelAsync"/>); on replay (<see cref="ReplayOptions.Models"/>) from the log's
+/// <c>ModelSwitched</c> events, which have no <see cref="SessionDefault"/>, <see cref="Pinned"/> or <see cref="Cloud"/>
+/// beyond what the reason says. Profile ids come from configuration: show them through the surface's sanitizer.
+/// </summary>
+/// <param name="From">The profile id it switched from (<c>none</c> for a slot nothing bound).</param>
+/// <param name="To">The profile id it uses now (<c>none</c> when let go of).</param>
+/// <param name="Reason">The wire reason: <c>session</c>, <c>user</c>, <c>escalation</c>, <c>fallback</c>, <c>de_escalation</c> or <c>privacy</c>.</param>
+/// <param name="Sequence">The <c>ModelSwitched</c> event's position; null when nothing was logged (only the session default changed).</param>
+public sealed record ModelChanged(string Slot, string From, string To, string Reason, long? Sequence) : SessionStreamUpdate
+{
+    /// <summary>The change made <see cref="To"/> the slot's default for the session (the person's "this session" choice).</summary>
+    public bool SessionDefault { get; init; }
+
+    /// <summary>The slot is pinned after it: a turn's end leaves it where it is.</summary>
+    public bool Pinned { get; init; }
+
+    /// <summary>The model it uses now is a cloud one: its requests leave the machine through the egress gate.</summary>
+    public bool Cloud { get; init; }
+}
+
+/// <summary>
+/// A5: a child session was started from this one (<c>ChildSpawned</c>), live from <see cref="Composition.CorvidRuntime.ChildChanged"/>
+/// and on replay (<see cref="ReplayOptions.Children"/>). The goal is untrusted text; the mix's model names are catalogue names.
+/// </summary>
+public sealed record ChildStarted(ChildSpawned Child, long Sequence) : SessionStreamUpdate;
+
+/// <summary>A5: a child session ended (<c>ChildFinished</c>), live and on replay as <see cref="ChildStarted"/>; its text is untrusted.</summary>
+public sealed record ChildEnded(ChildFinished Child, long Sequence) : SessionStreamUpdate;

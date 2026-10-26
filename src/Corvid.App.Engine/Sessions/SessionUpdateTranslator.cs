@@ -29,7 +29,7 @@ namespace Corvid.App.Engine.Sessions;
 /// progress) is a <see cref="TurnProgress"/>; a running call's tail (K-2) a <see cref="ToolCallUpdate.Tail"/>.
 /// </para>
 /// </summary>
-public sealed class SessionUpdateTranslator(string workspace)
+public sealed partial class SessionUpdateTranslator(string workspace)
 {
     private readonly string _workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
     private readonly List<SessionUpdate> _early = [];
@@ -47,6 +47,11 @@ public sealed class SessionUpdateTranslator(string workspace)
     // whether the turn's latest output is answer text (a call after it, such as memory_add, asks the gate in the turn).
     private bool _turnRemembers;
     private bool _answerLast;
+    // A5: the generator the running step is on (the turn's start, then each ModelSwitched of the generator), for the step
+    // update and tool cards; and the latest switch's log position, so a switch the replay and the live event both bring is
+    // shown once.
+    private string _stepModel = "";
+    private long _modelSequence;
 
     /// <summary>The generator a turn opened from here on starts on ("fake-gen"); empty when unknown (a replay).</summary>
     public string Model { get; set; } = "";
@@ -126,6 +131,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 _turnRemembers = false;
                 var generator = prompt.Generator ?? (ShellLine ? "" : Model);
                 ShellLine = false;
+                _stepModel = generator;
                 // K-6: the person's next message is their answer to the open question; nothing else answers it, a guest's
                 // message in a gateway chat included (security M2: shown as the guest's, the question stays open).
                 if (_openQuestion is { } open && prompt.From is null)
@@ -151,6 +157,13 @@ public sealed class SessionUpdateTranslator(string workspace)
             case SteerSent steer:
                 output.Add(new UserMessage(steer.Text) { Position = steer.Sequence, Steered = true, At = at });
                 break;
+            // A5: the person answered it inside the turn, which went on with the answer.
+            case QuestionClosed closed:
+                if (_openQuestion == closed.QuestionId)
+                    _openQuestion = null;
+                _questionText = null;
+                output.Add(new QuestionAnswered(closed.QuestionId, closed.Answer) { At = at });
+                break;
             // K-6: the question the turn ended on; it stays open past the turn's end, until the next message.
             case QuestionRaised question:
                 _openQuestion = question.QuestionId;
@@ -165,7 +178,10 @@ public sealed class SessionUpdateTranslator(string workspace)
                 break;
             // Turn progress: the step a response with tool calls began, with the turn's budget when known.
             case TurnStepped stepped when TurnOpen:
-                output.Add(new TurnProgress(stepped.Step) { At = at, MaxSteps = stepped.MaxSteps ?? MaxSteps });
+                // A5: the step's generator, from its calls' log on replay; live, the latest one known (its calls then say).
+                if (stepped.Generator is { } stepGenerator)
+                    _stepModel = Bare(stepGenerator);
+                output.Add(new TurnProgress(stepped.Step) { At = at, MaxSteps = stepped.MaxSteps ?? MaxSteps, Model = StepModel });
                 break;
             case ThoughtChunk thought:
                 output.Add(new AgentThoughtChunk(thought.Text) { At = at });
@@ -178,7 +194,8 @@ public sealed class SessionUpdateTranslator(string workspace)
                 {
                     At = at,
                     TurnTokens = (int)Math.Min(int.MaxValue, _turnTokens),
-                    ContextTokens = usage.InputTokens is { } sent ? (int)Math.Min(int.MaxValue, sent) : null,
+                    // A5: a replayed record that sums several calls names the latest one's prompt.
+                    ContextTokens = (usage.PromptTokens ?? usage.InputTokens) is { } sent ? (int)Math.Min(int.MaxValue, sent) : null,
                     ContextWindow = ContextWindow,
                 });
                 break;
@@ -194,6 +211,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                 output.Add(new ToolCall(started.CallId, started.Tool ?? started.Title, Kind(started.Kind, started.Tool), Status(started.Status))
                 {
                     At = at,
+                    Model = userShell ? null : CallModel(started.Generator),
                     Target = ToolPresentation.Target(started.Input),
                     Input = started.Input?.GetRawText(),
                     Locations = Relative(started.Locations),
@@ -206,6 +224,7 @@ public sealed class SessionUpdateTranslator(string workspace)
                         Status(changed.Status ?? ToolCallState.InProgress))
                     {
                         At = at,
+                        Model = changed.CallId.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal) ? null : CallModel(changed.Generator),
                         Target = ToolPresentation.Target(input),
                         Input = input.GetRawText(),
                         Locations = Relative(changed.Locations),
@@ -269,6 +288,15 @@ public sealed class SessionUpdateTranslator(string workspace)
                     Expanded = logged.Expanded,
                 });
                 break;
+            // A5: a slot's model changed (live from this process, replayed from the log's ModelSwitched): its row and slot change.
+            case ModelChanged change:
+                output.AddRange(Models(change, at));
+                break;
+            // A5: a child session started or ended (replayed with ReplayOptions.Children, live from runtime.ChildChanged).
+            case ChildStarted or ChildEnded:
+                outside = true;
+                output.AddRange(Child(update, replayed: true));
+                break;
             // CheckpointLogged: Rewind's timeline reads the ledger itself (A3 history); the transcript shows no row for it.
         }
         // A compaction comes between turns, and so does a # line's memory gate: their time is not the replayed turn's end.
@@ -292,6 +320,71 @@ public sealed class SessionUpdateTranslator(string workspace)
         && (!TurnOpen || (_answerLast && !_turnRemembers));
 
     /// <summary>The question in a few words for the attention tray: its first line, cut to a short title.</summary>
+    /// <summary>The generator the running step is on, without its device; null when unknown.</summary>
+    private string? StepModel => _stepModel.Length > 0 ? _stepModel : null;
+
+    /// <summary>A5: the generator a call names (the log's, exact) or else the step's; the step follows the call's.</summary>
+    private string? CallModel(string? generator)
+    {
+        if (generator is { Length: > 0 })
+            _stepModel = Bare(generator);
+        return StepModel;
+    }
+
+    /// <summary>
+    /// A5: the host's <see cref="ModelChanged"/> as the app's updates: a <see cref="SlotModelChanged"/> for any slot, and a
+    /// transcript row (<see cref="ModelSwitched"/>) before it when a logged switch really changed the model: the generator's
+    /// for every reason (escalation, a fallback, the privacy gate's retreat, de-escalation, the person's switch), the other
+    /// slots' (the decider's) for the person's own. Names drop the device (<c>qwen3.5-0.8b@cuda0</c> reads
+    /// <c>qwen3.5-0.8b</c>), as the session's model does. A person's switch while a turn runs says the turn takes it at its
+    /// next step. A switch already shown (by its log position) is not shown again.
+    /// </summary>
+    internal IReadOnlyList<SessionUpdate> Models(ModelChanged change, DateTimeOffset at)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        if (change.Sequence is { } sequence)
+        {
+            if (sequence <= _modelSequence)
+                return [];
+            _modelSequence = sequence;
+        }
+        var slot = new SlotModelChanged(change.Slot, change.From, change.To, change.Reason)
+        {
+            At = at,
+            SessionDefault = change.SessionDefault,
+            Pinned = change.Pinned,
+            Cloud = change.Cloud,
+        };
+        if (change.Sequence is null || change.From == change.To)
+            return [slot];
+        var generator = change.Slot == Corvid.Models.ModelSlots.Generator;
+        var person = change.Reason is "session" or "user";
+        // Between turns the next turn starts on it; within one, the calls the log ties to it say when it took over.
+        if (generator && !TurnOpen)
+            _stepModel = Bare(change.To);
+        if (!generator && !person)
+            return [slot];
+        var next = TurnOpen && person ? "; the running turn takes it at its next step" : "";
+        var (kind, reason) = change.Reason switch
+        {
+            "escalation" => (ModelSwitchKind.Escalated, "escalated"),
+            "fallback" => (ModelSwitchKind.FellBack, "the model failed"),
+            "privacy" => (ModelSwitchKind.KeptLocal, "the privacy gate kept it local"),
+            // A de-escalation is the turn's end; one before the turn answered (or a forgotten choice, live) is a reset.
+            "de_escalation" when change.SessionDefault || (TurnOpen && !_answered) => (ModelSwitchKind.Returned, "this session's choice was reset to the default"),
+            "de_escalation" => (ModelSwitchKind.Returned, "the turn ended"),
+            "user" => (ModelSwitchKind.Switched, "for this turn" + next),
+            _ => (ModelSwitchKind.Switched, "for this session" + next),
+        };
+        return
+        [
+            new ModelSwitched(change.Slot, Bare(change.From), Bare(change.To), kind, reason) { At = at, Cloud = change.Cloud },
+            slot,
+        ];
+    }
+
+    private static string Bare(string profileId) => profileId.Split('@')[0];
+
     internal static string QuestionTitle(string text)
     {
         var line = text.ReplaceLineEndings("\n").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

@@ -61,6 +61,18 @@ public static class SessionFold
             DetectionMatched detection => AddNew(state, "detection", id => new DetectionEntry(id, detection.Detection, detection.At)),
             CheckpointDecided decided => OnDecided(state, decided),
             ModelSwitched switched => OnModelSwitched(state, switched),
+            SlotModelChanged slot => state with
+            {
+                SlotModels = state.SlotModels.SetItem(slot.Slot, slot with
+                {
+                    Slot = SafeText.Clean(slot.Slot),
+                    From = SafeText.Clean(slot.From),
+                    To = SafeText.Clean(slot.To),
+                    Reason = SafeText.Clean(slot.Reason),
+                }),
+            },
+            ChildSessionChanged child => OnChild(state, child),
+            ChildOfSession parent => state with { ParentId = SafeText.Clean(parent.ParentId), ChildGoal = SafeText.Clean(parent.Goal) },
             TaintChanged taint => OnTaint(state, taint),
             ChangesUpdate changes => state with
             {
@@ -78,7 +90,8 @@ public static class SessionFold
             _ => state,
         };
 
-        return update is AgentMessageChunk or AgentThoughtChunk or UsageUpdate or EngineStatus or QueueChanged or PlanUpdate
+        return update is AgentMessageChunk or AgentThoughtChunk or UsageUpdate or EngineStatus or QueueChanged or PlanUpdate or SlotModelChanged
+                or ChildSessionChanged or ChildOfSession
             ? next
             : Arrange(next);
     }
@@ -164,7 +177,12 @@ public static class SessionFold
     private static SessionView OnTurnProgress(SessionView state, TurnProgress progress)
     {
         var maxSteps = progress.MaxSteps ?? state.MaxSteps;
-        state = UpdateHeader(state, header => header with { Step = progress.Step, MaxSteps = maxSteps });
+        state = UpdateHeader(state, header => header with
+        {
+            Step = progress.Step,
+            MaxSteps = maxSteps,
+            StepModel = progress.Model is { Length: > 0 } model ? SafeText.Clean(model) : header.StepModel,
+        });
         return state with { Step = progress.Step, MaxSteps = maxSteps, ActivitySince = progress.At };
     }
 
@@ -328,6 +346,8 @@ public static class SessionFold
                 Input = call.Input ?? existing.Input,
                 Locations = call.Locations.IsDefaultOrEmpty ? existing.Locations : call.Locations,
                 Verdict = call.Verdict ?? existing.Verdict,
+                // A5: the latest word wins: the finished call brings the generator the log ties it to.
+                Model = Cleaned(call.Model) ?? existing.Model,
                 StartedAt = call.Status == ToolCallStatus.InProgress && existing.Status == ToolCallStatus.Pending ? call.At : existing.StartedAt,
             };
             state = state with { Transcript = state.Transcript.SetItem(index, updated) };
@@ -343,6 +363,8 @@ public static class SessionFold
                 Locations = call.Locations.IsDefault ? [] : call.Locations,
                 Verdict = call.Verdict,
                 ApprovalId = state.Approvals.FirstOrDefault(request => request.CallId == call.CallId)?.ApprovalId,
+                Model = Cleaned(call.Model),
+                TurnModel = TurnFirstModel(state),
             };
             state = Add(state, entry);
         }
@@ -469,7 +491,11 @@ public static class SessionFold
     private static SessionView OnModelSwitched(SessionView state, ModelSwitched switched)
     {
         state = AddNew(state, "switch", id => new SwitchEntry(id, switched));
-        if (switched.Kind == ModelSwitchKind.KeptLocal)
+        // A5: another slot's row (the decider's) changes neither the generator nor the turn's models.
+        if (switched.Slot is { Length: > 0 } slot && slot != "generator")
+            return state;
+        // A privacy retreat (A5) moved the generator to a local model; a refused escalation stayed where it was.
+        if (switched.Kind == ModelSwitchKind.KeptLocal && (switched.To.Length == 0 || switched.To == switched.From))
             return state;
         if (state.Running)
         {
@@ -479,6 +505,23 @@ public static class SessionFold
         }
 
         return state with { Model = switched.To };
+    }
+
+    /// <summary>A5: a child's start or end replaces what was known of it; its text is cleaned once, here.</summary>
+    private static SessionView OnChild(SessionView state, ChildSessionChanged child)
+    {
+        var clean = child with
+        {
+            ChildId = SafeText.Clean(child.ChildId),
+            Goal = SafeText.Clean(child.Goal),
+            Status = SafeText.Clean(child.Status),
+            Tools = [.. child.Tools.Select(SafeText.Clean)],
+            Mix = child.Mix is { } mix ? SafeText.Clean(mix) : null,
+            Answer = child.Answer is { } answer ? SafeText.Clean(answer) : null,
+            Detail = child.Detail is { } detail ? SafeText.Clean(detail) : null,
+        };
+        var at = state.Children.FindIndex(known => known.ChildId == clean.ChildId);
+        return state with { Children = at < 0 ? state.Children.Add(clean) : state.Children.SetItem(at, clean) };
     }
 
     private static SessionView OnTaint(SessionView state, TaintChanged taint)
@@ -802,6 +845,12 @@ public static class SessionFold
     private static int CurrentTurn(SessionView state) => state.Running ? state.Turn : 0;
 
     private static string ThoughtId(SessionView state) => (state.Running ? state.TurnHeaderId : null) is { } header ? header + "-thought" : "thought-0";
+
+    /// <summary>A5: the generator the running turn started on, from its header; null outside a turn.</summary>
+    private static string? TurnFirstModel(SessionView state) =>
+        state.TurnHeaderId is { } id && IndexOf(state.Transcript, id) is >= 0 and var index && state.Transcript[index] is TurnHeaderEntry { Models: { IsDefaultOrEmpty: false } models }
+            ? models[0]
+            : null;
 
     private static SessionView UpdateHeader(SessionView state, Func<TurnHeaderEntry, TurnHeaderEntry> change)
     {

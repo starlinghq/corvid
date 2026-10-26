@@ -182,7 +182,10 @@ public static partial class BoardText
         ArgumentNullException.ThrowIfNull(summaries);
         var workspaces = Workspaces(summaries);
         var jobs = summaries.Count(summary => summary.Job is not null);
-        return Join(Plural(summaries.Count, "session"), Plural(workspaces, "workspace"), jobs > 0 ? Plural(jobs, "job run") : null);
+        // A5: children are counted apart, as they show under their parents.
+        var children = summaries.Count(summary => summary.Child is not null);
+        return Join(Plural(summaries.Count - children, "session"), Plural(workspaces, "workspace"), jobs > 0 ? Plural(jobs, "job run") : null,
+            children > 0 ? Plural(children, "child session") : null);
     }
 
     /// <summary>How many workspaces the sessions span, for the status bar's engine ("in-process · 2 workspaces").</summary>

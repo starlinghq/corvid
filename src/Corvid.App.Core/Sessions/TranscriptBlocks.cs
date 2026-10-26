@@ -180,7 +180,13 @@ public sealed class TurnHeaderBlock : TranscriptBlock
         if (header.Tokens is { } tokens)
             parts.Add($"{SessionText.Tokens(tokens)} tokens");
         else if (header.Running && header.Step is { } step)
-            parts.Add(header.MaxSteps is { } max ? $"step {step} of {max}" : $"step {step}");
+        {
+            var text = header.MaxSteps is { } max ? $"step {step} of {max}" : $"step {step}";
+            // A5: the step's generator, when the turn has moved off the one it started on.
+            if (header.StepModel is { Length: > 0 } on && !header.Models.IsDefaultOrEmpty && on != header.Models[0])
+                text += $" on {on}";
+            parts.Add(text);
+        }
         var elapsed = header.Running ? context.Now - header.StartedAt : header.Elapsed ?? TimeSpan.Zero;
         parts.Add(SessionText.Duration(elapsed));
         if (header.Cost is { } cost)
@@ -299,10 +305,17 @@ public sealed class SwitchBlock : TranscriptBlock
         (Lead, Model) = change.Kind switch
         {
             ModelSwitchKind.Escalated => ("escalated to", change.To),
+            // A5: a privacy retreat names the local model it moved to; a refused escalation stays where it was.
+            ModelSwitchKind.KeptLocal when change.To.Length > 0 && change.To != change.From => ("kept local on", change.To),
             ModelSwitchKind.KeptLocal => ("kept local", ""),
             ModelSwitchKind.FellBack => ("fell back to", change.To),
+            ModelSwitchKind.Returned => ("back to", change.To),
             _ => ("switched to", change.To),
         };
+        Model = SafeText.Clean(Model);
+        // A5: a row for another slot (the decider, per session) names it.
+        if (change.Slot is { Length: > 0 } slot && slot != "generator")
+            Lead = $"{SafeText.Clean(slot)} {Lead}";
         Reason = SafeText.Clean(change.Reason);
         Redaction = change.Redacted is > 0 and var redacted ? $"{SessionText.Plural(redacted, "value")} redacted" : "";
         HasEgressLink = change.Cloud && change.Kind != ModelSwitchKind.KeptLocal;

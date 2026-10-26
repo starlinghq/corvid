@@ -145,7 +145,10 @@ public sealed partial class CommandPalette : UserControl
                 ViewModel.MoveSelection(shift ? -1 : 1);
                 break;
             case VirtualKey.Enter:
-                ViewModel.Accept();
+                // After this key has been handled: a choice that closes the palette hands focus back (to the composer,
+                // say), and the Enter still being delivered would type a line break there (seen after Fork…: the
+                // session's draft became "\r").
+                DispatcherQueue.TryEnqueue(ViewModel.Accept);
                 break;
             default:
                 return;

@@ -50,8 +50,9 @@ public sealed class ModelsTests
         Assert.Equal("calibrated", decider.TagText);
         Assert.Equal(Tone.Green, decider.TagTone);
         Assert.Equal("second tier for gates below their floor · downloading", decider.Note);
-        Assert.True(decider.IsShared);
-        Assert.False(decider.CanSwitch);
+        // A5: the decider is switchable per session.
+        Assert.False(decider.IsShared);
+        Assert.True(decider.CanSwitch);
 
         Assert.Equal("none", models.Slots[1].Plain);
         Assert.Equal("cpu · 38 ms", models.Slots[3].Placement);
@@ -159,13 +160,35 @@ public sealed class ModelsTests
         Assert.False(models.SwitchChoices[3].Choose.CanExecute(null));
         Assert.Equal("set gemini.key in Vault", models.SwitchChoices[3].Reason);
 
+        // A5: "This session" first: the open session switches, the default for new sessions stays.
+        Assert.True(models.SwitchForSession);
+        Assert.Equal(["This session", "Default for new sessions"], models.SwitchScopes.Select(scope => scope.Label));
+        Assert.True(models.SwitchScopes[0].IsSelected);
+        Assert.False(models.CanForgetChoice);
         models.SwitchChoices[1].Choose.Execute(null);
 
         Assert.False(models.IsPickerOpen);
+        Assert.Equal("qwen3.5-0.8b", models.Slots[0].Model);
+        Assert.Equal("default · this session: qwen-27b", models.Slots[0].CurrentNote);
+        Assert.Equal(Tone.Green, models.NoticeTone);
+
+        // Reopened, the session's model is the current one, and its choice can be forgotten.
+        models.SwitchGeneratorCommand.Execute(null);
+        Assert.True(models.SwitchChoices[1].IsCurrent);
+        Assert.True(models.CanForgetChoice);
+        models.ForgetChoiceCommand.Execute(null);
+        Assert.Equal("default", models.Slots[0].CurrentNote);
+
+        // "Default for new sessions": written, and the ladder loses the model that is now the default.
+        models.SwitchGeneratorCommand.Execute(null);
+        models.SwitchScopes[1].Choose.Execute(null);
+        Assert.False(models.SwitchForSession);
+        Assert.True(models.SwitchScopes[1].IsSelected);
+        Assert.True(models.SwitchChoices[0].IsCurrent);
+        models.SwitchChoices[1].Choose.Execute(null);
         Assert.Equal("qwen-27b", models.Slots[0].Model);
         Assert.Equal(["claude"], models.Slots[0].Ladder.Select(step => step.Model));
         Assert.Equal("", models.Slots[0].CurrentNote);
-        Assert.Equal(Tone.Green, models.NoticeTone);
     }
 
     [Fact]
@@ -546,6 +569,72 @@ public sealed class ModelsTests
 
         public Task<ConfigWrite> AddServerAsync(string name, string url, CancellationToken cancellationToken = default) =>
             Task.FromException<ConfigWrite>(new IOException("the store is read-only"));
+    }
+
+    /// <summary>The demo store, with "This session" switches held until the test lets them go, as a model loading would.</summary>
+    private sealed class HeldSwitchService(DemoModelService inner) : IModelService
+    {
+        // Continuations run inline, so the page has taken the answer when SetResult returns.
+        public TaskCompletionSource Release { get; } = new();
+
+        public event EventHandler? Changed { add => inner.Changed += value; remove => inner.Changed -= value; }
+
+        public ModelsSnapshot Snapshot => inner.Snapshot;
+
+        public Task<ModelsSnapshot> LoadAsync(CancellationToken cancellationToken = default) => inner.LoadAsync(cancellationToken);
+
+        public Task<ConfigWrite> SetLadderAsync(string slot, IReadOnlyList<string> ladder, CancellationToken cancellationToken = default) =>
+            inner.SetLadderAsync(slot, ladder, cancellationToken);
+
+        public Task<ConfigWrite> SwitchAsync(string slot, string model, CancellationToken cancellationToken = default) =>
+            inner.SwitchAsync(slot, model, cancellationToken);
+
+        public async Task<ConfigWrite> SwitchSessionAsync(string slot, string model, CancellationToken cancellationToken = default)
+        {
+            await Release.Task;
+            return await inner.SwitchSessionAsync(slot, model, cancellationToken);
+        }
+
+        public Task<ConfigWrite> SetPinnedAsync(string slot, bool pinned, CancellationToken cancellationToken = default) =>
+            inner.SetPinnedAsync(slot, pinned, cancellationToken);
+
+        public Task<ConfigWrite> SetPlacementAsync(string model, string device, CancellationToken cancellationToken = default) =>
+            inner.SetPlacementAsync(model, device, cancellationToken);
+
+        public Task DownloadAsync(IEnumerable<string> models, CancellationToken cancellationToken = default) =>
+            inner.DownloadAsync(models, cancellationToken);
+
+        public Task CancelDownloadAsync(string model, CancellationToken cancellationToken = default) =>
+            inner.CancelDownloadAsync(model, cancellationToken);
+
+        public Task<ServerCheck> CheckServerAsync(string model, CancellationToken cancellationToken = default) =>
+            inner.CheckServerAsync(model, cancellationToken);
+
+        public Task<ConfigWrite> AddServerAsync(string name, string url, CancellationToken cancellationToken = default) =>
+            inner.AddServerAsync(name, url, cancellationToken);
+    }
+
+    [Fact]
+    public void AThisSessionSwitchStillLoadingSaysSoInThePicker()
+    {
+        var (demo, _) = Demo();
+        var service = new HeldSwitchService(demo);
+        var models = ViewModel(service);
+        models.SwitchGeneratorCommand.Execute(null);
+        var hint = models.SwitchHint;
+
+        models.SwitchChoices[1].Choose.Execute(null);
+
+        // Held (the model loading): the picker stays open and says the session is still on its old model.
+        Assert.True(models.IsSwitchOpen);
+        Assert.StartsWith("Switching this session's generator to qwen-27b…", models.SwitchHint, StringComparison.Ordinal);
+        Assert.Contains("stays on qwen3.5-0.8b", models.SwitchHint, StringComparison.Ordinal);
+
+        service.Release.SetResult();
+
+        Assert.False(models.IsPickerOpen);
+        Assert.Equal(hint, models.SwitchHint);
+        Assert.Equal("default · this session: qwen-27b", models.Slots[0].CurrentNote);
     }
 
     [Fact]

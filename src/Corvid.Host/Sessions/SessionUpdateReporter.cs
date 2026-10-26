@@ -44,6 +44,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
     // The chain's own: the taint last reported, and what the step being run says brought it in.
     private bool? _taintReported;
     private string? _taintSource;
+    private bool _finishing;
 
     /// <param name="head">The log position the turn starts from: only later events are the turn's.</param>
     /// <param name="emit">Called with each update, one at a time and in order, on a pool thread.</param>
@@ -127,6 +128,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
             Status = outcome == "succeeded" ? ToolCallState.Completed : ToolCallState.Failed,
             Outcome = outcome,
             Input = call?.Arguments,
+            Generator = call?.Generator,
             Output = result?.Result,
             OutputText = result is null ? null : ToolPresentation.ResultText(result.Result),
             Locations = _tools.Locations(call?.Arguments),
@@ -224,11 +226,23 @@ public sealed class SessionUpdateReporter : ITurnObserver
     /// reported nothing, a last task list), then the delivered answer when it was not streamed as it reads (a fixed
     /// message, an answer the generator did not stream). Returns when all of it is emitted.
     /// </summary>
+    /// <summary>
+    /// A5: reads the log now and emits what it holds, so a question the turn just asked (its <c>ClarificationAsked</c>) is
+    /// shown before the surface waits for the answer. Returns once it is emitted.
+    /// </summary>
+    public Task CatchUpAsync()
+    {
+        Then(CatchUp);
+        return DrainAsync();
+    }
+
     public Task FinishAsync(string? answer)
     {
         Then(() =>
         {
             CatchUp();
+            // The last step: a taint still waiting for the call that brought it in is reported now, with what is known.
+            _finishing = true;
             if (answer is not null && !string.Equals(answer.Trim(), Streamed.Trim(), StringComparison.Ordinal))
                 Emit(new AnswerChunk(answer));
         });
@@ -305,6 +319,15 @@ public sealed class SessionUpdateReporter : ITurnObserver
     {
         if (tainted is not { } now || now == _taintReported)
             return;
+        // A taint read before any finished call named its source (the feed's start of a call can reach the chain after the
+        // call's result tainted the session) waits for the step that names it, or for the turn's end.
+        // Only a taint a call of this turn can have brought in waits: one the session had when the turn began (an External
+        // message, a tainted fork, a child) has no call to name and is reported at once.
+        bool callsStarted;
+        lock (_gate)
+            callsStarted = _announced.Count > 0;
+        if (now && _taintSource is null && !_finishing && callsStarted)
+            return;
         // The source is the last call that finished, kept until a taint is reported: the session can turn tainted just after
         // that call's step was queued, so the taint is read with the next step (the answer's text), which names no call.
         var source = _taintSource;
@@ -339,6 +362,10 @@ public sealed class SessionUpdateReporter : ITurnObserver
                             {
                                 At = item.RecordedAt,
                             });
+                            break;
+                        // A5: a question the person answered inside the turn.
+                        case ClarificationAnswered answered:
+                            _fromLog.Add(new QuestionClosed(answered.QuestionId, answered.Answer) { At = item.RecordedAt });
                             break;
                         case TodosSet todos:
                             _fromLog.Add(new PlanChanged(todos.Items) { At = item.RecordedAt });

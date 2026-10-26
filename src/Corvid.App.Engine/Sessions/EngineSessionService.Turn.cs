@@ -158,7 +158,8 @@ public sealed partial class EngineSessionService
 
     /// <summary>
     /// K-6: answers the open clarifying question with an option or the person's words, sent as their next message (the
-    /// question shows as answered just before it). The answer goes ahead of anything queued: messages queued while the
+    /// question shows as answered just before it); A5: a question the running turn asked inside the turn gets the answer as
+    /// its call's result, and the turn goes on. The answer goes ahead of anything queued: messages queued while the
     /// question was open wait behind it, so nothing the person typed before seeing it answers it. A question that has
     /// closed (answered from another view) or another question's id is refused, and nothing is sent.
     /// </summary>
@@ -171,11 +172,20 @@ public sealed partial class EngineSessionService
         var channel = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
         Writable(channel);
         var offered = false;
+        TaskCompletionSource<string?>? inTurn = null;
         lock (channel.Gate)
         {
             if (channel.View?.Question is not { } open || open.QuestionId != questionId)
                 throw new InvalidOperationException("That question is no longer open; nothing was sent.");
-            if (channel.Running)
+            // A5: the running turn asked it and waits for the answer inside the turn.
+            if ((channel.AskedInTurn ?? Volatile.Read(ref channel.Expected)) is { } waiting && waiting.QuestionId == questionId)
+            {
+                // Interrupted (the turn's token is being cancelled): the question goes with the turn, so no answer is taken.
+                if (channel.Cancelling)
+                    throw new InvalidOperationException("The turn is being interrupted, and its question with it; nothing was sent.");
+                inTurn = waiting.Answer;
+            }
+            else if (channel.Running)
                 throw new InvalidOperationException("A turn is running; answer the question once it ends.");
             // The model wrote the options: one passed as it was offered, hidden characters and all, is sent only as the text
             // a reader sees, so nothing the person did not see goes to the generator as their words (or clears the
@@ -205,6 +215,13 @@ public sealed partial class EngineSessionService
             }
             // A \# or \! answer is sent without its backslash, as every other message is (A4 verification).
             answer = ComposerLine.MessageText(answer);
+        }
+        // A5: the answer is the waiting call's result; the turn goes on with it. Answered meanwhile (another view): refused.
+        if (inTurn is not null)
+        {
+            if (!inTurn.TrySetResult(answer))
+                throw new InvalidOperationException("That question is no longer open; nothing was sent.");
+            return;
         }
         // An option is the model's word, sent as it was offered: never read as a ! or # composer line.
         await EnqueueAsync(sessionId, answer, modeLines: false, cancellationToken).ConfigureAwait(false);

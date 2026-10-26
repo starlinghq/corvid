@@ -36,6 +36,9 @@ public sealed record SessionSnapshot(
     /// <summary>The project the session last bound (C-025, <c>ProjectBound</c>), or null.</summary>
     public string? ProjectId { get; init; }
 
+    /// <summary>A5: the session it is a child of (its first event, <c>ChildOf</c>), or null for a top-level session.</summary>
+    public ChildOf? Parent { get; init; }
+
     /// <summary>The latest <c>SessionTitled</c> (G-6): the generated title or the user's rename; null when there is none.</summary>
     public SessionTitled? Title { get; init; }
 
@@ -104,6 +107,7 @@ public static class SessionProjection
         var history = new List<StoredEvent>();
         string? goal = null;
         string? project = null;
+        ChildOf? parent = null;
         SessionTitled? title = null;
         SessionRecapped? recap = null;
         var todos = ImmutableArray<TodoItem>.Empty;
@@ -134,6 +138,7 @@ public static class SessionProjection
             {
                 case GoalSet value: goal = value.Goal; break;
                 case ProjectBound value: project = value.ProjectId; break;
+                case ChildOf value: parent ??= value; break;
                 case SessionTitled value: title = value; break;
                 case SessionRecapped value: recap = value; break;
                 case TodosSet value: todos = value.Items; break;
@@ -234,6 +239,7 @@ public static class SessionProjection
             IssuedCallIds = calls.Keys.ToImmutableHashSet(StringComparer.Ordinal),
             CheckpointEvents = recorded.ToImmutable(),
             ProjectId = project,
+            Parent = parent,
             Title = title,
             Recap = recap,
         };

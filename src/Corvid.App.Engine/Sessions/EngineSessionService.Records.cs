@@ -327,18 +327,52 @@ public sealed partial class EngineSessionService
         // L10: background problems (the egress ledger) go to the app's log, not the model call's thread's stderr.
         static void OnNotice(string line) => Log("corvid app: " + line);
 
+        // A5: every slot switch made in this process (in a turn or between turns, any slot) reaches the session's view.
+        void OnModel(string id, ModelChanged change)
+        {
+            if (!_disposed && _channels.TryGetValue(id, out var channel))
+                Publish(channel, translator => ModelUpdates(translator, runtime, id, change, _time.GetUtcNow()));
+        }
+
+        // A5: a child of a session started or ended (an agent's delegate_task, a person's /delegate).
+        void OnChild(string parentId, SessionStreamUpdate update) => OnChildChanged(runtime, parentId, update);
+
         runtime.TitleChanged += OnTitle;
         runtime.Recapped += OnRecap;
+        // (A5: OnModel above, through ModelUpdates below.)
         runtime.Notice += OnNotice;
+        runtime.ModelChanged += OnModel;
+        runtime.ChildChanged += OnChild;
         _unwatchRecords = () =>
         {
             runtime.TitleChanged -= OnTitle;
             runtime.Recapped -= OnRecap;
             runtime.Notice -= OnNotice;
+            runtime.ModelChanged -= OnModel;
+            runtime.ChildChanged -= OnChild;
         };
         if (_disposed)
             UnwatchRecords();
     }
 
     private void UnwatchRecords() => Interlocked.Exchange(ref _unwatchRecords, null)?.Invoke();
+
+    /// <summary>
+    /// A5: a slot change as the view's updates (the translator's row and slot change), and for the decider the status line's
+    /// name for this session's decider now, which the session header shows beside the generator.
+    /// </summary>
+    private static IReadOnlyList<SessionUpdate> ModelUpdates(SessionUpdateTranslator translator, CorvidRuntime runtime, string id,
+        ModelChanged change, DateTimeOffset at)
+    {
+        var updates = translator.Models(change, at);
+        if (change.Slot == Corvid.Models.ModelSlots.Decider && updates.Count > 0 && runtime.TryGetSession(id, out var session))
+            return [.. updates, new EngineStatus { Decider = DeciderLabel(runtime, session), At = at }];
+        return updates;
+    }
+
+    /// <summary>A5: the decider a session's checkpoints run on now ("kev-0.8b"), or "degraded tier"; the runtime's for a session not open here.</summary>
+    internal static string DeciderLabel(CorvidRuntime runtime, CorvidSession? session) =>
+        (session is not null ? runtime.Deciders.DeciderName(session.Slots) : runtime.Deciders.Shared.CalibratedDecider) is { Length: > 0 } name
+            ? name.Split('@')[0]
+            : "degraded tier";
 }

@@ -154,9 +154,10 @@ public sealed class CoreCommandTests
             Assert.Equal([new CommandChoice("2", "fake-gen-large", "/model 2")], list.Choices);
             Assert.Contains(list.Lines, line => line.Contains("decider degraded tier", StringComparison.Ordinal));
 
+            // A5: the decider is offered too, per session.
             var decider = await Run(runtime, session, commands, "/model decider");
             Assert.Equal("decider: degraded tier", decider.Title);
-            Assert.Empty(decider.Choices);
+            Assert.Equal(["fake-kev", "fake-kev-large"], decider.Choices.Select(choice => choice.Label));
             var embedder = await Run(runtime, session, commands, "/models embedder.text");
             Assert.Equal([new CommandChoice("2", "fake-embed-alt", "/model embedder.text 2")], embedder.Choices);
 
@@ -165,7 +166,8 @@ public sealed class CoreCommandTests
             Assert.Equal("fake-gen-large@cpu", session.Slots.Current(ModelSlots.Generator).Profile.Id);
             Assert.True(session.Slots.IsPinned(ModelSlots.Generator));
             Assert.Equal("● current (pinned)", (await Run(runtime, session, commands, "/model")).Table!.Rows[1][3]);
-            Assert.Contains(runtime.Log.Read(session.Id, cancellationToken: TestContext.Current.CancellationToken), item => item.Payload is ModelSwitched { Slot: ModelSlots.Generator, Reason: "user" });
+            // A5: the person's /model is this session's choice, logged as such (it was "user", reverted at the turn's end).
+            Assert.Contains(runtime.Log.Read(session.Id, cancellationToken: TestContext.Current.CancellationToken), item => item.Payload is ModelSwitched { Slot: ModelSlots.Generator, Reason: "session" });
 
             var delivery = await session.SendAsync("hi", TestContext.Current.CancellationToken);
             Assert.Equal("Hello from the larger model.", delivery.Result!.Text);

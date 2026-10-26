@@ -340,6 +340,42 @@ public sealed class AcpTests
     }
 
     [Fact]
+    public async Task ForkWhilePromptRunsCopiesThroughTheLastStepWithoutWaiting()
+    {
+        // G-15: session/fork while a session/prompt is in flight comes back at once, at the turn's last completed step.
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generator = new FakeGenerator(Reply.Call("list_notes"), Reply.Say("You have two notes."))
+        {
+            Hold = (step, _) =>
+            {
+                if (step != 1)
+                    return null;
+                reached.TrySetResult();
+                return release.Task;
+            },
+        };
+        await using var client = AcpClient.Start(TestHost.Create(new FakeModels(generator)));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+        var prompt = await client.BeginAsync("session/prompt", Prompt(session, "list my notes"));
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var runtime = await client.Runtime;
+        Assert.True(runtime.TryGetSession(session, out var source));
+        var boundary = source.Runner.StepBoundary;
+
+        var forked = await client.RequestAsync("session/fork", new { sessionId = session, cwd = client.Workspace });
+
+        var fork = forked["result"]!["sessionId"]!.GetValue<string>();
+        Assert.True(runtime.IsTurnRunning(session));
+        Assert.Equal(boundary, runtime.Log.GetHead(fork, TestContext.Current.CancellationToken));
+        release.SetResult();
+        var answered = await client.ResponseAsync(prompt);
+        Assert.Equal("end_turn", answered["result"]!["stopReason"]!.GetValue<string>());
+        Assert.Equal(boundary, runtime.Log.GetHead(fork, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task ListShowsTheUsersConversations()
     {
         var models = new FakeModels(new FakeGenerator(Reply.Say("Hi.")));
@@ -397,6 +433,64 @@ public sealed class AcpTests
         Assert.Equal(-32602, missing["error"]!["code"]!.GetValue<int>());
         var closed = await client.RequestAsync("session/prompt", Prompt("acp-unknown", "hi"));
         Assert.Equal(-32002, closed["error"]!["code"]!.GetValue<int>());
+    }
+
+    private sealed class ExtraTools(params Corvid.Tools.ToolFunction[] tools) : Corvid.Tools.IToolProvider
+    {
+        public IReadOnlyList<Corvid.Tools.ToolFunction> CreateTools() => tools;
+    }
+
+    // A5 (A4 leftover): a running call's output tail reaches the editor as the call's content while it runs.
+    [Fact]
+    public async Task ARunningCallsOutputTailIsAToolCallUpdateInProgress()
+    {
+        var weather = new TestTool(new Corvid.Tools.ToolDescriptor("check_weather", "Check the weather forecast.", """{"type":"object","properties":{}}""",
+            new Corvid.Tools.ToolRisk(Corvid.Tools.SideEffects.None, Network: false, Destructive: false), []), arguments =>
+        {
+            Corvid.Tools.ToolCallContext.From(arguments)!.Output!("asking the forecast service\n");
+            return "sunny";
+        });
+        var models = new FakeModels(new FakeGenerator(Reply.Call("check_weather"), Reply.Say("Sunny.")));
+        await using var client = AcpClient.Start(TestHost.Create(models,
+            services: services => Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<Corvid.Tools.IToolProvider>(services, new ExtraTools(weather))));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+
+        await client.RequestAsync("session/prompt", Prompt(session, "what's the weather?"));
+
+        var updates = client.UpdatesFor(session);
+        var tail = Assert.Single(updates, update => update["sessionUpdate"]?.GetValue<string>() == "tool_call_update"
+            && update["status"]?.GetValue<string>() == "in_progress");
+        Assert.Equal("asking the forecast service", tail["content"]![0]!["content"]!["text"]!.GetValue<string>().TrimEnd());
+        var done = updates.FindIndex(update => update["sessionUpdate"]?.GetValue<string>() == "tool_call_update"
+            && update["status"]?.GetValue<string>() == "completed");
+        Assert.True(updates.IndexOf(tail) < done);
+    }
+
+    // A5 (A4 leftover): a turn that ends on a clarifying question (K-6) tells the editor so, structured, before the prompt's
+    // response; ACP has no way to answer inside the turn, so the person's next prompt answers it.
+    [Fact]
+    public async Task AQuestionTheTurnEndedOnIsACorvidQuestionNotification()
+    {
+        var models = new FakeModels(new FakeGenerator(Reply.Call("ask_user", """{"question":"Which branch?","options":["main","release"]}""")));
+        await using var client = AcpClient.Start(TestHost.Create(models, BuiltinOn));
+        await client.RequestAsync("initialize", Initialize());
+        var session = await client.NewSessionAsync();
+
+        var response = await client.RequestAsync("session/prompt", Prompt(session, "tag the release"));
+
+        Assert.Equal("end_turn", response["result"]!["stopReason"]!.GetValue<string>());
+        List<JsonObject> questions;
+        lock (client.Updates)
+            questions = [.. client.Updates.Where(update => update["method"]?.GetValue<string>() == "_corvid/question")];
+        var question = Assert.Single(questions)["params"]!;
+        Assert.Equal(session, question["sessionId"]!.GetValue<string>());
+        Assert.Equal("Which branch?", question["question"]!.GetValue<string>());
+        Assert.Equal(["main", "release"], question["options"]!.AsArray().Select(option => option!.GetValue<string>()));
+        Assert.StartsWith("q-", question["questionId"]!.GetValue<string>(), StringComparison.Ordinal);
+        // The question's text is the turn's answer too, so a client that ignores the notification still shows it.
+        Assert.Contains(client.UpdatesFor(session), update => update["sessionUpdate"]?.GetValue<string>() == "agent_message_chunk"
+            && update["content"]!["text"]!.GetValue<string>().Contains("Which branch?", StringComparison.Ordinal));
     }
 
     [Fact]
