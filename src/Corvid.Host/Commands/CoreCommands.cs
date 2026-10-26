@@ -377,7 +377,8 @@ public static class CoreCommands
 
     // ---- /memory ----
 
-    private const string MemoryUsage = "[pending] | approve <id> [operation] | reject <id> | import hermes [<hermes home>] [--dry-run]"
+    private const string MemoryUsage = "[pending] | approve <id> [operation] | reject <id> | consolidate [user | agent]"
+        + " | import hermes [<hermes home>] [--dry-run]"
         + " | lessons [pending | approve <id> [supersedes <old>] | reject <id> [reason] | supersede <old> <new>]";
 
     private static async ValueTask<CommandOutput> MemoryAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
@@ -419,11 +420,66 @@ public static class CoreCommands
             case ["reject", var id]:
                 writer.Reject(id, cancellationToken: cancellationToken);
                 return CommandOutput.Success($"Rejected {id}.");
+            case ["consolidate", .. var blocks] when blocks.Count() <= 1:
+                return await ConsolidateAsync(context, blocks.FirstOrDefault(), cancellationToken).ConfigureAwait(false);
             case ["import", "hermes", .. var rest] when rest.Count(argument => argument != "--dry-run") <= 1:
                 return await ImportHermesAsync(context, writer, rest, cancellationToken).ConfigureAwait(false);
             default:
                 return CommandOutput.Error("Usage: /memory " + MemoryUsage + ".");
         }
+    }
+
+    /// <summary>
+    /// <c>/memory consolidate [user | agent]</c> (plan §9.5): the block (or each block at the job's threshold) rewritten to its
+    /// budget on the background generator and staged for review, shown as a diff. Nothing is written until
+    /// <c>/memory approve</c>.
+    /// </summary>
+    private static async Task<CommandOutput> ConsolidateAsync(SlashCommandContext context, string? block, CancellationToken cancellationToken)
+    {
+        if (context.Runtime.Memory is not { Consolidator: { } job } memory)
+            return CommandOutput.Warning("Consolidation needs the memory write path (an extractor slot).");
+        if (block is not null && !BlockConsolidator.Blocks.Contains(block))
+            return CommandOutput.Error(block == CoreBlockNames.Persona
+                ? "The persona block is edited only by you; it is never rewritten."
+                : "Usage: /memory consolidate [user | agent].");
+        List<string> names = block is not null ? [block] : [.. BlockConsolidator.Blocks.Where(name => job.Needs(memory.Blocks.Get(name)))];
+        if (names.Count == 0)
+            return CommandOutput.Text("No block is near its budget (" + string.Join(", ", BlockConsolidator.Blocks.Select(name =>
+                    $"{name} {memory.Blocks.CountTokens(memory.Blocks.Get(name).Content)} of {memory.Blocks.Get(name).BudgetTokens} tokens"))
+                + "). /memory consolidate <user | agent> rewrites one anyway.");
+        var lines = new List<string>();
+        var staged = 0;
+        foreach (var name in names)
+        {
+            var before = memory.Blocks.Get(name).Content;
+            var result = await job.StageAsync(context.Session.Id, name, "cli", cancellationToken).ConfigureAwait(false);
+            switch (result.Status)
+            {
+                case BlockRewriteStatus.Staged:
+                    staged++;
+                    lines.Add($"{result.Pending!.PendingId}: the {name} block, {result.TokensBefore} of {result.Budget} tokens rewritten to "
+                        + $"{result.TokensAfter}. /memory approve {result.Pending.PendingId} replaces the block; /memory reject leaves it.");
+                    lines.AddRange(BlockDiff.Lines(before, result.Text!).Select(line => line.Kind switch
+                    {
+                        BlockDiffKind.Removed => "  - ",
+                        BlockDiffKind.Added => "  + ",
+                        _ => "    ",
+                    } + TerminalText.Visible(line.Text)));
+                    break;
+                case BlockRewriteStatus.NotNeeded:
+                    lines.Add($"{name}: {result.Detail}.");
+                    break;
+                default:
+                    lines.Add($"{name}: not staged, {result.Detail}.");
+                    break;
+            }
+        }
+        return new CommandOutput
+        {
+            Title = staged > 0 ? "Consolidation staged for review" : "Nothing staged",
+            Lines = [.. lines],
+            Tone = staged > 0 ? OutputTone.Success : OutputTone.Warning,
+        };
     }
 
     // ---- /memory lessons (C-025) ----

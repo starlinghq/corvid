@@ -466,6 +466,9 @@ public sealed class EngineAuditService : IAuditService
             case MemoryWritten memory:
                 summary = [P("memory "), M(memory.Operation), P(" "), M(memory.MemoryId)];
                 break;
+            case MemoryJobRan job:
+                summary = [P("memory job "), M(job.Job), P(" on "), M(job.Subject), P(": "), M(job.Outcome), P(" · "), P(Line(job.Detail, TextPreview))];
+                break;
             case SkillChanged skill:
                 summary = [P("skill "), M(skill.SkillId), P(" changed by "), P(skill.Author)];
                 break;
@@ -550,7 +553,7 @@ public sealed class EngineAuditService : IAuditService
         ModelSwitched or EgressRecorded => AuditEventGroup.ModelSwitches,
         DetectionMatched => AuditEventGroup.Detections,
         CheckpointTaken or SessionRewound => AuditEventGroup.Checkpoints,
-        MemoryWritten or SkillChanged or ProjectBound => AuditEventGroup.MemoryAndSkills,
+        MemoryWritten or MemoryJobRan or SkillChanged or ProjectBound => AuditEventGroup.MemoryAndSkills,
         CompactionExpanded => AuditEventGroup.Compaction,
         _ => AuditEventGroup.Messages,
     };
@@ -581,6 +584,7 @@ public sealed class EngineAuditService : IAuditService
     private static string StoreTitle(string id) => id switch
     {
         McpSessions.Pins => "MCP tool pins",
+        MemoryJobs.Session => "memory jobs",
         Corvid.Gateway.GatewaySessions.Ledger => "gateway delivery ledger",
         _ => "no messages",
     };

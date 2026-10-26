@@ -1268,7 +1268,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// The conversations a person had, not the stores' own sessions (MCP pins, the gateway's delivery ledger, the session
     /// Memory's Hermes import stages its facts from).
     /// </summary>
-    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger or Memory.EngineMemoryService.ImportSession);
+    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger or MemoryJobs.Session or Memory.EngineMemoryService.ImportSession);
 
     // ---- Helpers ----
 

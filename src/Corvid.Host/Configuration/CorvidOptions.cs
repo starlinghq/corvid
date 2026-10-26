@@ -571,6 +571,28 @@ public sealed class MemorySettings
 
     /// <summary>The lessons tier (C-025); it needs memory on.</summary>
     public LessonsSettings Lessons { get; set; } = new();
+
+    /// <summary>The block rewrite job (plan §9.5); it needs memory on and the extractor slot (the write path).</summary>
+    public ConsolidationSettings Consolidation { get; set; } = new();
+}
+
+public sealed class ConsolidationSettings
+{
+    /// <summary>
+    /// When every session is idle, a <c>user</c> or <c>agent</c> block at <see cref="Threshold"/> of its budget (or over it),
+    /// and an edit staged over its block's budget, is rewritten on the background generator and staged for review; nothing is
+    /// applied unapproved. Off, <c>/memory consolidate</c> and the app's Consolidate still work on demand.
+    /// </summary>
+    public bool Background { get; set; } = true;
+
+    /// <summary>The fill (0 to 1) from which the background job rewrites a block.</summary>
+    public double Threshold { get; set; } = 0.9;
+
+    /// <summary>Minutes between the job's looks when no turn nudges it.</summary>
+    public int IntervalMinutes { get; set; } = 15;
+
+    /// <summary>Seconds the job waits after a turn ends before it checks that every session is idle, and between checks while one is busy.</summary>
+    public int IdleSeconds { get; set; } = 30;
 }
 
 public sealed class LessonsSettings

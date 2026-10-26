@@ -25,6 +25,9 @@ public sealed record BlockConsolidatorOptions
 
     /// <summary>How long after a nudge (a turn ended) the loop waits before it checks that every session is idle.</summary>
     public TimeSpan IdleDelay { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>How soon the loop looks again when it found a session busy.</summary>
+    public TimeSpan BusyRetry { get; init; } = TimeSpan.FromSeconds(30);
 }
 
 public enum BlockRewriteStatus
@@ -87,7 +90,8 @@ public sealed class BlockConsolidator
     private readonly Func<CoreBlock, IDisposable> _requestScope;
     private readonly BlockConsolidatorOptions _options;
     private readonly TimeProvider _time;
-    private readonly SemaphoreSlim _signal = new(0);
+    // Completed by a nudge; replaced when the loop wakes.
+    private TaskCompletionSource _wake = NewWake();
     private readonly SemaphoreSlim _running = new(1, 1);
     // Rewrites declined or refused in this process, by block, revision and folded edit: not asked for again until it changes.
     private readonly HashSet<(string Block, long Revision, string? Supersedes)> _declined = [];
@@ -209,28 +213,28 @@ public sealed class BlockConsolidator
     }
 
     /// <summary>Wakes the background loop: a turn ended or a block changed.</summary>
-    public void Nudge() => _signal.Release();
+    public void Nudge() => Volatile.Read(ref _wake).TrySetResult();
 
     /// <summary>
     /// The sleep-time loop, until cancelled: after each nudge (and every <see cref="BlockConsolidatorOptions.Interval"/>) it
     /// waits <see cref="BlockConsolidatorOptions.IdleDelay"/>, then runs <see cref="RunOnceAsync"/> only if
-    /// <paramref name="isIdle"/> says no session is busy; otherwise it waits for the next nudge. A failed pass is reported
-    /// through <see cref="Processed"/> and never ends the loop.
+    /// <paramref name="isIdle"/> says no session is busy; while one is, it looks again every
+    /// <see cref="BlockConsolidatorOptions.BusyRetry"/>. A failed pass is reported through <see cref="Processed"/> and never
+    /// ends the loop.
     /// </summary>
     public async Task RunAsync(Func<bool> isIdle, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(isIdle);
+        var busy = false;
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                await _signal.WaitAsync(_options.Interval, cancellationToken).ConfigureAwait(false);
-                while (_signal.CurrentCount > 0 && _signal.Wait(0, CancellationToken.None))
-                {
-                }
+                await WaitAsync(busy ? _options.BusyRetry : _options.Interval, cancellationToken).ConfigureAwait(false);
                 if (_options.IdleDelay > TimeSpan.Zero)
                     await Task.Delay(_options.IdleDelay, _time, cancellationToken).ConfigureAwait(false);
-                if (!isIdle())
+                busy = !isIdle();
+                if (busy)
                     continue;
                 try
                 {
@@ -246,6 +250,29 @@ public sealed class BlockConsolidator
         {
         }
     }
+
+    // Until a nudge or the timeout, on the job's clock. A nudge that lands while a pass runs wakes the next wait at once.
+    private async Task WaitAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var wake = Volatile.Read(ref _wake);
+        if (!wake.Task.IsCompleted)
+        {
+            if (timeout == Timeout.InfiniteTimeSpan)
+                await wake.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            else
+            {
+                using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var delay = Task.Delay(timeout, _time, stop.Token);
+                await Task.WhenAny(wake.Task, delay).ConfigureAwait(false);
+                await stop.CancelAsync().ConfigureAwait(false);
+                await delay.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.CompareExchange(ref _wake, NewWake(), wake);
+    }
+
+    private static TaskCompletionSource NewWake() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private bool Fresh(string block, long revision, string? supersedes)
     {

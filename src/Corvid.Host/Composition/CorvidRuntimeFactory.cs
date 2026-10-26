@@ -512,6 +512,36 @@ public sealed class CorvidRuntimeFactory(
             learner = new Kernel.Lessons.LessonLearner(lessons, log, (Microsoft.Extensions.AI.IChatClient)generator.Service,
                 new Kernel.Lessons.LessonLearnerOptions { Generator = generator.Profile.Id });
         }
-        return new MemoryServices(database, blocks, episodes, vectors, retriever, writer) { Lessons = lessons, LessonLearner = learner };
+        return new MemoryServices(database, blocks, episodes, vectors, retriever, writer)
+        {
+            Lessons = lessons,
+            LessonLearner = learner,
+            Consolidator = writer is null ? null : Consolidator(settings, composer, blocks, writer, log),
+        };
+    }
+
+    /// <summary>
+    /// The block rewrite job (plan §9.5) on the background generator at background priority. Every request carries the
+    /// block's local-only mark, so the egress gate never sends a local-only block to a cloud generator (plan §10.4).
+    /// </summary>
+    internal static IDisposable ConsolidationRequest(Corvid.Memory.CoreBlock block) =>
+        new Corvid.Models.Privacy.ModelRequestContext(Abstractions.Events.MemoryJobs.Session, Tainted: false, block.LocalOnly).Enter();
+
+    private static BlockConsolidator Consolidator(CorvidOptions settings, ModelComposer composer, CoreBlockStore blocks, MemoryWriter writer,
+        SqliteEventLog log)
+    {
+        var generator = composer.CreateBackgroundSlots().Get(ModelSlots.Generator).Default;
+        var configured = settings.Memory.Consolidation;
+        return new BlockConsolidator(blocks, writer, (Microsoft.Extensions.AI.IChatClient)generator.Service, log,
+            ConsolidationRequest,
+            new BlockConsolidatorOptions
+            {
+                Threshold = configured.Threshold is > 0 and <= 1 ? configured.Threshold : BlockConsolidatorOptions.Default.Threshold,
+                Interval = configured.IntervalMinutes > 0 ? TimeSpan.FromMinutes(configured.IntervalMinutes) : Timeout.InfiniteTimeSpan,
+                MaxOutputTokens = settings.Turn.MaxOutputTokens > 0 ? Math.Min(settings.Turn.MaxOutputTokens, 2_048) : 1_024,
+                IdleDelay = TimeSpan.FromSeconds(Math.Max(0, configured.IdleSeconds)),
+                // Never a spin: a busy session is looked at again at most five times a second.
+                BusyRetry = TimeSpan.FromSeconds(Math.Max(0.2, configured.IdleSeconds)),
+            });
     }
 }
