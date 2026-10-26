@@ -76,7 +76,7 @@ internal static class AttachEndpoint
             }
             using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
             await using var channel = new WebSocketMessageChannel(socket, AttachedProtocol.MaxRequestBytes);
-            var peer = context.Connection.RemoteIpAddress is { } ip ? ip.ToString() : "the Unix socket";
+            var peer = context.Connection.RemoteIpAddress is { } ip ? ip.ToString() : AttachedAuthenticator.SocketPeer;
             await server.ServeAsync(channel, peer, stopping).ConfigureAwait(false);
         });
         if (options.Web is { } web)

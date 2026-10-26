@@ -15,8 +15,11 @@ public sealed record PairedDevice(string Name, string Digest, DateTimeOffset Pai
 /// token generated in <see cref="AttachedPaths.OwnerTokenFile"/> (0600). Paired devices' tokens are kept as SHA-256 digests in
 /// <see cref="AttachedPaths.DevicesFile"/> (0600), read again at each check, so <c>corvid serve revoke</c> refuses a device's
 /// next connection. Pairing codes live in this process only: one the owner made (<see cref="CreatePairingCode"/>, from the
-/// desktop or <c>corvid serve pair</c>) redeems once before it expires, and past <see cref="FailuresPerMinute"/> wrong codes
-/// in a minute every code is refused until the minute is over, so a code cannot be guessed over the network.
+/// desktop or <c>corvid serve pair</c>) redeems once before it expires. Past <see cref="FailuresPerMinute"/> wrong codes or
+/// tokens in a minute from one peer, that peer is refused everything until the minute is over, and past
+/// <see cref="NetworkFailuresPerMinute"/> from the network as a whole every network peer is, so a code cannot be guessed.
+/// The Unix socket (only the owner's user can open it) is counted on its own and never shut by the network's guesses, so
+/// a host on the LAN cannot lock the owner out of their own machine (A6 fix).
 /// </summary>
 public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueTask<bool?>> owner, string devicesFile, TimeProvider? time = null)
     : IAttachedAuthenticator
@@ -24,8 +27,17 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
     /// <summary>How long a pairing code redeems.</summary>
     public static readonly TimeSpan CodeLifetime = TimeSpan.FromMinutes(5);
 
-    /// <summary>Wrong codes and refused tokens allowed in a minute; past it everything is refused until the minute ends.</summary>
+    /// <summary>Wrong codes and refused tokens allowed from one peer in a minute; past it the peer is refused until the minute ends.</summary>
     public const int FailuresPerMinute = 10;
+
+    /// <summary>Wrong codes and refused tokens allowed from all network peers together in a minute (not the Unix socket).</summary>
+    public const int NetworkFailuresPerMinute = 100;
+
+    /// <summary>The peer a connection over the Unix socket is (the listener names TCP peers by their address).</summary>
+    public const string SocketPeer = "the Unix socket";
+
+    // Peers remembered at most: past it, peers with no failure in the last minute are forgotten.
+    private const int MaxPeers = 1024;
 
     /// <summary>Codes outstanding at once; making another drops the oldest.</summary>
     public const int MaxCodes = 8;
@@ -36,7 +48,8 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly Lock _gate = new();
     private readonly List<(string Digest, DateTimeOffset Expires)> _codes = [];
-    private readonly Queue<DateTimeOffset> _failures = new();
+    private readonly Dictionary<string, Queue<DateTimeOffset>> _failures = new(StringComparer.Ordinal);
+    private readonly Queue<DateTimeOffset> _network = new();
 
     /// <summary>Makes a pairing code that redeems once within <see cref="CodeLifetime"/>.</summary>
     public PairingCode CreatePairingCode()
@@ -56,10 +69,15 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
     ValueTask<PairingCode?> IAttachedAuthenticator.CreatePairingCodeAsync(CancellationToken cancellationToken) =>
         ValueTask.FromResult<PairingCode?>(CreatePairingCode());
 
-    public async ValueTask<AttachedIdentity?> AuthenticateAsync(string token, CancellationToken cancellationToken)
+    /// <summary>A check from the Unix socket (<see cref="SocketPeer"/>).</summary>
+    public ValueTask<AttachedIdentity?> AuthenticateAsync(string token, CancellationToken cancellationToken) =>
+        AuthenticateAsync(token, SocketPeer, cancellationToken);
+
+    public async ValueTask<AttachedIdentity?> AuthenticateAsync(string token, string peer, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(token);
-        if (token.Length is 0 or > 4096 || Limited())
+        ArgumentNullException.ThrowIfNull(peer);
+        if (token.Length is 0 or > 4096 || Limited(peer))
             return null;
         var digest = AttachedSecrets.Digest(token);
         foreach (var device in ReadDevices(devicesFile))
@@ -70,43 +88,50 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
         if (isOwner == true)
             return new AttachedIdentity(AttachedRole.Owner, null);
         if (isOwner == false)
-            Fail();
+            Fail(peer);
         return null;
     }
 
-    public ValueTask<(string Token, AttachedIdentity Identity)?> PairAsync(string code, string device, CancellationToken cancellationToken)
+    /// <summary>A pairing from the Unix socket (<see cref="SocketPeer"/>).</summary>
+    public ValueTask<(string Token, AttachedIdentity Identity)?> PairAsync(string code, string device, CancellationToken cancellationToken) =>
+        PairAsync(code, device, SocketPeer, cancellationToken);
+
+    public ValueTask<(string Token, AttachedIdentity Identity)?> PairAsync(string code, string device, string peer, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(code);
         ArgumentNullException.ThrowIfNull(device);
+        ArgumentNullException.ThrowIfNull(peer);
         var digest = AttachedSecrets.Digest(AttachedSecrets.NormalizeCode(code));
+        var now = _time.GetUtcNow();
         lock (_gate)
         {
-            var now = _time.GetUtcNow();
             Prune(now);
-            if (TooMany(now))
+            if (TooMany(peer, now))
                 return ValueTask.FromResult<(string, AttachedIdentity)?>(null);
             var index = _codes.FindIndex(entry => AttachedSecrets.FixedTimeEquals(entry.Digest, digest));
             if (index < 0)
             {
-                _failures.Enqueue(now);
+                Count(peer, now);
                 return ValueTask.FromResult<(string, AttachedIdentity)?>(null);
             }
+            // Redeemed under the gate, so it redeems once; the devices file is written outside it, so a slow lock on the
+            // file never holds up another connection's check (A6 fix).
             _codes.RemoveAt(index);
-            var paired = PrivateFiles.Locked(devicesFile, () =>
-            {
-                var devices = ReadDevices(devicesFile).ToList();
-                if (devices.Count >= MaxDevices)
-                    return ((string, AttachedIdentity)?)null;
-                var name = device;
-                for (var n = 2; devices.Any(existing => existing.Name == name); n++)
-                    name = $"{device} ({n})";
-                var token = AttachedSecrets.NewToken();
-                devices.Add(new PairedDevice(name, AttachedSecrets.Digest(token), now));
-                WriteDevices(devicesFile, devices);
-                return (token, new AttachedIdentity(AttachedRole.Device, name));
-            });
-            return ValueTask.FromResult(paired);
         }
+        var paired = PrivateFiles.Locked(devicesFile, () =>
+        {
+            var devices = ReadDevices(devicesFile).ToList();
+            if (devices.Count >= MaxDevices)
+                return ((string, AttachedIdentity)?)null;
+            var name = device;
+            for (var n = 2; devices.Any(existing => existing.Name == name); n++)
+                name = $"{device} ({n})";
+            var token = AttachedSecrets.NewToken();
+            devices.Add(new PairedDevice(name, AttachedSecrets.Digest(token), now));
+            WriteDevices(devicesFile, devices);
+            return (token, new AttachedIdentity(AttachedRole.Device, name));
+        });
+        return ValueTask.FromResult(paired);
     }
 
     /// <summary>The paired devices in the file; none when it does not exist.</summary>
@@ -139,23 +164,45 @@ public sealed class AttachedAuthenticator(Func<string, CancellationToken, ValueT
     private static void WriteDevices(string path, IReadOnlyList<PairedDevice> devices) =>
         PrivateFiles.Write(path, JsonSerializer.Serialize(new DevicesFileShape([.. devices]), AttachedFilesJson.Default.DevicesFile));
 
-    private bool Limited()
+    private bool Limited(string peer)
     {
         lock (_gate)
-            return TooMany(_time.GetUtcNow());
+            return TooMany(peer, _time.GetUtcNow());
     }
 
-    private void Fail()
+    private void Fail(string peer)
     {
         lock (_gate)
-            _failures.Enqueue(_time.GetUtcNow());
+            Count(peer, _time.GetUtcNow());
     }
 
-    private bool TooMany(DateTimeOffset now)
+    // With the gate held.
+    private void Count(string peer, DateTimeOffset now)
     {
-        while (_failures.TryPeek(out var oldest) && oldest <= now - TimeSpan.FromMinutes(1))
-            _failures.Dequeue();
-        return _failures.Count >= FailuresPerMinute;
+        if (_failures.Count >= MaxPeers && !_failures.ContainsKey(peer))
+            foreach (var (known, queue) in _failures.ToList())
+                if (Recent(queue, now) == 0)
+                    _failures.Remove(known);
+        if (!_failures.TryGetValue(peer, out var failures))
+            _failures[peer] = failures = new Queue<DateTimeOffset>();
+        failures.Enqueue(now);
+        if (peer != SocketPeer)
+            _network.Enqueue(now);
+    }
+
+    // With the gate held.
+    private bool TooMany(string peer, DateTimeOffset now)
+    {
+        if (_failures.TryGetValue(peer, out var failures) && Recent(failures, now) >= FailuresPerMinute)
+            return true;
+        return peer != SocketPeer && Recent(_network, now) >= NetworkFailuresPerMinute;
+    }
+
+    private static int Recent(Queue<DateTimeOffset> failures, DateTimeOffset now)
+    {
+        while (failures.TryPeek(out var oldest) && oldest <= now - TimeSpan.FromMinutes(1))
+            failures.Dequeue();
+        return failures.Count;
     }
 
     private void Prune(DateTimeOffset now) => _codes.RemoveAll(entry => entry.Expires <= now);

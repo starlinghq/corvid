@@ -24,6 +24,17 @@ public interface IAttachedAuthenticator
 
     /// <summary>Makes a pairing code for the owner to give another device; null when this server does not pair devices.</summary>
     ValueTask<PairingCode?> CreatePairingCodeAsync(CancellationToken cancellationToken) => ValueTask.FromResult<PairingCode?>(null);
+
+    /// <summary>
+    /// <see cref="AuthenticateAsync(string, CancellationToken)"/> for a connection from <paramref name="peer"/> (its address, or
+    /// <see cref="AttachedAuthenticator.SocketPeer"/>), so failures are counted where they come from.
+    /// </summary>
+    ValueTask<AttachedIdentity?> AuthenticateAsync(string token, string peer, CancellationToken cancellationToken) =>
+        AuthenticateAsync(token, cancellationToken);
+
+    /// <summary><see cref="PairAsync(string, string, CancellationToken)"/> for a connection from <paramref name="peer"/>.</summary>
+    ValueTask<(string Token, AttachedIdentity Identity)?> PairAsync(string code, string device, string peer, CancellationToken cancellationToken) =>
+        PairAsync(code, device, cancellationToken);
 }
 
 /// <summary>
@@ -281,13 +292,13 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
             string? token = null;
             if (method == AttachedProtocol.Pair)
             {
-                var paired = await server._authenticator.PairAsync(p.Text("code", 64), device, cancellationToken).ConfigureAwait(false);
+                var paired = await server._authenticator.PairAsync(p.Text("code", 64), device, From, cancellationToken).ConfigureAwait(false);
                 identity = paired?.Identity;
                 token = paired?.Token;
             }
             else
             {
-                identity = await server._authenticator.AuthenticateAsync(p.Text("token", 4096), cancellationToken).ConfigureAwait(false);
+                identity = await server._authenticator.AuthenticateAsync(p.Text("token", 4096), From, cancellationToken).ConfigureAwait(false);
             }
             if (identity is null)
             {

@@ -85,6 +85,28 @@ public sealed class AttachedAuthenticatorTests : IDisposable
     }
 
     [Fact]
+    public async Task GuessesFromTheNetworkNeverLockTheOwnerOutOfTheSocketOrAnotherPeer()
+    {
+        // A6 fix: once --listen reaches past loopback, a host on the LAN could keep the owner out with ten wrong tokens.
+        var time = ManualTimeProvider.Demo();
+        var authenticator = Create(time);
+        for (var i = 0; i < AttachedAuthenticator.FailuresPerMinute; i++)
+            Assert.Null(await authenticator.AuthenticateAsync("wrong" + i, "192.0.2.7", Ct));
+
+        Assert.Null(await authenticator.AuthenticateAsync(Owner, "192.0.2.7", Ct));
+        Assert.NotNull(await authenticator.AuthenticateAsync(Owner, AttachedAuthenticator.SocketPeer, Ct));
+        Assert.NotNull(await authenticator.AuthenticateAsync(Owner, "192.0.2.8", Ct));
+
+        // Many peers together shut the network for the minute, so a code cannot be guessed from many addresses; the socket stays open.
+        for (var i = 0; i < AttachedAuthenticator.NetworkFailuresPerMinute; i++)
+            Assert.Null(await authenticator.PairAsync("WRONG-CODE", "guesser", "198.51.100." + i, Ct));
+        var code = authenticator.CreatePairingCode();
+        Assert.Null(await authenticator.PairAsync(code.Code, "phone", "203.0.113.1", Ct));
+        Assert.NotNull(await authenticator.AuthenticateAsync(Owner, AttachedAuthenticator.SocketPeer, Ct));
+        Assert.NotNull(await authenticator.PairAsync(code.Code, "phone", AttachedAuthenticator.SocketPeer, Ct));
+    }
+
+    [Fact]
     public async Task AnOwnerCheckThatCannotBeToldRefusesWithoutCountingAsAGuess()
     {
         var authenticator = Create(owner: _ => null);
