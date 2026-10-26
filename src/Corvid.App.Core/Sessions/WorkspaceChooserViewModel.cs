@@ -30,6 +30,12 @@ public sealed class WorkspaceChooserViewModel : ObservableObject
         CancelCommand = new RelayCommand(() => IsOpen = false);
         StartCommand = new AsyncRelayCommand(() => StartAsync(new NewSessionRequest(_path.Trim())), () => _path.Trim().Length > 0);
         WorktreeCommand = new AsyncRelayCommand(WorktreeAsync, () => AskIn is not null);
+        // The worktree is of the session in view: its line and button follow the rail's selection while the chooser is open.
+        _hub.CurrentChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(WorktreeText));
+            WorktreeCommand.NotifyCanExecuteChanged();
+        };
     }
 
     /// <summary>Opens the chooser (Board's "Open a workspace…"), with the window's workspaces listed afresh.</summary>
