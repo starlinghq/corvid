@@ -378,5 +378,8 @@ public class UnavailableAppServices(string reason) : IAppServices
 
     public virtual IPromptHistory CreatePromptHistory(AppComposition app) => new Unavailable.PromptHistory(Reason);
 
+    /// <summary>No episodic index here: the palette searches titles, previews and ids.</summary>
+    public virtual ISessionSearch? CreateSessionSearch(AppComposition app) => null;
+
     public virtual IHostingService CreateHostingService(AppComposition app) => new NoHostingService(Reason);
 }

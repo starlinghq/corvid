@@ -860,19 +860,11 @@ public sealed partial class SessionsPage : Page, IDockProvider
     /// <summary>The header's Aside: the same surface as Ctrl+;, which says what asides come with.</summary>
     private void OnAside(object sender, RoutedEventArgs e) => _composition?.Palette.Execute(Corvid.App.Core.Keys.KeyCommands.Aside);
 
-    /// <summary>The index of the block find-in-session asked for, taken once; -1 when none was asked or it is gone.</summary>
-    private int RevealIndex(SessionViewModel session)
-    {
-        if (ViewModel.TakeReveal() is not { } id)
-            return -1;
-        for (var i = 0; i < session.Blocks.Count; i++)
-        {
-            if (session.Blocks[i].Id == id)
-                return i;
-        }
-
-        return -1;
-    }
+    /// <summary>
+    /// The index of the block find-in-session asked for, or of the turn a search across sessions opened this session at (G-5),
+    /// taken once; -1 when none was asked or it is gone.
+    /// </summary>
+    private int RevealIndex(SessionViewModel session) => ViewModel.TakeRevealIndex(session);
 
     /// <summary>Find chose a block while the page shows: scroll to it now (and once more after the repeater's layout).</summary>
     private void OnRevealRequested(object? sender, EventArgs e)

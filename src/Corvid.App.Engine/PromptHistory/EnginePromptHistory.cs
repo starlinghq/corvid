@@ -11,7 +11,7 @@ namespace Corvid.App.Engine.PromptHistory;
 /// runtime's sessions, newest first, at most <see cref="MaxEntries"/>. The runtime serves one workspace, so every session in
 /// its log is this workspace's. Left out: a job's runs (the job's prompt, not something typed), gateway chats (a chat's
 /// messages, some of them other people's), and the stores' own sessions (MCP pins, the delivery ledger, the memory import). Search over what
-/// sessions said, beyond the prompts, is G-5's (the episodic index).
+/// sessions said, beyond the prompts, is EngineSessionSearch's (G-5, the episodic index).
 /// <para>The log is SQLite, read synchronously, so the read runs on the pool, never on the UI thread.</para>
 /// </summary>
 public sealed class EnginePromptHistory(AppEngine engine) : IPromptHistory
