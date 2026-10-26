@@ -57,6 +57,7 @@ public sealed partial class CorvidRuntime
     /// </exception>
     /// <exception cref="ArgumentException">The mix names a model that is not in the catalogue or cannot serve its slot, or a ladder.</exception>
     /// <exception cref="ModelUnavailableException">A model of the mix is not usable offline.</exception>
+    /// <exception cref="WorkspaceUnavailableException">The source's workspace is gone, or the fork was asked for in another; nothing was copied.</exception>
     public async Task<ForkResult> ForkAsync(string sourceId, ForkOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceId);
@@ -65,6 +66,12 @@ public sealed partial class CorvidRuntime
         CheckForkMix(options.Mix);
         if (IsChildLog(sourceId, cancellationToken))
             throw new SessionForkException($"Session '{TerminalText.Visible(sourceId)}' is a child session, whose log is its parent's record; fork the parent instead.");
+        // A6 review: the fork works where its source does, so a source whose workspace is gone (a removed worktree), or a
+        // fork asked for elsewhere, is refused before anything is copied rather than leaving a log no one can open.
+        var sourceWorkspace = WorkspaceServicesOf(sourceId);
+        if (options.Settings?.Workspace is { } wanted && Canonical(wanted) != sourceWorkspace.Root)
+            throw new WorkspaceUnavailableException($"Session {TerminalText.Visible(sourceId)} works in {TerminalText.Visible(sourceWorkspace.Root)}; " +
+                $"a fork of it works there too, not in {TerminalText.Visible(wanted)}.");
 
         var id = NewSessionId(options.Surface);
         var open = TryGetSession(sourceId, out var source);
@@ -76,8 +83,10 @@ public sealed partial class CorvidRuntime
         {
             duringTurn = true;
             // A5 review: a `!` line that is the session's first message holds nothing before it (its boundary is 0), and
-            // the line without its call is no resting point.
-            if (boundary == 0)
+            // the line without its call is no resting point. Where the session works (WorkspaceBound, its first event since
+            // the A6 review) is not something to fork either.
+            if (boundary == 0 || boundary < BindingWindow
+                && Log.Read(sourceId, 0, boundary, BindingWindow, cancellationToken).All(stored => stored.Payload is WorkspaceBound))
                 throw new SessionForkException($"Session '{TerminalText.Visible(sourceId)}' is running its first line, a shell command, " +
                     "and holds nothing before it to fork yet; fork once it finishes.");
             if (options.Through is { } asked && asked > boundary)

@@ -12,14 +12,18 @@ public sealed class WorkspaceUnavailableException(string message) : InvalidOpera
 /// <param name="Path">The workspace's absolute path.</param>
 /// <param name="Repository">The main checkout, when the workspace is a worktree Corvid created; else null.</param>
 /// <param name="Branch">The worktree's branch, when it is one; else null.</param>
-/// <param name="IsDefault">The session recorded no workspace, so it works in the runtime's configured one.</param>
+/// <param name="IsDefault">
+/// The session recorded no workspace (a log written before A6; every session since records one), so it works in the
+/// runtime's configured one. A session that recorded the configured workspace is not this.
+/// </param>
 public sealed record SessionWorkspace(string Path, string? Repository = null, string? Branch = null, bool IsDefault = false);
 
 /// <summary>
 /// A6 (G-4): a workspace per session. A session records its workspace when it is created (<see cref="WorkspaceBound"/>,
 /// <see cref="SessionSettings.Workspace"/>), and its approvals, sandboxed shell, file tools, checkpoints, Review and Rewind and
-/// project follow it (<see cref="WorkspaceServices"/>, built once per directory). A session that recorded none works in the
-/// configured workspace, as every session did before.
+/// project follow it (<see cref="WorkspaceServices"/>, built once per directory). Every new session records one, the
+/// configured workspace when none was asked for (A6 review), so a process started elsewhere resumes it where it began; only
+/// a log written before A6 recorded none and works in the configured workspace, as every session did before.
 /// </summary>
 public sealed partial class CorvidRuntime
 {
@@ -61,6 +65,7 @@ public sealed partial class CorvidRuntime
     public WorkspaceServices WorkspaceAt(string path)
     {
         var root = CheckWorkspace(path);
+        RefuseRemoving(root);
         if (root == DefaultWorkspace.Root)
             return DefaultWorkspace;
         if (Workspaces is not { } composer)
@@ -169,9 +174,49 @@ public sealed partial class CorvidRuntime
         return scope;
     }
 
-    /// <summary>The <see cref="WorkspaceBound"/> a child of <paramref name="parentId"/> starts with: its parent's, or none.</summary>
-    private WorkspaceBound? ChildBinding(string parentId) =>
-        WorkspaceOf(parentId) is { IsDefault: false } parent ? new WorkspaceBound(parent.Path, parent.Repository, parent.Branch) : null;
+    /// <summary>
+    /// A new session with no workspace asked for records the configured one; an existing one is checked usable (a session
+    /// whose workspace is gone fails here). Another surface that recorded one first is taken at its word.
+    /// </summary>
+    private WorkspaceServices BindDefaultWorkspace(string sessionId)
+    {
+        if (Log.GetHead(sessionId) == 0)
+        {
+            var root = DefaultWorkspace.Root;
+            RefuseRemoving(root);
+            try
+            {
+                Log.Append(sessionId, 0, [EventData.Create(new WorkspaceBound(root))]);
+                _sessionWorkspaces[sessionId] = new SessionWorkspace(root);
+                return DefaultWorkspace;
+            }
+            catch (EventLogConflictException)
+            {
+                // Written by another surface meanwhile: whatever it recorded stands.
+            }
+        }
+        return WorkspaceServicesOf(sessionId);
+    }
+
+    /// <summary>
+    /// The <see cref="WorkspaceBound"/> a child of <paramref name="parentId"/> starts with: its parent's, or the configured
+    /// workspace for a parent whose log (written before A6) recorded none.
+    /// </summary>
+    private WorkspaceBound ChildBinding(string parentId) =>
+        WorkspaceOf(parentId) is var parent && !parent.IsDefault
+            ? new WorkspaceBound(parent.Path, parent.Repository, parent.Branch)
+            : new WorkspaceBound(DefaultWorkspace.Root);
+
+    // A6 review (M2): worktrees being removed (RemoveWorktreeAsync), from before it asks until git is done: no session
+    // starts, resumes or builds services in one meanwhile.
+    private readonly ConcurrentDictionary<string, byte> _removing = new(StringComparer.Ordinal);
+
+    private void RefuseRemoving(string root)
+    {
+        foreach (var removing in _removing.Keys)
+            if (root == removing || root.StartsWith(removing + "/", StringComparison.Ordinal))
+                throw new WorkspaceUnavailableException($"The worktree {TerminalText.Visible(removing)} is being removed; Corvid will not work in it.");
+    }
 
     private static string Canonical(string path)
     {

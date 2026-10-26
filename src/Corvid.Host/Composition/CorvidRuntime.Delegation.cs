@@ -141,24 +141,37 @@ public sealed partial class CorvidRuntime
             }
         }
         // A6 (G-4): a child that asked for a worktree gets one, each after the person approves it (it writes outside the
-        // workspace), before any child opens; a refusal refuses that child only.
-        for (var p = 0; p < plans.Count; p++)
+        // workspace), before any child opens; a refusal refuses that child only. A6 review (M3): whatever fails (a later
+        // approval cancelled, a child that cannot open, the call failing), the worktrees made for children that never ran go
+        // again, and a child's goes when it ends with nothing done in it.
+        var made = new Dictionary<int, MadeWorktree>();
+        try
         {
-            if (plans[p].Plan.Isolation != Isolations.Worktree)
-                continue;
-            try
+            for (var p = 0; p < plans.Count; p++)
             {
-                var workspace = await CreateWorktreeAsync(context.SessionId, "child-" + Guid.NewGuid().ToString("N")[..8], context.CallId,
-                    cancellationToken).ConfigureAwait(false);
-                plans[p] = (plans[p].Index, plans[p].Plan with { Worktree = workspace });
+                if (plans[p].Plan.Isolation != Isolations.Worktree)
+                    continue;
+                try
+                {
+                    var worktree = await MakeWorktreeAsync(context.SessionId, "child-" + Guid.NewGuid().ToString("N")[..8], context.CallId,
+                        cancellationToken).ConfigureAwait(false);
+                    made[plans[p].Index] = worktree;
+                    plans[p] = (plans[p].Index, plans[p].Plan with { Worktree = worktree.Workspace });
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException
+                    && (tasks.Length > 1 || exception is WorktreeRefusedException or Corvid.Kernel.Workspaces.WorktreeException))
+                {
+                    if (tasks.Length == 1)
+                        throw new ChildRefusedException("No worktree for the child: " + exception.Message);
+                    outcomes[plans[p].Index] = Refused("no worktree for the child: " + exception.Message);
+                    plans.RemoveAt(p--);
+                }
             }
-            catch (Exception exception) when (exception is WorktreeRefusedException or Corvid.Kernel.Workspaces.WorktreeException)
-            {
-                if (tasks.Length == 1)
-                    throw new ChildRefusedException("No worktree for the child: " + exception.Message);
-                outcomes[plans[p].Index] = Refused("no worktree for the child: " + exception.Message);
-                plans.RemoveAt(p--);
-            }
+        }
+        catch
+        {
+            await DiscardWorktreesAsync(made.Values).ConfigureAwait(false);
+            throw;
         }
         var started = new List<(int Index, CorvidSession Child)>();
         try
@@ -172,6 +185,8 @@ public sealed partial class CorvidRuntime
                 }
                 catch (ChildRefusedException exception)
                 {
+                    if (made.Remove(index, out var unused))
+                        await DiscardWorktreesAsync([unused]).ConfigureAwait(false);
                     if (tasks.Length == 1)
                         throw;
                     outcomes[index] = Refused(exception.Message);
@@ -184,17 +199,50 @@ public sealed partial class CorvidRuntime
             foreach (var (_, child) in started)
                 await AbandonChildAsync(child, exception is OperationCanceledException ? "the parent's turn was cancelled before it ran"
                     : "the call failed before it ran: " + exception.Message).ConfigureAwait(false);
+            await DiscardWorktreesAsync(made.Values).ConfigureAwait(false);
             throw;
         }
         // Each opened child holds a place until it is run, so every one is run, also when another failed to start.
-        var results = await Task.WhenAll(started.Select(item => RunChildAsync(item.Child, cancellationToken))).ConfigureAwait(false);
+        ChildResult[] results;
+        try
+        {
+            results = await Task.WhenAll(started.Select(item => RunChildAsync(item.Child, cancellationToken))).ConfigureAwait(false);
+        }
+        catch
+        {
+            await DiscardWorktreesAsync(made.Values).ConfigureAwait(false);
+            throw;
+        }
         for (var i = 0; i < results.Length; i++)
         {
-            outcomes[started[i].Index] = Outcome(results[i]);
+            var outcome = Outcome(results[i]);
+            // A child's worktree with work in it stays, and the parent model is told where, so the work can be taken up.
+            if (made.TryGetValue(started[i].Index, out var worktree) && !await RemoveIfUnusedAsync(worktree).ConfigureAwait(false))
+            {
+                outcome["worktree"] = worktree.Worktree.Path;
+                outcome["branch"] = worktree.Worktree.Branch;
+            }
+            outcomes[started[i].Index] = outcome;
             if (results[i].Tainted)
                 context.MarkResultTainted();
         }
         return tasks.Length == 1 ? outcomes[0] : new Dictionary<string, object?> { ["children"] = outcomes };
+    }
+
+    // Worktrees made for children that did not run, or whose run failed: each goes unless something was done in it. Never throws.
+    private async Task DiscardWorktreesAsync(IEnumerable<MadeWorktree> worktrees)
+    {
+        foreach (var worktree in worktrees.ToList())
+        {
+            try
+            {
+                await RemoveIfUnusedAsync(worktree).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                ReportChild($"the worktree {worktree.Worktree.Path} made for a child was not removed: {exception.Message}");
+            }
+        }
     }
 
     /// <summary>How a tainted child's answer begins in the parent's tool result (security M2), before the enclosure's id.</summary>

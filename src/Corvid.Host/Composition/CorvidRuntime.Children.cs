@@ -250,7 +250,7 @@ public sealed partial class CorvidRuntime
                 plan = plan with { Functions = [.. plan.Tools.Select(name => tools.TryGet(name, out var tool) ? tool : null).OfType<Corvid.Tools.ToolFunction>()] };
             }
             Log.Append(id, 0, [EventData.Create(new ChildOf(plan.ParentId, plan.Depth, plan.Goal, plan.Tools, plan.Budget, mix)),
-                .. bound is not null ? [EventData.Create(bound)] : Array.Empty<EventData>()]);
+                EventData.Create(bound)]);
             var spawned = new ChildSpawned(id, plan.Goal, plan.Tools, plan.Budget, plan.By, plan.Tainted, mix, plan.OutputSchema, plan.CallId);
             var sequence = AppendTo(plan.ParentId, spawned);
             _childPlans[id] = plan;

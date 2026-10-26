@@ -29,7 +29,7 @@ public sealed partial class CorvidRuntime
 
     /// <summary>The worktrees Corvid makes, with the checkpoints' git and <see cref="CorvidPaths.Worktrees"/>.</summary>
     public GitWorktrees Worktrees => LazyInitializer.EnsureInitialized(ref _worktrees,
-        () => new GitWorktrees(Options.Checkpoints.GitPath, CorvidPaths.Worktrees(Options)));
+        () => new GitWorktrees(Options.Checkpoints.GitPath, CorvidPaths.Worktrees(Options), TimeSpan.FromSeconds(Options.Sessions.WorktreeTimeoutSeconds)));
 
     private GitWorktrees? _worktrees;
 
@@ -58,7 +58,13 @@ public sealed partial class CorvidRuntime
     /// <exception cref="WorktreeRefusedException">The person said no, or nobody could be asked.</exception>
     /// <exception cref="WorktreeException">Not a repository, a bad or taken name, a filter driver configured, or git failed.</exception>
     public async Task<SessionWorkspace> CreateWorktreeAsync(string sessionId, string? name = null, string? callId = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        (await MakeWorktreeAsync(sessionId, name, callId, cancellationToken).ConfigureAwait(false)).Workspace;
+
+    /// <summary>A worktree made by <see cref="CreateWorktreeAsync"/>: where a session in it works, and git's view of it.</summary>
+    private sealed record MadeWorktree(SessionWorkspace Workspace, GitRepository Repository, GitWorktree Worktree);
+
+    private async Task<MadeWorktree> MakeWorktreeAsync(string sessionId, string? name, string? callId, CancellationToken cancellationToken)
     {
         name ??= GitWorktrees.NewName(DateTimeOffset.UtcNow);
         if (GitWorktrees.CheckName(name) is { } invalid)
@@ -70,7 +76,7 @@ public sealed partial class CorvidRuntime
             $"creates a git worktree outside the workspace, at {path}, on a new branch {branch}", callId, cancellationToken).ConfigureAwait(false);
         var made = await Worktrees.AddAsync(repository, name).ConfigureAwait(false);
         var workspace = repository.Subdirectory.Length == 0 ? made.Path : Path.Combine(made.Path, repository.Subdirectory);
-        return new SessionWorkspace(workspace, repository.MainCheckout, made.Branch);
+        return new MadeWorktree(new SessionWorkspace(workspace, repository.MainCheckout, made.Branch), repository, made);
     }
 
     /// <summary>
@@ -99,23 +105,69 @@ public sealed partial class CorvidRuntime
             ?? throw new WorktreeException($"There is no worktree named {name} of {repository.MainCheckout} that Corvid made.");
         bool Inside(string path) => path == worktree.Path || path.StartsWith(worktree.Path + "/", StringComparison.Ordinal);
         bool WorksInside(string id) => WorkspaceOf(id) is { IsDefault: false } open && Inside(open.Path);
-        // A6 fix: a session this process holds only because a surface opened it (the window's Board made it and never
-        // showed it) is let go of first when it is idle and no surface views it; a running, queued or viewed one stays.
-        // Only the asking surface's own sessions: another surface here (a gateway chat, ACP, HTTP) may keep its handle.
-        var surface = TryGetSession(sessionId, out var asking) ? asking.Surface : null;
-        foreach (var id in _sessions.Where(open => open.Key != sessionId && open.Value.Surface == surface && WorksInside(open.Key))
-                     .Select(open => open.Key).ToList())
-            await ReleaseDriverAsync(id, () => Viewed(id)).ConfigureAwait(false);
-        if (_sessions.Keys.FirstOrDefault(WorksInside) is { } busy)
-            throw new WorktreeRefusedException($"Session {TerminalText.Visible(busy)} works in {worktree.Path} and is open here; close it first.");
-        await AskAsync(sessionId, $"git -C {Quote(repository.MainCheckout)} worktree remove {Quote(worktree.Path)}",
-            $"removes the git worktree at {worktree.Path}, outside the workspace (its branch {worktree.Branch ?? "(detached)"} stays)", null,
-            cancellationToken).ConfigureAwait(false);
-        var removed = await Worktrees.RemoveAsync(repository, name).ConfigureAwait(false);
-        // Its services go; a session recorded there is refused from now on, never moved.
-        foreach (var key in _workspaces.Keys.Where(Inside))
+        // A6 review (M2): marked from here until git is done, so no session starts or resumes in it meanwhile (WorkspaceAt
+        // refuses), also while the person decides; the sessions open here are checked again once they have.
+        if (!_removing.TryAdd(worktree.Path, 0))
+            throw new WorktreeRefusedException($"The worktree {worktree.Path} is already being removed.");
+        try
+        {
+            // A6 fix: a session this process holds only because a surface opened it (the window's Board made it and never
+            // showed it) is let go of first when it is idle and no surface views it; a running, queued or viewed one stays.
+            // Only the asking surface's own sessions: another surface here (a gateway chat, ACP, HTTP) may keep its handle.
+            var surface = TryGetSession(sessionId, out var asking) ? asking.Surface : null;
+            async Task RefuseBusyAsync()
+            {
+                foreach (var id in _sessions.Where(open => open.Key != sessionId && open.Value.Surface == surface && WorksInside(open.Key))
+                             .Select(open => open.Key).ToList())
+                    await ReleaseDriverAsync(id, () => Viewed(id)).ConfigureAwait(false);
+                if (_sessions.Keys.FirstOrDefault(WorksInside) is { } busy)
+                    throw new WorktreeRefusedException($"Session {TerminalText.Visible(busy)} works in {worktree.Path} and is open here; close it first.");
+            }
+            await RefuseBusyAsync().ConfigureAwait(false);
+            await AskAsync(sessionId, $"git -C {Quote(repository.MainCheckout)} worktree remove {Quote(worktree.Path)}",
+                $"removes the git worktree at {worktree.Path}, outside the workspace (its branch {worktree.Branch ?? "(detached)"} stays)", null,
+                cancellationToken).ConfigureAwait(false);
+            await RefuseBusyAsync().ConfigureAwait(false);
+            var removed = await Worktrees.RemoveAsync(repository, name).ConfigureAwait(false);
+            ForgetWorkspacesIn(worktree.Path);
+            return removed;
+        }
+        finally
+        {
+            _removing.TryRemove(worktree.Path, out _);
+        }
+    }
+
+    // A removed worktree's services go; a session recorded there is refused from now on, never moved.
+    private void ForgetWorkspacesIn(string path)
+    {
+        foreach (var key in _workspaces.Keys.Where(key => key == path || key.StartsWith(path + "/", StringComparison.Ordinal)))
             _workspaces.TryRemove(key, out _);
-        return removed;
+    }
+
+    /// <summary>
+    /// A6 review (M3): a child's worktree once the child has ended, removed with its branch when nothing was done in it (no
+    /// changes, no commits); kept otherwise, and then its path and branch are in the child's result. No question: it undoes
+    /// what the person approved for the child, and nothing in it is anyone's work.
+    /// </summary>
+    private async Task<bool> RemoveIfUnusedAsync(MadeWorktree made)
+    {
+        if (!_removing.TryAdd(made.Worktree.Path, 0))
+            return false;
+        try
+        {
+            if (_sessions.Keys.Any(id => WorkspaceOf(id) is { IsDefault: false } open
+                    && (open.Path == made.Worktree.Path || open.Path.StartsWith(made.Worktree.Path + "/", StringComparison.Ordinal))))
+                return false;
+            if (!await Worktrees.RemoveIfUnusedAsync(made.Repository, made.Worktree).ConfigureAwait(false))
+                return false;
+            ForgetWorkspacesIn(made.Worktree.Path);
+            return true;
+        }
+        finally
+        {
+            _removing.TryRemove(made.Worktree.Path, out _);
+        }
     }
 
     private async Task AskAsync(string sessionId, string command, string why, string? callId, CancellationToken cancellationToken)

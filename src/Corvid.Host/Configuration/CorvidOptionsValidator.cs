@@ -82,6 +82,8 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             errors.Add("Corvid:Privacy:Ledger:MaxMegabytes must be between 0 (no cap) and 1048576.");
         if (options.Sessions.RecapAfterMinutes is < 0 or > 10_080)
             errors.Add("Corvid:Sessions:RecapAfterMinutes must be between 0 (off) and 10080 (a week).");
+        if (options.Sessions.WorktreeTimeoutSeconds is < 1 or > 3600)
+            errors.Add("Corvid:Sessions:WorktreeTimeoutSeconds must be between 1 and 3600.");
         if (options.Turn.MaxOutputTokens is < 16 or > 65_536)
             errors.Add("Corvid:Turn:MaxOutputTokens must be between 16 and 65536.");
         if (options.Telemetry.OtlpEndpoint is { Length: > 0 } endpoint

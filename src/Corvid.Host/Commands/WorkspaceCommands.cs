@@ -59,7 +59,7 @@ internal static class WorkspaceCommands
         var bound = runtime.WorkspaceOf(session.Id);
         var lines = new List<string>
         {
-            $"This session works in {TerminalText.Visible(session.Workspace.Root)}" + (bound.IsDefault ? " (the configured workspace)." : "."),
+            $"This session works in {TerminalText.Visible(session.Workspace.Root)}" + (session.Workspace.IsDefault ? " (the configured workspace)." : "."),
         };
         if (bound.Branch is { } branch)
             lines.Add($"It is a worktree of {TerminalText.Visible(bound.Repository ?? "")} on the branch {TerminalText.Visible(branch)}.");

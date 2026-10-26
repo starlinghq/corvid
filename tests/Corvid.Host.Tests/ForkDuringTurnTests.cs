@@ -182,7 +182,8 @@ public sealed class ForkDuringTurnTests
         var line = await source.PostShellAsync("!rm notes.txt", new ShellLine("rm notes.txt"), Ct);
         await prompter.Asked.Task.WaitAsync(Bound, Ct);
 
-        Assert.Equal((long?)0, source.Runner.StepBoundary);
+        // A6 review: the head before the line holds only where the session works (WorkspaceBound), still nothing to fork.
+        Assert.Equal((long?)1, source.Runner.StepBoundary);
         var refused = await Assert.ThrowsAsync<SessionForkException>(() => runtime.ForkAsync(source.Id, new ForkOptions { Surface = "test" }, Ct));
         Assert.Contains("first line, a shell command", refused.Message, StringComparison.Ordinal);
 

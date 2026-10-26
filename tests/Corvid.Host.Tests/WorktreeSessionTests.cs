@@ -216,6 +216,10 @@ public sealed class WorktreeSessionTests
         var worktree = Assert.Single(prompts.Prompts, prompt => prompt.Reasons.Any(reason => reason.Code == ApprovalReasons.Required));
         Assert.Equal((parent.Id, spawned.CallId), (worktree.SessionId, worktree.CallId));
         Assert.Contains(prompts.Prompts, prompt => prompt.Action is ToolAction { Tool.Name: "write_file" });
+        // A6 review (M3): the child left work there, so its worktree stays and the parent model is told where.
+        var result = Events(runtime, parent.Id).OfType<ToolResult>().Last().Result;
+        Assert.Equal(bound.Path, result.GetProperty("worktree").GetString());
+        Assert.Equal(bound.Branch, result.GetProperty("branch").GetString());
     }
 
     [Fact]

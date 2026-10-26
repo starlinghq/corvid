@@ -74,7 +74,8 @@ public sealed class JobWorkspaceTests
 
         var result = Assert.Single(Events(runtime, run).OfType<ToolResult>());
         Assert.Contains("in the configured workspace", result.Result.GetRawText(), StringComparison.Ordinal);
-        Assert.DoesNotContain(Events(runtime, run), payload => payload is WorkspaceBound);
+        // A6 review: the run records the configured workspace, so it is resumed there from anywhere.
+        Assert.Equal(runtime.DefaultWorkspace.Root, Assert.IsType<WorkspaceBound>(Events(runtime, run)[0]).Path);
         Assert.Same(runtime.DefaultWorkspace, runtime.WorkspaceServicesOf(run));
         Assert.Equal(runtime.DefaultWorkspace.Root, Path.GetFullPath(home));
     }
