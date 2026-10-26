@@ -127,6 +127,13 @@ public sealed class BlockConsolidator
     /// <summary>Raised after each attempt the loop or a caller made (not for blocks that needed nothing).</summary>
     public event Action<BlockRewrite>? Processed;
 
+    /// <summary>
+    /// A7 e2e: raised after a <see cref="RunOnceAsync"/> pass that staged something (a block rewrite or a duplicate fact's
+    /// ending), with how many writes it staged, so a surface showing what waits for review (the app's Memory page and its
+    /// badge) hears of a sleep-time pass that ran while nobody asked.
+    /// </summary>
+    public event Action<int>? PassStaged;
+
     /// <summary>The block is over its budget or at least at the threshold.</summary>
     public bool Needs(CoreBlock block)
     {
@@ -208,7 +215,10 @@ public sealed class BlockConsolidator
                     .ConfigureAwait(false));
             }
             // The other sleep-time job that needs no generator: duplicate facts, their ending staged for review.
-            Deduplicator?.StageDuplicates(MemoryJobs.Session, trigger);
+            var duplicates = Deduplicator?.StageDuplicates(MemoryJobs.Session, trigger).Count ?? 0;
+            var staged = results.Count(result => result.Status == BlockRewriteStatus.Staged) + duplicates;
+            if (staged > 0)
+                PassStaged?.Invoke(staged);
             return results;
         }
         finally

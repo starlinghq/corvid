@@ -52,6 +52,24 @@ public sealed class ConsolidationTests
         [.. store.Log.Read(MemoryJobs.Session, cancellationToken: Ct).Select(e => e.Payload)];
 
     [Fact]
+    public async Task A_pass_that_stages_says_so_and_one_that_stages_nothing_is_silent()
+    {
+        // A7 e2e: the app's Memory page never showed what an idle pass staged; it hears of it through PassStaged.
+        using var store = FullAgentBlock();
+        var writer = Writer(store);
+        var (job, _, _) = Job(store, writer, Rewrite);
+        var heard = new List<int>();
+        job.PassStaged += heard.Add;
+
+        await job.RunOnceAsync(cancellationToken: Ct);
+        Assert.Equal([1], heard);
+
+        // A consolidation waits: the next pass stages nothing and says nothing.
+        await job.RunOnceAsync(cancellationToken: Ct);
+        Assert.Equal([1], heard);
+    }
+
+    [Fact]
     public async Task A_block_at_its_threshold_is_rewritten_by_the_generator_and_staged_never_applied()
     {
         using var store = FullAgentBlock();

@@ -168,6 +168,20 @@ public sealed class MemoryServiceTests
     }
 
     [Fact]
+    public async Task ASleepTimePassThatStagesTellsTheMemoryPage()
+    {
+        // A7 e2e: an idle pass staged a rewrite after the turn's own notice, and the Memory page and its badge never showed it.
+        await using var fixture = await FullAgentBlockAsync();
+        var changed = 0;
+        fixture.Engine.MemoryChanged += () => Interlocked.Increment(ref changed);
+
+        Assert.Single(await Memory(fixture).Consolidator!.RunOnceAsync("idle", Ct));
+
+        Assert.Equal(1, Volatile.Read(ref changed));
+        Assert.Single((await Service(fixture).LoadAsync(Ct)).BlockUpdates);
+    }
+
+    [Fact]
     public async Task ConsolidateNowStagesARewriteThatReplacesTheBlockShownAsADiff()
     {
         await using var fixture = await FullAgentBlockAsync();
