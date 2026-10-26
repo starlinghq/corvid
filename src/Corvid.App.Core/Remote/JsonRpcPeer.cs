@@ -96,23 +96,30 @@ public sealed class JsonRpcPeer : IAsyncDisposable
     }
 
     /// <summary>Closes the connection, telling the other end why; pending requests fail.</summary>
-    public ValueTask CloseAsync(string reason)
+    public ValueTask CloseAsync(string reason) => CloseAsync(reason, fromReading: false);
+
+    // The reading loop's own close does not wait for the reading to end.
+    private ValueTask CloseAsync(string reason, bool fromReading)
     {
         // One close runs; a later call (the disposal after it) waits for it, so the reason given first is the one sent.
         lock (_closeGate)
         {
-            _closing ??= _closed.TrySetResult(reason) ? CloseCoreAsync(reason) : Task.CompletedTask;
+            _closing ??= _closed.TrySetResult(reason) ? CloseCoreAsync(reason, fromReading) : Task.CompletedTask;
             return new ValueTask(_closing);
         }
     }
 
-    private async Task CloseCoreAsync(string reason)
+    private async Task CloseCoreAsync(string reason, bool fromReading)
     {
         _outgoing.Writer.TryComplete();
         // What was queued before the close (an error answer) goes out first, briefly.
         if (_writing is { } writing)
             await writing.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         await _channel.CloseAsync(reason, CancellationToken.None).ConfigureAwait(false);
+        // Reading goes on until the other end closes back, briefly. Cancelling a WebSocket's read aborts the socket, and on a
+        // busy machine the abort dropped the refusal's answer and the close with its reason before they had left.
+        if (_reading is { IsCompleted: false } reading && !fromReading)
+            await reading.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         Finish();
     }
 
@@ -167,11 +174,12 @@ public sealed class JsonRpcPeer : IAsyncDisposable
         catch (Exception exception) when (exception is IOException or OperationCanceledException or ObjectDisposedException
                                               or InvalidOperationException)
         {
-        }
-        finally
-        {
             Finish();
+            return;
         }
+        // The queue was completed by Finish or by a close; a close sends the channel's close and then finishes itself.
+        if (!_closed.Task.IsCompleted)
+            Finish();
     }
 
     private async Task ReadAsync()
@@ -183,17 +191,22 @@ public sealed class JsonRpcPeer : IAsyncDisposable
             {
                 var text = await _channel.ReceiveAsync(_stop.Token).ConfigureAwait(false);
                 if (text is null)
+                {
+                    // The other end closed: close back (a WebSocket's closing handshake) unless this end is closing already.
+                    if (!_closed.Task.IsCompleted)
+                        await _channel.CloseAsync("closed", CancellationToken.None).ConfigureAwait(false);
                     break;
+                }
                 if (!Dispatch(text))
                 {
-                    await CloseAsync("not JSON-RPC").ConfigureAwait(false);
+                    await CloseAsync("not JSON-RPC", fromReading: true).ConfigureAwait(false);
                     break;
                 }
             }
         }
         catch (InvalidDataException exception)
         {
-            await CloseAsync(exception.Message).ConfigureAwait(false);
+            await CloseAsync(exception.Message, fromReading: true).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is IOException or OperationCanceledException or ObjectDisposedException)
         {
