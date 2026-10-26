@@ -194,6 +194,42 @@ public sealed class ImageAttachmentTests : IDisposable
         Assert.Contains("@innocent.png", ImageAttachments.FromReferences("@innocent.png", Environment()).Problems[0], StringComparison.Ordinal);
     }
 
+    // A6 review: a link anywhere in the path (a directory's), not only the file's own, is followed before the check.
+    [Fact]
+    public void A_directory_link_into_a_protected_location_is_refused()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Directory.CreateSymbolicLink(Path.Combine(_root, "work", "pictures"), Path.Combine(_root, "vault"));
+        Directory.CreateSymbolicLink(Path.Combine(_root, "home", "Downloads"), Path.Combine(_root, "vault"));
+
+        Assert.Contains("inside a protected location", Assert.Throws<ImageRefusedException>(() =>
+            ImageAttachments.FromPath("pictures/key.png", Environment())).Message, StringComparison.Ordinal);
+        Assert.Contains("inside a protected location", Assert.Throws<ImageRefusedException>(() =>
+            ImageAttachments.FromPath("~/Downloads/key.png", Environment())).Message, StringComparison.Ordinal);
+    }
+
+    // A6 review: only a regular file is opened, so a FIFO (whose open would wait for a writer) or a device is refused at once.
+    [Fact]
+    public async Task A_pipe_or_a_device_is_refused_without_being_opened()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        var fifo = Path.Combine(_root, "work", "pipe.png");
+        using (var mkfifo = System.Diagnostics.Process.Start("mkfifo", [fifo]))
+            await mkfifo.WaitForExitAsync(TestContext.Current.CancellationToken);
+        Assert.True(File.Exists(fifo));
+
+        // Run off the test's thread with a bound, so a regression fails instead of hanging the run.
+        var refused = await Task.Run(() => Assert.Throws<ImageRefusedException>(() => ImageAttachments.FromPath(fifo, Environment())),
+            TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.Contains("not a regular file", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("@pipe.png: it is empty or not a regular file", Assert.Single(ImageAttachments.FromReferences("@pipe.png", Environment()).Problems),
+            StringComparison.Ordinal);
+        Assert.Contains("not a regular file", Assert.Throws<ImageRefusedException>(() =>
+            ImageAttachments.FromPath("/dev/zero", Environment())).Message, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

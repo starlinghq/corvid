@@ -96,10 +96,12 @@ public static partial class ImageAttachments
         var full = Path.GetFullPath(Path.IsPathRooted(expanded) ? expanded : Path.Combine(environment.Workspace, expanded));
         try
         {
-            var real = new FileInfo(full).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? full;
+            // A6 review: every component's links are followed (realpath), not only the last one's, so a directory link
+            // into a protected location is caught; the protected paths are compared as written and as resolved.
+            var real = Kernel.Checkpoints.RealPaths.Resolve(full);
             var protectedPaths = environment.Protected;
             foreach (var denied in protectedPaths.Vault.Concat(protectedPaths.CredentialStores).Concat(protectedPaths.SafetyConfiguration))
-                if (Path.IsPathFullyQualified(denied) && (Under(full, denied) || Under(real, denied)))
+                if (Path.IsPathFullyQualified(denied) && (Under(full, denied) || Under(real, denied) || Under(real, Kernel.Checkpoints.RealPaths.Resolve(Path.GetFullPath(denied)))))
                     throw new ImageRefusedException($"{trimmed} is inside a protected location ({denied}); Corvid does not read files there.");
             if (Workspace.IsSecretName(Path.GetFileName(real)) || Workspace.IsSecretName(Path.GetFileName(full)))
                 throw new ImageRefusedException($"{trimmed} is a credential file; Corvid does not read those.");
@@ -111,15 +113,27 @@ public static partial class ImageAttachments
         }
     }
 
-    // The size is checked before reading, so a huge file named by mistake is never loaded.
+    // The size is checked before reading, so a huge file named by mistake is never loaded. Only a regular file is opened
+    // (A6 review): a FIFO, a socket or a device reports no size, and opening a FIFO with no writer would wait for ever, so
+    // a file of no bytes is refused before it is opened (an empty file is no image either). The read itself stops past the
+    // limit, so a file that grows after the check is still bounded.
     private static ImageInput Read(string path, string? name = null)
     {
         var info = new FileInfo(path);
         if (!info.Exists)
             throw new FileNotFoundException("there is no such file.", path);
+        if (info.Length == 0)
+            throw new ImageRefusedException("it is empty or not a regular file (a pipe, socket or device), so it was not read.");
         if (info.Length > ImageFiles.MaxBytes)
             throw new ImageRefusedException($"it is {ImageFiles.Size(info.Length)}; an image may be at most {ImageFiles.Size(ImageFiles.MaxBytes)}.");
-        return new ImageInput(File.ReadAllBytes(path), name ?? info.Name);
+        using var stream = new FileStream(path, new FileStreamOptions { Mode = FileMode.Open, Access = FileAccess.Read, Share = FileShare.Read });
+        var buffer = new byte[Math.Min(info.Length, ImageFiles.MaxBytes) + 1];
+        var read = 0;
+        while (read < buffer.Length && stream.Read(buffer, read, buffer.Length - read) is var count and > 0)
+            read += count;
+        if (read > ImageFiles.MaxBytes)
+            throw new ImageRefusedException($"it is over {ImageFiles.Size(ImageFiles.MaxBytes)}; an image may be at most that.");
+        return new ImageInput(buffer[..read], name ?? info.Name);
     }
 
     private static string Reason(Exception exception) => exception switch
