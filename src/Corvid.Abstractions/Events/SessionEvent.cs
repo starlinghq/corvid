@@ -41,6 +41,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(ChildFinished), "child_finished")]
 [JsonDerivedType(typeof(ChildOf), "child_of")]
 [JsonDerivedType(typeof(WorkspaceBound), "workspace_bound")]
+[JsonDerivedType(typeof(MemoryJobRan), "memory_job_ran")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -157,6 +158,11 @@ public sealed record CompactionSummary(string? Goal, ImmutableArray<string> Cons
     ImmutableArray<string> Files, ImmutableArray<string> OpenQuestions, string? NextStep);
 public sealed record MemoryWritten(string MemoryId, string Operation) : SessionEvent;
 public sealed record SkillChanged(string SkillId, string Revision, string Author) : SessionEvent;
+// Plan §9.5: one run of a sleep-time memory job (Job, a MemoryJobs name) on Subject (block:user), what came of it (Outcome:
+// staged, proposed, declined, refused or failed), why in Detail (sizes and reasons, never the memory's text), the staged
+// write's id when it staged one, and what started it (Trigger: idle, cli, app).
+public sealed record MemoryJobRan(string Job, string Subject, string Outcome, string Detail, string Trigger,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingId = null) : SessionEvent;
 // Null clears the standing goal. TodosSet replaces the todo list without changing earlier events.
 public sealed record GoalSet(string? Goal) : SessionEvent;
 public sealed record TodosSet(ImmutableArray<TodoItem> Items) : SessionEvent;
@@ -219,6 +225,15 @@ public sealed record McpToolHeld(string Server, string Tool, string Reason, stri
 public sealed record McpToolAccepted(string Server, string Tool, string Hash, bool Flagged = false) : SessionEvent;
 
 public sealed record McpPinsForgotten(string Server, int Tools) : SessionEvent;
+
+public static class MemoryJobs
+{
+    /// <summary>The event-log session the sleep-time memory jobs record their background runs in (plan §9.5).</summary>
+    public const string Session = "memory-jobs";
+
+    /// <summary>The block rewrite job: a core block over or near its budget rewritten to fit, staged for review.</summary>
+    public const string ConsolidateBlock = "consolidate_block";
+}
 
 public static class McpSessions
 {
