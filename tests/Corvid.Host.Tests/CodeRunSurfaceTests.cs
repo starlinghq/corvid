@@ -32,6 +32,9 @@ public sealed class CodeRunSurfaceTests
         Assert.Equal("3 of 50 tool calls · 1 KB of 8 MB results · exit 1 · timed out",
             CodeRunPresentation.Usage(0, Json("""{"calls":3,"response_bytes":1024,"exit_code":1,"timed_out":true}""")));
         Assert.Equal("2 of 50 tool calls", CodeRunPresentation.Usage(2, Json("\"done\"")));
+        // The code tool's result: "tool_calls" counts, "calls" lists them.
+        Assert.Equal("1 of 50 tool calls · exit 0",
+            CodeRunPresentation.Usage(0, Json("""{"language":"python","exit_code":0,"stdout":"","tool_calls":1,"calls":[{"id":"c1.1","tool":"read_file","ok":true}]}""")));
         Assert.Equal("", CodeRunPresentation.Outcome(null));
     }
 

@@ -51,7 +51,7 @@ public static class CodeRunPresentation
     public static string Usage(int nestedCalls, JsonElement? result = null, CodeModeLimits? limits = null)
     {
         limits ??= CodeModeLimits.Default;
-        var calls = Integer(result, "calls", "tool_calls") ?? nestedCalls;
+        var calls = Integer(result, "tool_calls", "calls") ?? nestedCalls;
         var used = string.Create(CultureInfo.InvariantCulture, $"{calls} of {limits.MaxCalls} tool call{(limits.MaxCalls == 1 ? "" : "s")}");
         var outcome = Outcome(result, limits);
         return outcome.Length == 0 ? used : used + " · " + outcome;
@@ -91,7 +91,7 @@ public static class CodeRunPresentation
         if (result is not { ValueKind: JsonValueKind.Object } value)
             return null;
         foreach (var name in names)
-            if (value.TryGetProperty(name, out var item) && item.TryGetInt64(out var number))
+            if (value.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.Number && item.TryGetInt64(out var number))
                 return number;
         return null;
     }

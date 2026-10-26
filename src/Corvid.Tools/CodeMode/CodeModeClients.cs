@@ -66,6 +66,22 @@ public static class CodeModeClients
     };
 
     /// <summary>
+    /// The client as text placed around a script that runs as one file (code mode's runner reads the script from standard
+    /// input): for Python the client's definitions before the script, with the module also importable as
+    /// <c>corvid_tools</c> and named <c>corvid</c>; for JavaScript (an ES module) one constant <c>corvid</c> before the script
+    /// holding every wrapper, so no name of the script's can collide with the client's; for C# the client's classes after
+    /// the top-level statements. Tool calls read <c>corvid.read_file(…)</c> in Python and <c>await corvid.read_file(…)</c>
+    /// in JavaScript; <c>await CorvidTools.ReadFileAsync(…)</c> in C#.
+    /// </summary>
+    public static (string Prefix, string Suffix) Inline(CodeModeLanguage language, IReadOnlyList<CodeModeTool> tools) => language switch
+    {
+        CodeModeLanguage.CSharp => ("", "\n\n" + CSharp(tools)),
+        CodeModeLanguage.Python => (Python(tools) + PythonInlineTail + "\n\n", ""),
+        CodeModeLanguage.JavaScript => (JavaScript(tools, inline: true) + "\n", ""),
+        _ => throw new ArgumentOutOfRangeException(nameof(language), language, "not a code mode language"),
+    };
+
+    /// <summary>
     /// A C# script with its client: the script as written, then the client's classes (a file-based app's type declarations
     /// follow its top-level statements). The client adds no <c>using</c> directive and no package.
     /// </summary>
@@ -250,7 +266,7 @@ public static class CodeModeClients
         "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise",
         "return", "try", "while", "with", "yield", "match", "case", "type",
         // The module's own names.
-        "call", "limits", "last_call_tainted", "close", "tools", "CorvidToolError",
+        "call", "limits", "last_call_tainted", "close", "tools", "CorvidToolError", "corvid",
     };
 
     /// <summary>The Python client: the module <see cref="PythonFileName"/>, standard library only, synchronous.</summary>
@@ -310,6 +326,19 @@ public static class CodeModeClients
         }
         return doc.ToString();
     }
+
+    // Inline (one file): the definitions above are also the module corvid_tools, and the name corvid.
+    private const string PythonInlineTail = """
+
+        import sys as _corvid_sys
+        import types as _corvid_types
+
+        corvid = _corvid_types.ModuleType("corvid_tools")
+        for _corvid_name in __all__:
+            setattr(corvid, _corvid_name, globals()[_corvid_name])
+        _corvid_sys.modules["corvid_tools"] = corvid
+        del _corvid_name
+        """;
 
     private const string PythonRuntime = """
         import json as _corvid_json
@@ -424,19 +453,27 @@ public static class CodeModeClients
         "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield", "let", "static", "implements",
         "interface", "package", "private", "protected", "public", "await", "arguments", "eval", "undefined", "NaN", "Infinity",
         // The module's own names.
-        "call", "limits", "lastCallTainted", "close", "tools", "CorvidToolError", "options",
+        "call", "limits", "lastCallTainted", "close", "tools", "CorvidToolError", "options", "corvid",
     };
 
     /// <summary>
     /// The JavaScript client: the ES module <see cref="JavaScriptFileName"/> for Node, built-ins only. Every wrapper returns
     /// a promise; required parameters are positional and the optional ones go in a last object by their descriptor names.
     /// </summary>
-    public static string JavaScript(IReadOnlyList<CodeModeTool> tools)
+    public static string JavaScript(IReadOnlyList<CodeModeTool> tools) => JavaScript(tools, inline: false);
+
+    private static string JavaScript(IReadOnlyList<CodeModeTool> tools, bool inline)
     {
         ArgumentNullException.ThrowIfNull(tools);
         var text = new StringBuilder();
         text.Append(Header("//"));
-        text.Append(JavaScriptRuntime);
+        text.Append(JavaScriptImports);
+        // Inline, everything is inside one function whose result is the constant corvid: nothing else is declared at the
+        // script's top level but the two imports' private names.
+        var export = inline ? "" : "export ";
+        if (inline)
+            text.Append("\nconst corvid = (() => {\n");
+        text.Append(inline ? JavaScriptRuntime.Replace("\nexport ", "\n", StringComparison.Ordinal) : JavaScriptRuntime);
         var functions = new HashSet<string>(StringComparer.Ordinal);
         var table = new List<(string Wire, string Function)>();
         foreach (var tool in tools)
@@ -451,7 +488,7 @@ public static class CodeModeClients
             if (optional.Count > 0)
                 signature.Add("options = {}");
             text.Append('\n');
-            text.Append("export async function ").Append(function).Append('(').Append(string.Join(", ", signature)).Append(") {\n");
+            text.Append(export).Append("async function ").Append(function).Append('(').Append(string.Join(", ", signature)).Append(") {\n");
             text.Append("  const __corvidArgs = {};\n");
             foreach (var (parameter, name) in required)
                 text.Append("  __corvidArgs[").Append(Literal(parameter.Wire)).Append("] = ").Append(name).Append(";\n");
@@ -462,17 +499,25 @@ public static class CodeModeClients
             text.Append("}\n");
             text.Append(function).Append(".description = ").Append(Literal(Doc(tool, parameters))).Append(";\n");
         }
-        text.Append("\nexport const tools = Object.freeze({\n");
+        text.Append('\n').Append(export).Append("const tools = Object.freeze({\n");
         foreach (var (wire, function) in table)
             text.Append("  ").Append(Literal(wire)).Append(": ").Append(function).Append(",\n");
-        text.Append("});\n\nexport default tools;\n");
-        return text.ToString();
+        text.Append("});\n");
+        if (!inline)
+            return text.Append("\nexport default tools;\n").ToString();
+        text.Append("\nreturn Object.freeze({ call, limits, lastCallTainted, close, tools, CorvidToolError");
+        foreach (var (_, function) in table)
+            text.Append(", ").Append(function);
+        return text.Append(" });\n})();\n").ToString();
     }
 
-    private const string JavaScriptRuntime = """
+    private const string JavaScriptImports = """
         import __corvidNet from "node:net";
         import __corvidFs from "node:fs";
 
+        """;
+
+    private const string JavaScriptRuntime = """
         /** A tool call the host answered with an error: code (see the wire format), message, detail and tainted. */
         export class CorvidToolError extends Error {
           constructor(code, message, detail = undefined, tainted = false) {

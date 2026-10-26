@@ -116,13 +116,16 @@ public sealed class CodeModeClientTests
             }
         }
 
-        public async Task<(int ExitCode, string Output, string Error)> RunAsync(string file, string arguments, string workingDirectory, TimeSpan timeout)
+        /// <param name="input">The script on standard input, as code mode's runner gives it; null for none.</param>
+        public async Task<(int ExitCode, string Output, string Error)> RunAsync(string file, string arguments, string workingDirectory, TimeSpan timeout,
+            string? input = null)
         {
             var start = new ProcessStartInfo(file, arguments)
             {
                 WorkingDirectory = workingDirectory,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                RedirectStandardInput = input is not null,
                 UseShellExecute = false,
             };
             start.Environment["CORVID_TOOLS_SOCKET"] = SocketPath;
@@ -131,6 +134,11 @@ public sealed class CodeModeClientTests
             start.Environment["DOTNET_NOLOGO"] = "1";
             start.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
             using var process = Process.Start(start)!;
+            if (input is not null)
+            {
+                await process.StandardInput.WriteAsync(input.AsMemory(), Ct);
+                process.StandardInput.Close();
+            }
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
             limit.CancelAfter(timeout);
             var output = process.StandardOutput.ReadToEndAsync(limit.Token);
@@ -196,6 +204,88 @@ public sealed class CodeModeClientTests
         Assert.Equal(4, host.Session.Calls);
     }
 
+    private const string PythonScript = """
+        import json, os
+        import corvid_tools as t
+
+        out = {}
+        right = os.environ["CORVID_TOOLS_TOKEN_FILE"]
+        os.environ["CORVID_TOOLS_TOKEN_FILE"] = os.environ["WRONG_TOKEN_FILE"]
+        try:
+            t.get_weather("Nowhere")
+        except t.CorvidToolError as e:
+            out["wrong_token"] = e.code
+        os.environ["CORVID_TOOLS_TOKEN_FILE"] = right
+        out["weather"] = t.get_weather("Paris", days=2, tags=["a", "b"])
+        out["weather_tainted"] = t.last_call_tainted()
+        out["page"] = t.fetch_page("https://example.org/")
+        out["page_tainted"] = t.last_call_tainted()
+        try:
+            t.fail_tool("why")
+        except t.CorvidToolError as e:
+            out["fail"] = {"code": e.code, "message": e.message, "detail": e.detail, "tainted": e.tainted}
+        try:
+            t.call("not_offered", {})
+        except t.CorvidToolError as e:
+            out["unknown"] = e.code
+        out["keywords"] = t.class_("x", in_=1, call_=True, cancellationToken=0.5)
+        out["limits"] = t.limits()
+        assert "Weather." in t.get_weather.__doc__
+        print(json.dumps(out, separators=(",", ":")))
+        """;
+
+    private const string JavaScriptBody = """
+        const out = {};
+        const right = process.env.CORVID_TOOLS_TOKEN_FILE;
+        process.env.CORVID_TOOLS_TOKEN_FILE = process.env.WRONG_TOKEN_FILE;
+        try { await t.get_weather("Nowhere"); } catch (e) { out.wrong_token = e.code; }
+        process.env.CORVID_TOOLS_TOKEN_FILE = right;
+        out.weather = await t.get_weather("Paris", { days: 2, tags: ["a", "b"] });
+        out.weather_tainted = t.lastCallTainted();
+        out.page = await t.fetch_page("https://example.org/");
+        out.page_tainted = t.lastCallTainted();
+        try { await t.fail_tool("why"); } catch (e) {
+          if (!(e instanceof t.CorvidToolError)) throw e;
+          out.fail = { code: e.code, message: e.message.slice(e.code.length + 2), detail: e.detail, tainted: e.tainted };
+        }
+        try { await t.call("not_offered", {}); } catch (e) { out.unknown = e.code; }
+        out.keywords = await t.tools["class"]("x", { in: 1, call: true, cancellationToken: 0.5 });
+        out.limits = t.limits();
+        if (!t.get_weather.description.includes("Weather.")) throw new Error("no description");
+        console.log(JSON.stringify(out));
+        """;
+
+    [Fact]
+    public async Task The_python_client_inline_runs_from_standard_input_as_code_mode_runs_it()
+    {
+        Assert.SkipWhen(Find("python3") is null, "python3 is not installed");
+        await using var host = new FakeHost(Tools());
+        var work = host.Directory.CreateSubdirectory("work").FullName;
+        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.Python, Tools());
+
+        // As the code tool runs a script: one file on standard input, nothing beside it; corvid_tools imports from memory.
+        var run = await host.RunAsync("python3", "-E -s -B -", work, TimeSpan.FromSeconds(60),
+            prefix + "assert corvid.get_weather is get_weather\n" + PythonScript + suffix);
+
+        AssertReport(host, run);
+        Assert.Empty(System.IO.Directory.EnumerateFileSystemEntries(work));
+    }
+
+    [Fact]
+    public async Task The_javascript_client_inline_keeps_its_names_out_of_the_scripts_way()
+    {
+        Assert.SkipWhen(Find("node") is null, "node is not installed");
+        await using var host = new FakeHost(Tools());
+        var work = host.Directory.CreateSubdirectory("work").FullName;
+        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.JavaScript, Tools());
+
+        // The script declares names the client uses inside; only corvid is the client's at the top level.
+        var run = await host.RunAsync("node", "--input-type=module -", work, TimeSpan.FromSeconds(60),
+            prefix + "const call = 1; const tools = 2; function limits() {} class CorvidToolError {}\nconst t = corvid;\n" + JavaScriptBody + suffix);
+
+        AssertReport(host, run);
+    }
+
     [Fact]
     public async Task The_python_client_calls_tools_over_the_socket_and_raises_errors()
     {
@@ -204,35 +294,7 @@ public sealed class CodeModeClientTests
         var work = host.Directory.CreateSubdirectory("work").FullName;
         var client = CodeModeClients.Generate(CodeModeLanguage.Python, Tools());
         await File.WriteAllTextAsync(Path.Combine(work, client.FileName!), client.Source, Ct);
-        await File.WriteAllTextAsync(Path.Combine(work, "script.py"), """
-            import json, os
-            import corvid_tools as t
-
-            out = {}
-            right = os.environ["CORVID_TOOLS_TOKEN_FILE"]
-            os.environ["CORVID_TOOLS_TOKEN_FILE"] = os.environ["WRONG_TOKEN_FILE"]
-            try:
-                t.get_weather("Nowhere")
-            except t.CorvidToolError as e:
-                out["wrong_token"] = e.code
-            os.environ["CORVID_TOOLS_TOKEN_FILE"] = right
-            out["weather"] = t.get_weather("Paris", days=2, tags=["a", "b"])
-            out["weather_tainted"] = t.last_call_tainted()
-            out["page"] = t.fetch_page("https://example.org/")
-            out["page_tainted"] = t.last_call_tainted()
-            try:
-                t.fail_tool("why")
-            except t.CorvidToolError as e:
-                out["fail"] = {"code": e.code, "message": e.message, "detail": e.detail, "tainted": e.tainted}
-            try:
-                t.call("not_offered", {})
-            except t.CorvidToolError as e:
-                out["unknown"] = e.code
-            out["keywords"] = t.class_("x", in_=1, call_=True, cancellationToken=0.5)
-            out["limits"] = t.limits()
-            assert "Weather." in t.get_weather.__doc__
-            print(json.dumps(out, separators=(",", ":")))
-            """, Ct);
+        await File.WriteAllTextAsync(Path.Combine(work, "script.py"), PythonScript, Ct);
 
         // -E -s: no PYTHON* variables and no user site; the script's directory stays on the path for the module.
         var run = await host.RunAsync("python3", "-E -s script.py", work, TimeSpan.FromSeconds(60));
@@ -248,28 +310,7 @@ public sealed class CodeModeClientTests
         var work = host.Directory.CreateSubdirectory("work").FullName;
         var client = CodeModeClients.Generate(CodeModeLanguage.JavaScript, Tools());
         await File.WriteAllTextAsync(Path.Combine(work, client.FileName!), client.Source, Ct);
-        await File.WriteAllTextAsync(Path.Combine(work, "script.mjs"), """
-            import * as t from "./corvid_tools.mjs";
-
-            const out = {};
-            const right = process.env.CORVID_TOOLS_TOKEN_FILE;
-            process.env.CORVID_TOOLS_TOKEN_FILE = process.env.WRONG_TOKEN_FILE;
-            try { await t.get_weather("Nowhere"); } catch (e) { out.wrong_token = e.code; }
-            process.env.CORVID_TOOLS_TOKEN_FILE = right;
-            out.weather = await t.get_weather("Paris", { days: 2, tags: ["a", "b"] });
-            out.weather_tainted = t.lastCallTainted();
-            out.page = await t.fetch_page("https://example.org/");
-            out.page_tainted = t.lastCallTainted();
-            try { await t.fail_tool("why"); } catch (e) {
-              if (!(e instanceof t.CorvidToolError)) throw e;
-              out.fail = { code: e.code, message: e.message.slice(e.code.length + 2), detail: e.detail, tainted: e.tainted };
-            }
-            try { await t.call("not_offered", {}); } catch (e) { out.unknown = e.code; }
-            out.keywords = await t.tools["class"]("x", { in: 1, call: true, cancellationToken: 0.5 });
-            out.limits = t.limits();
-            if (!t.get_weather.description.includes("Weather.")) throw new Error("no description");
-            console.log(JSON.stringify(out));
-            """, Ct);
+        await File.WriteAllTextAsync(Path.Combine(work, "script.mjs"), "import * as t from \"./corvid_tools.mjs\";\n" + JavaScriptBody, Ct);
 
         // The open socket must not keep the script alive: it exits on its own.
         var run = await host.RunAsync("node", "script.mjs", work, TimeSpan.FromSeconds(60));
