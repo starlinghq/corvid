@@ -22,7 +22,7 @@ pull request starlinghq/corvid#71.
 | A4 the gaps A3 left: the running turn, records, egress, hosting, parity; the engine becomes the default | done, verified end to end in three rounds (§1.5) | branch `a4/engine` |
 | A5 model switching at any time, subagents with a model mix, G-15 forks mid-turn, the A4 leftovers | done, verified end to end in two rounds (§1.6) | branch `a5/engine` |
 | A6 attached mode (G-1), workspaces and worktrees per session (G-4), images (K-8, F19), search across sessions (G-5), the `corvid-app` binary and its tarball (U-7, U-9), the A5 leftovers | done, verified end to end in two rounds (§1.7) | branch `a6/engine` |
-| A7 code mode (plan §15, parity row 1.6), architect/editor turns (plan §6), sleep-time memory jobs (plan §9.5) | merged and tested where the groups meet; the app run once on the engine (§1.8) | branch `a7/int` |
+| A7 code mode (plan §15, parity row 1.6), architect/editor turns (plan §6), sleep-time memory jobs (plan §9.5) | done, verified end to end in two rounds (§1.8) | branch `a7/engine` |
 
 The build ran as a workflow in a cloud container: one agent per step, each building, launching the app on a virtual
 display, screenshotting it and comparing it with the mockup renders, then an independent verifier. It was stopped during
