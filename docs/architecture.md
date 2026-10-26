@@ -4325,6 +4325,63 @@ Frozen at version 1; `Corvid.Tools.CodeMode` implements the host side (`CodeMode
   names that are not identifiers (`[A-Za-z_][A-Za-z0-9_]*`, at most 64). Descriptions are untrusted text (an MCP server
   may have written them): a generator escapes them for the language it writes.
 
+### Code mode clients and surfaces (A7)
+
+The generated clients a script calls tools with, and how every surface shows a run and the calls its script made. No new
+project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the presentation in the host
+(`CodeRunPresentation`, `CodeRunCard`), and each surface reads them.
+
+- **Clients** (`CodeModeClients`), generated per run from the run's tools (`CodeModeCatalog.Describe`, or a descriptor
+  read back with `FromJson`): one typed wrapper per tool (required parameters positional, optional ones named; strings,
+  integers, numbers, booleans and arrays of them typed, anything else JSON), the socket and token found in
+  `CORVID_TOOLS_SOCKET` and `CORVID_TOOLS_TOKEN_FILE`, the hello, one request at a time, and an error answer raised as an
+  exception carrying `code`, `message`, `detail` and `tainted`; `limits()` and the last call's taint are readable. Standard
+  library only, no package.
+  - **Python**: `CorvidToolError`; `corvid.read_file(path)` (also `import corvid_tools`), `call(tool, args)`,
+    `limits()`, `last_call_tainted()`. Synchronous.
+  - **JavaScript** (Node, an ES module): `CorvidToolError`; `await corvid.read_file(path, { optional })`,
+    `corvid.call(tool, args)`, `corvid.limits()`, `corvid.lastCallTainted()`. An idle socket does not keep the script alive.
+  - **C#** (a file-based app): `CorvidTools.ReadFileAsync(path, …, cancellationToken)` returning the result as a
+    `JsonElement`, `CorvidTools.CallAsync`, `Limits`, `LastCallTainted`, `CorvidToolException`; global namespace, every type
+    fully qualified (no `using` can follow top-level statements), no reflection-based serialization.
+  - **Forms.** `Inline(language, tools)` gives the text around a script run as one file (the code tool reads the script
+    from standard input): Python's definitions before the script (so a `from __future__` import, which must come first,
+    cannot be used), JavaScript's one constant `corvid` before the script (the client's other names live inside it, so a
+    script's own `call` or `tools` cannot collide), C#'s classes after the top-level statements. `Generate` gives the
+    module forms (`corvid_tools.py`, `corvid_tools.mjs`) for a script that imports a file beside it.
+  - **Untrusted text.** Descriptions and parameter names come from the descriptor (an MCP server may have written them).
+    They are emitted only inside double-quoted string literals escaped as JSON with every non-ASCII character as
+    `\uXXXX` (valid in all three languages), never in a comment, a docstring delimiter or a template literal; identifiers
+    are rebuilt from ASCII letters, digits and `_`, kept clear of each language's keywords and of the client's own names
+    (C# parameters are verbatim `@name`), and the wire still sends the descriptor's names. The generated text is ASCII.
+    The client is a convenience, not a boundary: the host enforces the token, the tools, the limits and the turn's path.
+  - Tests (`CodeModeClientTests`): each client, module and inline, run by `python3`, `node` and `dotnet run` against a
+    real `CodeModeSession` on a Unix socket with a fake invoker (a wrong token, required and optional arguments, taint, a
+    refused call, an unknown tool, keyword names, limits), a hostile description that would run code if it escaped its
+    literal, a Roslyn compile of the C# client without warnings, and the renaming rules.
+- **The run on the surfaces.** `CodeRunPresentation.Read` takes the language and source from `execute_code`'s
+  arguments (`language`, `code`); `Usage` and `Outcome` read its result (`tool_calls`, `exit_code`, `timed_out`,
+  `response_bytes`). A run is announced on the stream with its arguments (the reporter has read the issued call just
+  before), so its source shows while it runs; other calls are announced without input, as before.
+  - **App.** `ToolCall.ParentCallId`, `ToolCall.Code` (`CodeRun`: language, source, the run's call limit and limits in
+    words), `ToolCallUpdate.ParentCallId` and `CodeOutcome`. The fold puts a script's call right after its run's card
+    and the run's earlier calls (not at the turn's foot), with the run's turn, and counts it on the run, live and on
+    replay. The run's card shows "Python · 12 lines · 3 of 50 tool calls · exit 0" and the whole script in monospace (the
+    app has no syntax colouring), every character revealed (`SafeText.Reveal`: it is what ran); a script's call is drawn
+    indented under it. Review says "write_file via execute_code · turn 3" for a change a script's call made.
+  - **Approval card.** `ApprovalRequested.Code` carries the script from the prompt's in-memory arguments (what runs; the
+    transcript card's comes from the log, credential-scrubbed), shown whole and revealed, with the language and limits,
+    a note when it holds hidden characters, and the words that approving runs the script and that each tool it calls is
+    asked for on its own, as the model's own call would be. `CodeRunCard.Lines` gives the same for the terminal and
+    ACP (hidden characters, a lone CR and the line and paragraph separators as `\uXXXX`; never cut).
+  - **corvid chat.** A script's call is printed indented under its run (`    ↳ ✓ list_notes succeeded`), in the live
+    panel too, and the run's line counts them ("· 2 tool calls"); its approval box adds the card's lines. The box's
+    action text now shows hidden characters as escapes, for every prompt.
+  - **ACP.** ACP has no nested calls: a script's call is a `tool_call` (and its `tool_call_update`s and permission
+    request) with `_meta: {"corvid":{"parentToolCallId":"<run's id>"}}`, live and on `session/load`. The model's own calls
+    carry no `_meta`, so the recorded exchanges are unchanged. The run's permission request carries the card's lines as
+    text content.
+
 ## Running the check
 
 ```sh
