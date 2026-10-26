@@ -32,6 +32,9 @@ public static class AttachedStartup
     /// <summary>The result: the services, the live connection (null when it failed) and a line for the log.</summary>
     public sealed record Attached(IAppServices Services, RemoteSessionService? Connection, string Report);
 
+    /// <summary>How long a window waits to attach before it opens refused (A6 review M3): a host that says nothing never hangs it.</summary>
+    public static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(15);
+
     /// <param name="dispatcher">The window's dispatcher, bound later (<see cref="LateDispatcher.Bind"/>) once the window exists.</param>
     /// <param name="ownerTokenFile">Where the owner token is on this machine; null where there is none (a browser).</param>
     public static async Task<Attached> ConnectAsync(string addressText, string? pairingCode, string device, IDispatcher dispatcher,
@@ -48,14 +51,23 @@ public static class AttachedStartup
                 tokens.Set(address.Display, paired);
             }
             var token = tokens.Get(address.Display);
-            if (token is null && address.IsLocal && ownerTokenFile is not null)
+            // A6 review M3: the owner token goes only over a Unix socket whose server the kernel says is this user's
+            // (AttachedClient checks SO_PEERCRED before sending anything). Over ws://, loopback included, anyone on the
+            // machine could have taken the port; there the window pairs like any device.
+            if (token is null && address.UnixSocket is not null && UnixPeers.CurrentUser is not null && ownerTokenFile is not null)
                 token = OwnerTokens.Find(ownerTokenFile);
             if (token is null)
-                return Refused($"No token for {address.Display}: pair this window first (corvid serve pair there, then --pair <code>).");
+                return Refused($"No token for {address.Display}: pair this window first (corvid serve pair there, then --pair <code>)" +
+                    (address.UnixSocket is null && ownerTokenFile is not null ? "; the owner token is sent only over the Unix socket." : "."));
             var connection = await AttachedClient.ConnectAsync(address, token, device, dispatcher, cancellationToken).ConfigureAwait(false);
             var who = connection.Capabilities.Role == AttachedRole.Owner ? "as the owner" : $"as device '{connection.Capabilities.Device}'";
             return new Attached(new RemoteAppServices(connection, address), connection,
                 $"attached to {address.Display} ({connection.Capabilities.Host ?? "the engine"}) {who}");
+        }
+        catch (Exception exception) when (cancellationToken.IsCancellationRequested && exception is OperationCanceledException or IOException)
+        {
+            // A6 review M3: a host that accepts the connection and then says nothing opens the window refused, not hung.
+            return Refused($"Corvid at {address.Display} did not answer in time; the window opens without it.");
         }
         catch (UnauthorizedAccessException exception)
         {

@@ -57,7 +57,7 @@ internal static class AttachEndpoint
         var app = builder.Build();
         app.Use(async (context, next) =>
         {
-            if (Refusal(context, loopback) is { } refusal)
+            if (Refusal(context, loopback, options.Listen) is { } refusal)
             {
                 context.Response.StatusCode = refusal.Status;
                 await context.Response.WriteAsync(refusal.Message, context.RequestAborted).ConfigureAwait(false);
@@ -65,7 +65,9 @@ internal static class AttachEndpoint
             }
             await next(context).ConfigureAwait(false);
         });
-        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
+        // A6 review M2: a client that stops answering pings is dropped, so a dead window stops counting as one that answers
+        // (AnswererPresent) and the questions its turns wait on are put aside.
+        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = AttachedProtocol.KeepAliveInterval, KeepAliveTimeout = AttachedProtocol.KeepAliveTimeout });
         app.Map(AttachedProtocol.Path, async context =>
         {
             if (!context.WebSockets.IsWebSocketRequest)
@@ -134,12 +136,17 @@ internal static class AttachEndpoint
 
     internal sealed record RefusalReason(int Status, string Message);
 
-    internal static RefusalReason? Refusal(HttpContext context, bool loopback)
+    /// <param name="listen">The TCP address listened on; beyond loopback a request must name it (A6 review L1).</param>
+    internal static RefusalReason? Refusal(HttpContext context, bool loopback, Uri? listen = null)
     {
         var request = context.Request;
         var overTcp = context.Connection.RemoteIpAddress is not null;
         if (overTcp && loopback && !IsLoopbackHost(request.Host.Host))
             return new RefusalReason(StatusCodes.Status421MisdirectedRequest, "This endpoint serves loopback host names only (localhost, 127.0.0.1, [::1]).");
+        // A6 review L1: beyond loopback, only the address listened on (a name could be rebound by DNS onto this host, and
+        // a page under it would count as this server's own origin); on an unspecified address (0.0.0.0, [::]) any IP literal.
+        if (overTcp && !loopback && listen is not null && !IsListenHost(request.Host.Host, listen))
+            return new RefusalReason(StatusCodes.Status421MisdirectedRequest, $"This endpoint serves only the address it listens on ({listen.Host}).");
         var origin = request.Headers.Origin.ToString();
         if (origin.Length > 0)
         {
@@ -149,6 +156,14 @@ internal static class AttachEndpoint
                 return new RefusalReason(StatusCodes.Status403Forbidden, "Attached mode accepts a browser only from the pages it serves itself.");
         }
         return null;
+    }
+
+    private static bool IsListenHost(string host, Uri listen)
+    {
+        if (!IPAddress.TryParse(host.Trim('[', ']'), out var named))
+            return false;
+        var listening = Address(listen);
+        return listening.Equals(IPAddress.Any) || listening.Equals(IPAddress.IPv6Any) || named.Equals(listening);
     }
 
     private static bool IsLoopbackHost(string host) =>
@@ -169,6 +184,7 @@ internal static class AttachEndpoint
         var directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
         // Made 0700 when new; a directory the person named is left as it is (the socket itself is made 0600 after the bind).
         PrivateFiles.EnsureDirectory(directory);
+        CheckSocketDirectory(directory);
         if (!File.Exists(path))
             return;
         using var probe = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
@@ -179,6 +195,29 @@ internal static class AttachEndpoint
         catch (SocketException)
         {
             File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// A6 review L2: the socket's directory must be this user's and writable by nobody else, or another user could swap the
+    /// socket for theirs between the bind and the chmod, or replace it later and collect tokens. Ownership is told without
+    /// stat: only a directory's owner (or root) may change its mode, so setting the mode it has already succeeds for them alone.
+    /// </summary>
+    /// <exception cref="IOException">It is someone else's, or group or others may write it.</exception>
+    internal static void CheckSocketDirectory(string directory)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var mode = File.GetUnixFileMode(directory);
+        if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+            throw new IOException($"The socket's directory {directory} can be written by others than you; give a directory only you can write (chmod 700).");
+        try
+        {
+            File.SetUnixFileMode(directory, mode);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw new IOException($"The socket's directory {directory} is not yours; give a directory you own.");
         }
     }
 

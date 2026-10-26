@@ -15,7 +15,7 @@ namespace Corvid.App;
 /// keeps the device token in the browser's storage, and takes the code out of the address. <c>?demo</c> opens the demo.
 /// </summary>
 [System.Runtime.Versioning.SupportedOSPlatform("browser")]
-public static class Program
+public static partial class Program
 {
     private const string TokenKey = "corvid.attach.token:";
 
@@ -33,8 +33,10 @@ public static class Program
             var address = Query(page, "attach", out var given) && given is { Length: > 0 } ? given
                 : $"{(page.Scheme == "https" ? "wss" : "ws")}://{page.Authority}{AttachedProtocol.Path}";
             var code = Fragment(page, "pair");
+            // A6 review L4: the code leaves the address and the tab's history alike (setting location.hash kept the entry
+            // with the code for the Back button and left a bare '#').
             if (code is not null)
-                location!.SetProperty("hash", "");
+                DropFragment(page);
             // A6 fix: a pairing code goes only to the server that served this page, so a crafted ?attach= link cannot carry
             // it to another one.
             if (code is not null && (!Uri.TryCreate(address, UriKind.Absolute, out var target)
@@ -44,7 +46,10 @@ public static class Program
                 code = null;
             }
             dispatcher = new LateDispatcher();
-            var attached = await AttachedStartup.ConnectAsync(address, code, "a browser", dispatcher, new BrowserTokenStore(), ownerTokenFile: null);
+            // A6 review M3: a server that accepts and then says nothing opens the page refused after a while, never hung.
+            using var connecting = new CancellationTokenSource(AttachedStartup.ConnectTimeout);
+            var attached = await AttachedStartup.ConnectAsync(address, code, "a browser", dispatcher, new BrowserTokenStore(), ownerTokenFile: null,
+                connecting.Token);
             Console.WriteLine("corvid app: " + attached.Report);
             options = new AppOptions { Attach = address };
             services = attached.Connection is null
@@ -73,6 +78,21 @@ public static class Program
         }
         return false;
     }
+
+    /// <summary>Replaces the page's history entry with its address without the fragment, without loading it again.</summary>
+    private static void DropFragment(Uri page)
+    {
+        var history = JSHost.GlobalThis.GetPropertyAsJSObject("history");
+        using var replaceState = history?.GetPropertyAsJSObject("replaceState");
+        if (history is null || replaceState is null)
+            return;
+        using (history)
+            Apply(replaceState, history, [null, "", page.GetLeftPart(UriPartial.Query)]);
+    }
+
+    // Reflect.apply, so replaceState runs with history as its 'this' (a bare call of it throws "Illegal invocation").
+    [JSImport("globalThis.Reflect.apply")]
+    private static partial void Apply(JSObject function, JSObject self, [JSMarshalAs<JSType.Array<JSType.Any>>] object?[] arguments);
 
     private static string? Fragment(Uri page, string name)
     {

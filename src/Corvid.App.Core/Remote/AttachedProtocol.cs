@@ -55,6 +55,31 @@ public static class AttachedProtocol
     /// <summary>Bytes queued for a client that does not read; past this the server drops the connection.</summary>
     public const long MaxQueuedBytes = 128L * 1024 * 1024;
 
+    /// <summary>Connections the server holds open at once before they have authenticated; past it a new one is closed (A6 review L3).</summary>
+    public const int MaxUnauthenticatedConnections = 32;
+
+    /// <summary>How often each end pings the other (A6 review M2).</summary>
+    public static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(20);
+
+    /// <summary>How long each end waits for the other's answer to a ping before it drops the connection as dead (A6 review M2).</summary>
+    public static readonly TimeSpan KeepAliveTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long the client waits for an answer to a request that is not <see cref="RunsLong"/> before it gives up on it and
+    /// asks the server to cancel it (A6 review M2).
+    /// </summary>
+    public static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Requests that may take as long as a person or a model does (A6 review M1): a new session that waits on a worktree's
+    /// card, compaction, a recap, a fork, a slash command (<c>/workspace</c> asks on a card). The server starts them in the
+    /// order they came but does not wait for them before the next request; the client sets them no timeout.
+    /// </summary>
+    public static bool RunsLong(string method) => method is New or Compact or Recap or Fork or Command;
+
+    /// <summary>A notification either end sends to give up on a request it made: <c>{ "id": … }</c> (A6 review L4, LSP's name).</summary>
+    public const string CancelRequest = "$/cancelRequest";
+
     public const string Initialize = "initialize";
     public const string Pair = "_corvid/pair";
     public const string List = "session/list";
@@ -132,6 +157,9 @@ public static class AttachedProtocol
 
         /// <summary>Too many requests or sessions open on this connection.</summary>
         public const int Busy = -32004;
+
+        /// <summary>The caller cancelled the request (<see cref="CancelRequest"/>), LSP's code.</summary>
+        public const int RequestCancelled = -32800;
     }
 }
 

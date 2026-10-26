@@ -75,6 +75,11 @@
     <Message Importance="high" Text="corvid-app tarball: $(CorvidAppTarball)" />
   </Target>
 
+  <!-- A6 review L4: the browser head calls history.replaceState through [JSImport], whose generated marshalling is unsafe code. -->
+  <PropertyGroup Condition="$(TargetFramework.Contains('-browserwasm'))">
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
   <ItemGroup Condition="'$(IsBrowserWasm)' == 'true'">
     <!-- Security pins (Directory.Packages.props). Uno.Sdk gives a WebAssembly head Microsoft.Windows.Compatibility, which
          resolves these at 10.0.12, a release with known advisories (NU1902, NU1903). Referencing the patched release

@@ -65,9 +65,19 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
     private readonly ISessionService _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
     private readonly IAttachedAuthenticator _authenticator = authenticator ?? throw new ArgumentNullException(nameof(authenticator));
     private int _clients;
+    private int _unauthenticated;
 
     /// <summary>Authenticated connections now.</summary>
     public int Clients => Volatile.Read(ref _clients);
+
+    /// <summary>Connections held open at once before they authenticate; past it a new one is closed at once (A6 review L3).</summary>
+    public int MaxUnauthenticated { get; init; } = AttachedProtocol.MaxUnauthenticatedConnections;
+
+    /// <summary>
+    /// The largest answer the server sends, the client's limit (<see cref="AttachedProtocol.MaxResponseBytes"/>): a session's
+    /// history past it is refused on its own rather than closing the connection (A6 review L2).
+    /// </summary>
+    public int MaxResponseBytes { get; init; } = AttachedProtocol.MaxResponseBytes;
 
     /// <summary>Where the server writes a line about each connection (never a token, a code or a session's text).</summary>
     public Action<string>? Log { get; init; }
@@ -78,6 +88,9 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
     /// </summary>
     public Action? NoClientsLeft { get; init; }
 
+    /// <summary>Tests: a connection's close has begun (before it takes the connection's gate).</summary>
+    internal Action? Closing { get; init; }
+
     /// <summary>The host name the server gives itself in <see cref="AttachedProtocol.Initialize"/>.</summary>
     public string HostName { get; init; } = Environment.MachineName;
 
@@ -85,8 +98,23 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
     public async Task ServeAsync(IMessageChannel channel, string peer, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        // A6 review L3: connections that have not authenticated are capped, so a flood of them cannot hold the server's
+        // memory and file descriptors for their authentication window each.
+        if (Interlocked.Increment(ref _unauthenticated) > MaxUnauthenticated)
+        {
+            Interlocked.Decrement(ref _unauthenticated);
+            Log?.Invoke($"attach: refused a connection from {peer}: {MaxUnauthenticated} are waiting to authenticate already");
+            await channel.CloseAsync("too many connections waiting to authenticate", CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
         var connection = new Connection(this, peer, channel);
-        var rpc = new JsonRpcPeer(channel, connection.HandleAsync, onNotification: null);
+        var rpc = new JsonRpcPeer(channel, connection.HandleAsync, onNotification: null)
+        {
+            RunsLong = AttachedProtocol.RunsLong,
+            // A6 review L3: the client hears only that it failed; the details are the server's.
+            OnUnexpected = (method, exception) =>
+                Log?.Invoke($"attach: {method} from {connection.Who} failed: {exception.GetType().Name}: {SafeText.Clean(exception.Message)}"),
+        };
         connection.Peer = rpc;
         await using (rpc.ConfigureAwait(false))
         {
@@ -153,6 +181,7 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
         private readonly ConcurrentDictionary<string, byte> _viewing = new(StringComparer.Ordinal);
         private readonly Lock _gate = new();
         private int _authenticating;
+        private int _unauthenticated = 1;
         private volatile bool _authenticated;
         private AttachedIdentity? _identity;
         private string? _token;
@@ -176,8 +205,17 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
 
         public void OnListChanged(object? sender, EventArgs e) => Peer.Notify(AttachedProtocol.ListChanged, new JsonObject());
 
+        /// <summary>No longer counted among the connections that have not authenticated (once).</summary>
+        public void LeaveUnauthenticated()
+        {
+            if (Interlocked.Exchange(ref _unauthenticated, 0) == 1)
+                Interlocked.Decrement(ref server._unauthenticated);
+        }
+
         public void Close()
         {
+            server.Closing?.Invoke();
+            LeaveUnauthenticated();
             bool wasIn;
             lock (_gate)
             {
@@ -383,10 +421,13 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                 _authenticated = true;
                 Who = identity.Role == AttachedRole.Owner ? "the owner" : $"device '{identity.Device}'";
                 Role = identity.Role;
+                // A6 review L1: joined under the gate Close takes, so a close that comes meanwhile waits and then leaves:
+                // never a handler left subscribed, a client counted that went, or NoClientsLeft raised while one remains.
+                server.Joined(this);
             }
+            LeaveUnauthenticated();
             // The owner or a paired device may send prompts with images (A6, K-8); an unauthenticated one only small requests.
             channel.AllowMessagesUpTo(AttachedProtocol.MaxAuthenticatedRequestBytes);
-            server.Joined(this);
             return new JsonObject
             {
                 ["protocolVersion"] = AttachedProtocol.Version,
@@ -429,10 +470,20 @@ public sealed class AttachedServer(ISessionService sessions, IAttachedAuthentica
                     }
                     opened.Subscription = subscription;
                 }
+                var history = JsonSerializer.SerializeToNode([.. subscription.History], AttachedJson.Updates);
+                // A6 review L2: an answer the client would refuse to read closes its whole connection; one this large fails
+                // alone (with room left for the envelope).
+                if (System.Text.Encoding.UTF8.GetByteCount(history?.ToJsonString(AttachedJson.Options) ?? "") > server.MaxResponseBytes - 4096)
+                {
+                    if (_open.TryRemove(subscriptionId, out _))
+                        subscription.Dispose();
+                    throw new JsonRpcException(AttachedProtocol.Errors.Refused,
+                        "This session's history is too large to send to an attached window; open it on the engine's machine.");
+                }
                 return new JsonObject
                 {
                     ["subscription"] = subscriptionId,
-                    ["history"] = JsonSerializer.SerializeToNode([.. subscription.History], AttachedJson.Updates),
+                    ["history"] = history,
                 };
             }
             catch
