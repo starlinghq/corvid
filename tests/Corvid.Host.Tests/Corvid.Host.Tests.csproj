@@ -8,6 +8,9 @@
     <Using Include="Xunit" />
     <ProjectReference Include="../../src/Corvid.Host/Corvid.Host.csproj" />
     <ProjectReference Include="../../evals/Corvid.Evals/Corvid.Evals.csproj" />
+    <!-- A7: so corvid-sandbox is built next to the tests, where code mode's scripts find it, as the built-in tools' tests do.
+         Production code never references the launcher. -->
+    <ProjectReference Include="../../sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj" />
     <!-- The stand-in Vault on a Unix socket, shared with the adapter tests. -->
     <Compile Include="../Corvid.Models.Remote.Tests/Infrastructure.cs" Link="FakeVault.cs" />
     <Compile Include="../Shared/ShortTemp.cs" Link="ShortTemp.cs" />
