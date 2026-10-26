@@ -654,5 +654,20 @@ public sealed class CodeLanguageTests : IDisposable
         Assert.Equal(["read_file {\"path\":\"data.txt\"}"], calls);
         // The SDK's caches stay in the workspace's .corvid, which keeps itself out of git.
         Assert.Equal("*\n", File.ReadAllText(Path.Combine(_workspace, ".corvid", "code", ".gitignore")));
+        // A successful build says nothing: the script's own output is all there is.
+        Assert.Equal("", result.GetProperty("stderr").GetString());
+    }
+
+    [Fact]
+    public async Task A_csharp_compile_error_is_reported_and_nothing_runs()
+    {
+        Host.RequireBubblewrap();
+        Assert.SkipWhen(CodeRuntimes.Discover().Dotnet is null, "no .NET SDK was found, so C# scripts cannot run.");
+
+        var result = await RunAsync("csharp", "Console.WriteLine(\"ran\")\nint x = \"not a number\";", []);
+
+        Assert.NotEqual(0, result.GetProperty("exit_code").GetInt32());
+        Assert.Contains("error CS", result.GetProperty("stderr").GetString(), StringComparison.Ordinal);
+        Assert.Equal("", result.GetProperty("stdout").GetString());
     }
 }

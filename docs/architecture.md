@@ -4348,9 +4348,9 @@ Frozen at version 1; `Corvid.Tools.CodeMode` implements the host side (`CodeMode
   sandbox. The source goes on standard input, never on a command line or into the workspace: `python3 -E -s -B -`,
   `node --input-type=module -` (an ES module), and for C# a fixed `/bin/sh` wrapper that writes it to the sandbox's own
   `/tmp/corvid-code/Program.cs` beside stub `Directory.Build.props` (`PublishAot=false`), `Directory.Build.targets`,
-  `Directory.Packages.props` and a `nuget.config` that clears every source, builds there (build output on stderr) and runs
-  it with `dotnet run --no-build --file`. Outside the workspace, so a repository's own build files are never read. A `#:`
-  directive (package, SDK, project, property) is refused before anything runs. The SDK's caches (`DOTNET_CLI_HOME`,
+  `Directory.Packages.props` and a `nuget.config` that clears every source, builds there (the build's output reaches
+  stderr only when it fails) and runs it with `dotnet run --no-build --file`. Outside the workspace, so a repository's own
+  build files are never read. A `#:` directive (package, SDK, project, property) is refused before anything runs. The SDK's caches (`DOTNET_CLI_HOME`,
   `NUGET_PACKAGES`) are under `<workspace>/.corvid/code/dotnet`, written by the sandbox alone, with a `.gitignore` of `*`;
   `XDG_DATA_HOME` and `XDG_RUNTIME_DIR` point into the sandbox's `/tmp` (file-based apps' build cache; named mutexes).
   Runtimes are found once by absolute path (`python3`, `node` on PATH; `dotnet` as `$DOTNET_ROOT/dotnet`, PATH or

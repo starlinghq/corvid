@@ -281,7 +281,7 @@ public sealed class CodeRunner
 {
     // C#: a fixed wrapper, never the script, run by /bin/sh inside the sandbox. It writes the source from standard input to
     // the sandbox's own /tmp (outside the workspace, so the workspace's Directory.Build.* and NuGet settings are not read),
-    // with stub build files that stop MSBuild's upward search, builds there with its output on stderr, then runs the app.
+    // with stub build files that stop MSBuild's upward search, builds there (its output on stderr only when it fails), then runs the app.
     // The SDK's caches go under the workspace's .corvid/code, the only writable place that lasts; the sandbox writes them.
     private const string CSharpWrapper =
         """
@@ -294,7 +294,7 @@ public sealed class CodeRunner
         printf '%s\n' '<Project />' > "$app/Directory.Build.targets"
         printf '%s\n' '<Project />' > "$app/Directory.Packages.props"
         printf '%s\n' '<?xml version="1.0" encoding="utf-8"?><configuration><packageSources><clear /></packageSources></configuration>' > "$app/nuget.config"
-        "$dotnet" build "$app/Program.cs" --artifacts-path "$app/artifacts" -v q -nologo -clp:NoSummary 1>&2
+        "$dotnet" build "$app/Program.cs" --artifacts-path "$app/artifacts" -v q -nologo -clp:NoSummary > "$app/build.log" 2>&1 || { cat "$app/build.log" >&2; exit 1; }
         exec "$dotnet" run --no-build --file "$app/Program.cs" --artifacts-path "$app/artifacts" --no-launch-profile
         """;
 
