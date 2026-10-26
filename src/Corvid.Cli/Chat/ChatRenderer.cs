@@ -374,6 +374,8 @@ internal sealed class ChatRenderer : ITurnObserver
             "fallback" => "fell back to",
             "privacy" => "kept local: the privacy gate moved it to",
             "de_escalation" => "back to",
+            // A7: an architect/editor turn's plan is made; this model applies it.
+            "editor" => "back to",
             _ => null,
         };
         if (what is null)

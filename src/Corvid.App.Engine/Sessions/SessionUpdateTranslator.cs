@@ -396,6 +396,8 @@ public sealed partial class SessionUpdateTranslator(string workspace)
             // A de-escalation is the turn's end; one before the turn answered (or a forgotten choice, live) is a reset.
             "de_escalation" when change.SessionDefault || (TurnOpen && !_answered) => (ModelSwitchKind.Returned, "this session's choice was reset to the default"),
             "de_escalation" => (ModelSwitchKind.Returned, "the turn ended"),
+            // A7: an architect/editor turn's plan is made; this model applies it.
+            "editor" => (ModelSwitchKind.Returned, "to apply the plan"),
             "user" => (ModelSwitchKind.Switched, "for this turn" + next),
             _ => (ModelSwitchKind.Switched, "for this session" + next),
         };

@@ -34,6 +34,29 @@ public sealed class ArchitectPlanViewTests
     }
 
     [Fact]
+    public void Live_the_plan_goes_above_the_hand_back_that_was_reported_first_as_on_replay()
+    {
+        SessionUpdate Escalated() => new ModelSwitched("generator", "small", "big", ModelSwitchKind.Escalated, "escalated") { At = At };
+        SessionUpdate HandBack() => new ModelSwitched("generator", "big", "small", ModelSwitchKind.Returned, "to apply the plan") { At = At };
+        SessionUpdate Planned() => new TurnPlanned("1. Edit a.cs.", "big", "small", 1) { At = At };
+        IReadOnlyList<SessionUpdate> Turn(params SessionUpdate[] middle) =>
+            [new UserMessage("fix it") { At = At }, new TurnStarted(1, "small") { At = At }, .. middle, new AgentMessageChunk("Fixed.") { At = At }];
+
+        var replayed = SessionFold.Replay("s", Turn(Escalated(), Planned(), HandBack()));
+        var live = SessionFold.Replay("s", Turn(Escalated(), HandBack(), Planned()));
+
+        static IEnumerable<string> Rows(SessionView view) => view.Transcript.Select(entry => entry switch
+        {
+            SwitchEntry change => "switch " + change.Switch.To,
+            TurnPlanEntry => "plan",
+            AnswerEntry => "answer",
+            _ => entry.GetType().Name,
+        }).Where(row => row is "plan" or "answer" || row.StartsWith("switch", StringComparison.Ordinal));
+        Assert.Equal(["switch big", "plan", "switch small", "answer"], Rows(replayed));
+        Assert.Equal(Rows(replayed), Rows(live));
+    }
+
+    [Fact]
     public async Task The_plan_row_says_who_planned_and_who_edits_and_opens_to_the_plan_cleaned()
     {
         var (session, service, time) = await ModelSwitchViewTests.Open();

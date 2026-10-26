@@ -76,12 +76,12 @@ public sealed class ArchitectEditorTests
         var logged = Assert.Single(payloads.OfType<AssistantMessage>(), message => message.Plan is not null);
         Assert.Equal(Plan, logged.Text);
         Assert.Equal(plan, logged.Plan);
-        Assert.Equal(["escalation", "de_escalation"], payloads.OfType<ModelSwitched>().Select(change => change.Reason));
+        Assert.Equal(["escalation", "editor"], payloads.OfType<ModelSwitched>().Select(change => change.Reason));
         var order = payloads.Select((payload, index) => (payload, index)).ToList();
         int At<T>(Func<T, bool> match) where T : SessionEvent => order.First(item => item.payload is T typed && match(typed)).index;
         Assert.True(At<ModelSwitched>(change => change.Reason == "escalation") < At<AssistantMessage>(message => message.Plan is not null));
-        Assert.True(At<AssistantMessage>(message => message.Plan is not null) < At<ModelSwitched>(change => change.Reason == "de_escalation"));
-        Assert.True(At<ModelSwitched>(change => change.Reason == "de_escalation") < At<ToolCallIssued>(_ => true));
+        Assert.True(At<AssistantMessage>(message => message.Plan is not null) < At<ModelSwitched>(change => change.Reason == "editor"));
+        Assert.True(At<ModelSwitched>(change => change.Reason == "editor") < At<ToolCallIssued>(_ => true));
         Assert.Equal("gen-small", payloads.OfType<ToolCallIssued>().Single().Generator);
         // The answer is an ordinary answer, after the plan.
         Assert.Null(payloads.OfType<AssistantMessage>().Last().Plan);
@@ -127,7 +127,7 @@ public sealed class ArchitectEditorTests
         // Both rounds of edits were the editor's; the re-plan's own call had no tools, the last call is the large model's answer.
         Assert.Equal(["gen-small", "gen-small"], harness.Payloads().OfType<ToolCallIssued>().Select(call => call.Generator));
         Assert.Equal(2, harness.Payloads().OfType<AssistantMessage>().Count(message => message.Plan is not null));
-        Assert.Equal(["escalation", "de_escalation", "escalation", "de_escalation", "escalation", "de_escalation"],
+        Assert.Equal(["escalation", "editor", "escalation", "editor", "escalation", "de_escalation"],
             harness.Payloads().OfType<ModelSwitched>().Select(change => change.Reason));
     }
 
@@ -280,7 +280,7 @@ public sealed class ArchitectEditorTests
         Assert.Equal(["gen-cloud: difficulty", "gen-small: privacy"], tainted.Result.Escalations);
         Assert.Equal("Edited locally.", tainted.Result.Text);
         Assert.True(tainted.Result.Tainted);
-        Assert.Equal(["escalation", "de_escalation"], tainted.Events.OfType<ModelSwitched>().Select(change => change.Reason));
+        Assert.Equal(["escalation", "editor"], tainted.Events.OfType<ModelSwitched>().Select(change => change.Reason));
         Assert.Equal("gen-small", tainted.Events.OfType<ToolCallIssued>().Single().Generator);
         Assert.DoesNotContain(tainted.Events.OfType<AssistantMessage>(), message => message.Plan is not null);
     }

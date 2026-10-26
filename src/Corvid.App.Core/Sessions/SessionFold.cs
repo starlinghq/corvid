@@ -87,7 +87,7 @@ public static class SessionFold
             QuestionAnswered answered => OnQuestionAnswered(state, answered),
             CompactionUpdate compaction => AddNew(state, "compaction", id => new CompactionEntry(id, compaction) { Turn = 0 }),
             // A7: an architect/editor turn's plan, in its turn where it was made, before the editor's calls.
-            TurnPlanned planned => AddNew(state, "plan", id => new TurnPlanEntry(id, planned)),
+            TurnPlanned planned => OnPlanned(state, planned),
             Notice notice => AddNew(state, "notice", id => new NoticeEntry(id, notice)),
             _ => state,
         };
@@ -505,6 +505,22 @@ public static class SessionFold
         };
         state = Advance(state) with { Decisions = state.Decisions.Add(group) };
         return turn == 0 ? state : Add(state, new DecisionsEntry(group.Id, group, Summary: false) { Turn = turn });
+    }
+
+    /// <summary>
+    /// A7: a plan goes where the log has it: after the escalation that made it, above the row that hands the turn to its
+    /// editor. Live, that row can arrive first (the switch is told at once, the plan once the stream reads the log), so a
+    /// plan whose turn ends in the generator's return to its editor goes above that row.
+    /// </summary>
+    private static SessionView OnPlanned(SessionView state, TurnPlanned planned)
+    {
+        var entry = new TurnPlanEntry(NewId(state, "plan"), planned) { Turn = CurrentTurn(state) };
+        var transcript = state.Transcript;
+        var foot = FootIndex(transcript, entry.Turn);
+        if (foot > 0 && transcript[foot - 1] is SwitchEntry { Switch: { Kind: ModelSwitchKind.Returned } handBack } row && row.Turn == entry.Turn
+            && entry.Turn != 0 && handBack.Slot is "" or "generator" && handBack.To == planned.Editor)
+            return Advance(state) with { Transcript = transcript.Insert(foot - 1, entry) };
+        return Add(Advance(state), entry);
     }
 
     private static SessionView OnModelSwitched(SessionView state, ModelSwitched switched)

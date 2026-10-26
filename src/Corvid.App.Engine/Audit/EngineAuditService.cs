@@ -428,6 +428,10 @@ public sealed class EngineAuditService : IAuditService
             case UserSteered steer:
                 summary = [P("user (steer): "), P(Line(steer.Text, TextPreview))];
                 break;
+            // A7: an architect/editor turn's plan, named for its planner.
+            case AssistantMessage { Plan: { } plan } planned:
+                summary = [P($"plan by {plan.Planner}: "), P(Line(planned.Text, TextPreview))];
+                break;
             case AssistantMessage answer:
                 summary = [P("answer: "), P(Line(answer.Text, TextPreview))];
                 break;

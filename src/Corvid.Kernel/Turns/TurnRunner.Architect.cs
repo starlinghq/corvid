@@ -187,8 +187,10 @@ public sealed partial class TurnRunner
         }
 
         /// <summary>
-        /// The generator slot goes to the editor, logged as a de-escalation (<c>ModelSwitched</c>), keeping a pin where the
-        /// person set one. A refused or failed switch leaves the planner to edit, as an ordinary escalation would.
+        /// The generator slot goes to the editor, logged as <c>ModelSwitched</c> with the reason <c>editor</c>: not a
+        /// de-escalation, so the person's choice for the session and a pin stay as they were (a reopened session reads its
+        /// choices from the log's de-escalations). A refused or failed switch leaves the planner to edit, as an ordinary
+        /// escalation would.
         /// </summary>
         private async Task HandBackAsync(ModelBinding editor, CancellationToken cancellationToken)
         {
@@ -197,8 +199,8 @@ public sealed partial class TurnRunner
                 return;
             try
             {
-                var result = await slots.SwitchAsync(ModelSlots.Generator, editor, SwitchReason.DeEscalation, slots.IsPinned(ModelSlots.Generator),
-                    cancellationToken).ConfigureAwait(false);
+                var result = await slots.SwitchAsync(ModelSlots.Generator, editor, SwitchReason.Editor, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
                 runner.NoteBudgetChange(result);
             }
             catch (InvalidOperationException)
