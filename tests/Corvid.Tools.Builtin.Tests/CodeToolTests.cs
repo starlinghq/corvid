@@ -192,6 +192,9 @@ public sealed class CodeToolTests : IDisposable
     [InlineData("Console.WriteLine(1); // x\u2029#:sdk Evil.Sdk")]
     [InlineData("Console.WriteLine(1); // x\u0085#:property Evil=true")]
     [InlineData("Console.WriteLine(1);\n\u000B\u00A0\uFEFF#:project ../evil.csproj")]
+    // A7 fix verification: U+001A is white space to Roslyn, and byte order marks and spaces may come in any mix.
+    [InlineData("\u001A#:project ../evil.csproj")]
+    [InlineData("\uFEFF \uFEFF#:property RestoreSources=https://example.invalid")]
     public async Task CSharp_directives_are_refused_before_anything_runs(string code)
     {
         var context = await ContextAsync("csharp", code);

@@ -114,6 +114,14 @@ public sealed class NestedToolCallTests
         var prompter = FakePrompter.Always(approve: true);
         var replies = new List<string>();
         ToolRegistry? registry = null;
+        // A write that is not a memory write: the fixture's add_note declares SideEffects.Memory, which no script may reach.
+        var saved = new List<string>();
+        var save = TestTool.Create("save_note", "Save a note to a file.", new ToolRisk(SideEffects.Filesystem, false, false),
+            """{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}""", (arguments, _) =>
+            {
+                saved.Add(arguments["text"]!.ToString()!);
+                return ValueTask.FromResult<object?>($"saved note {saved.Count}");
+            }, new ToolParameter("text", "the note", true, false));
         var script = Script(async (context, token) =>
         {
             var directory = Directory.CreateTempSubdirectory("cmt-");
@@ -121,7 +129,7 @@ public sealed class NestedToolCallTests
             {
                 var path = Path.Combine(directory.FullName, "tools.sock");
                 var secret = Corvid.Tools.CodeMode.CodeModeProtocol.NewToken();
-                var catalogue = Corvid.Tools.CodeMode.CodeModeCatalog.Describe(registry!, context.OfferedTools, ["add_note", "list_notes"]);
+                var catalogue = Corvid.Tools.CodeMode.CodeModeCatalog.Describe(registry!, context.OfferedTools, ["save_note", "add_note", "list_notes"]);
                 var session = new Corvid.Tools.CodeMode.CodeModeSession(secret, catalogue, context.InvokeToolAsync);
                 using var listener = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream,
                     System.Net.Sockets.ProtocolType.Unspecified);
@@ -142,7 +150,7 @@ public sealed class NestedToolCallTests
                 await using var writer = new StreamWriter(stream) { AutoFlush = true, NewLine = "\n" };
                 await writer.WriteLineAsync($$"""{"token":"{{secret}}","v":1}""");
                 replies.Add((await reader.ReadLineAsync(token))!);
-                await writer.WriteLineAsync("""{"id":1,"tool":"add_note","args":{"text":"over the socket"}}""");
+                await writer.WriteLineAsync("""{"id":1,"tool":"save_note","args":{"text":"over the socket"}}""");
                 replies.Add((await reader.ReadLineAsync(token))!);
                 await writer.WriteLineAsync("""{"id":2,"tool":"clear_notes"}""");
                 replies.Add((await reader.ReadLineAsync(token))!);
@@ -159,6 +167,7 @@ public sealed class NestedToolCallTests
         {
             registry = tools;
             tools.Add(script);
+            tools.Add(save);
         });
 
         await harness.RunAsync("run the weather script");
@@ -167,8 +176,9 @@ public sealed class NestedToolCallTests
         Assert.Equal("""{"id":1,"ok":true,"result":"saved note 1","tainted":false}""", replies[1]);
         // Not in the allowlist: refused at the socket, never reaching the turn.
         Assert.Contains("\"code\":\"unknown_tool\"", replies[2], StringComparison.Ordinal);
-        Assert.Equal("over the socket", Assert.Single(harness.Notes.Notes).Text);
-        Assert.Equal(Parent, Assert.Single(harness.Payloads().OfType<ToolCallIssued>(), call => call.ToolName == "add_note").ParentCallId);
+        Assert.Equal("over the socket", Assert.Single(saved));
+        Assert.Empty(harness.Notes.Notes);
+        Assert.Equal(Parent, Assert.Single(harness.Payloads().OfType<ToolCallIssued>(), call => call.ToolName == "save_note").ParentCallId);
         Assert.DoesNotContain(harness.Payloads().OfType<ToolCallIssued>(), call => call.ToolName == "clear_notes");
         Assert.Single(prompter.Prompts);
     }

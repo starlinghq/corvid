@@ -105,8 +105,11 @@ public static class CodeModeClients
         _s.modules["corvid_tools"] = _m
         _c = _b.b64decode("{1}").decode("utf-8")
         _l.cache["script.py"] = (len(_c), None, _c.splitlines(True), "script.py")
-        _g = {{"__name__": "__main__", "__builtins__": __builtins__, "corvid": _m}}
-        del _b, _l, _s, _t, _m
+        _main = _t.ModuleType("__main__")
+        _main.__dict__.update({{"__builtins__": __builtins__, "__file__": "script.py", "corvid": _m}})
+        _s.modules["__main__"] = _main
+        _g = _main.__dict__
+        del _b, _l, _s, _t, _m, _main
         exec(compile(_c, "script.py", "exec", dont_inherit=True), _g)
 
         """;

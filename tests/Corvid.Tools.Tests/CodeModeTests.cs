@@ -34,16 +34,17 @@ public sealed class CodeModeTests
 
         var tools = CodeModeCatalog.Describe(registry, offered, ["add_note", "list_notes", "call_api", "clear_notes", "missing"]);
 
-        // clear_notes is allowed but not offered; ping offered but not allowed; call_api has a secret parameter.
-        Assert.Equal(["add_note", "list_notes"], tools.Select(tool => tool.Name));
+        // clear_notes is allowed but not offered; ping offered but not allowed; call_api has a secret parameter; add_note
+        // writes memory (it declares SideEffects.Memory), which no script may do.
+        Assert.Equal(["list_notes"], tools.Select(tool => tool.Name));
         Assert.Empty(CodeModeCatalog.Describe(registry, null, ["add_note"]));
         Assert.True(CodeModeCatalog.IsIdentifier("list_notes"));
         Assert.False(CodeModeCatalog.IsIdentifier("mcp.server-tool"));
         Assert.False(CodeModeCatalog.IsIdentifier("1tool"));
     }
 
-    private sealed class Stub(string name) : ToolFunction(new ToolDescriptor(name, "A stand-in.", """{"type":"object","properties":{}}""",
-        new ToolRisk(SideEffects.None, Network: false, Destructive: false), []))
+    private sealed class Stub(string name, SideEffects effects = SideEffects.None) : ToolFunction(new ToolDescriptor(name, "A stand-in.",
+        """{"type":"object","properties":{}}""", new ToolRisk(effects, Network: false, Destructive: false), []))
     {
         protected override ValueTask<object?> InvokeCoreAsync(Microsoft.Extensions.AI.AIFunctionArguments arguments, CancellationToken cancellationToken) =>
             ValueTask.FromResult<object?>("ran");
@@ -64,6 +65,23 @@ public sealed class CodeModeTests
 
         Assert.Equal(["list_notes"], tools.Select(tool => tool.Name));
         Assert.All(denied, name => Assert.Contains(name, CodeModeCatalog.Denied));
+    }
+
+    // A7 fix verification: a tool that sends, schedules or writes memory under another name (an MCP server's) is refused too.
+    [Fact]
+    public void A_tool_declaring_a_denied_effect_is_never_described_whatever_its_name()
+    {
+        var registry = Registry();
+        registry.Add(new Stub("server__send_email", SideEffects.Messaging));
+        registry.Add(new Stub("server__add_reminder", SideEffects.Schedule));
+        registry.Add(new Stub("server__remember", SideEffects.Memory));
+        registry.Add(new Stub("server__write_page", SideEffects.Filesystem));
+        string[] names = ["server__send_email", "server__add_reminder", "server__remember", "server__write_page"];
+
+        var tools = CodeModeCatalog.Describe(registry, new HashSet<string>(names, StringComparer.Ordinal), names);
+
+        Assert.Equal(["server__write_page"], tools.Select(tool => tool.Name));
+        Assert.True(CodeModeCatalog.IsDenied("server__send_email", SideEffects.Messaging | SideEffects.Remote));
     }
 
     [Fact]

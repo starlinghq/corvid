@@ -517,8 +517,14 @@ public sealed class CodeRunner
     {
         foreach (var line in code.Split(['\n', '\r', '\u0085', '\u2028', '\u2029']))
         {
-            // Any white space (a vertical tab, a form feed, U+00A0) and a byte order mark may come before the directive.
-            var trimmed = line.TrimStart().TrimStart('\uFEFF').TrimStart();
+            // Any white space (a vertical tab, a form feed, U+00A0), byte order marks and U+001A (which Roslyn also reads as
+            // white space) may come before the directive, in any mix.
+            var trimmed = line;
+            for (var before = -1; before != trimmed.Length;)
+            {
+                before = trimmed.Length;
+                trimmed = trimmed.TrimStart().TrimStart('\uFEFF', '\u001A');
+            }
             if (trimmed.StartsWith("#:", StringComparison.Ordinal))
                 return trimmed.Length <= 80 ? trimmed : trimmed[..80] + "…";
         }

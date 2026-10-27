@@ -37,6 +37,17 @@ public static partial class CodeModeCatalog
     };
 
     /// <summary>
+    /// What no script may do through a tool whatever its name: send messages, change schedules or write memory. An MCP
+    /// server's or a skill's tool declaring one of these is refused as the named ones are (A7 fix verification). A script
+    /// reaches only the tools <see cref="Describe"/> lists (the tools socket serves no other), so the check is made there; the
+    /// turn's nested path refuses the <see cref="Denied"/> names as well.
+    /// </summary>
+    public const SideEffects DeniedEffects = SideEffects.Messaging | SideEffects.Schedule | SideEffects.Memory;
+
+    /// <summary>Whether no script may call the tool: <see cref="Denied"/> names it, or it declares a <see cref="DeniedEffects"/> effect.</summary>
+    public static bool IsDenied(string name, SideEffects effects) => Denied.Contains(name) || (effects & DeniedEffects) != 0;
+
+    /// <summary>
     /// The tools a script may call, ordered by name. <paramref name="offered"/> null (outside a turn) offers nothing. The
     /// allowlist names tools; a name it lists that the registry or the turn lacks is simply absent, and one
     /// <see cref="Denied"/> names is never described.
@@ -51,7 +62,7 @@ public static partial class CodeModeCatalog
         return
         [
             .. registry.List()
-                .Where(tool => allowed.Contains(tool.Name) && !Denied.Contains(tool.Name) && offered.Contains(tool.Name) && !tool.HasSecretParameters
+                .Where(tool => allowed.Contains(tool.Name) && !IsDenied(tool.Name, tool.Risk.SideEffects) && offered.Contains(tool.Name) && !tool.HasSecretParameters
                     && IsIdentifier(tool.Name))
                 .Select(tool => new CodeModeTool(tool.Name, tool.Description, tool.JsonSchema)),
         ];

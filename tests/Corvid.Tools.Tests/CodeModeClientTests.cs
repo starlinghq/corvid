@@ -320,6 +320,25 @@ public sealed class CodeModeClientTests
         Assert.Equal("['_corvid_client', 'call', 'close', 'corvid', 'json', 'limits', 'tools']", lines[2]);
     }
 
+    // A7 fix verification: the script runs as __main__, so pickling one of its functions (multiprocessing's way) works.
+    [Fact]
+    public async Task A_python_scripts_functions_belong_to_main()
+    {
+        Assert.SkipWhen(Find("python3") is null, "python3 is not installed");
+        await using var host = new FakeHost(Tools());
+
+        var run = await host.RunAsync("python3", PythonArguments, host.Directory.FullName, TimeSpan.FromSeconds(60),
+            CodeModeClients.Program(CodeModeLanguage.Python, Tools(), """
+                import pickle, sys
+                def twice(x):
+                    return 2 * x
+                print(pickle.loads(pickle.dumps(twice))(21), __name__, sys.modules["__main__"].twice is twice, __file__)
+                """));
+
+        Assert.True(run.ExitCode == 0, run.Error);
+        Assert.Equal("42 __main__ True script.py", run.Output.Trim());
+    }
+
     // A7 review (L4, security L1): a module in the working directory never shadows one the client imports.
     [Fact]
     public async Task A_python_module_in_the_working_directory_does_not_shadow_the_clients_imports()
