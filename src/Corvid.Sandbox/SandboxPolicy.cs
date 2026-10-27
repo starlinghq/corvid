@@ -43,6 +43,28 @@ public sealed record SandboxPolicy
     ];
 
     /// <summary>
+    /// A7: code mode's tools socket for this run (see <see cref="SandboxTools"/>): the socket alone is mounted read-only at
+    /// <see cref="SandboxTools.SocketInside"/> and the token at <see cref="SandboxTools.TokenFileInside"/>, and the launcher
+    /// sets <see cref="ToolsEnvironmentNames"/> to name them. It adds no network: combine it with neither <see cref="Network"/>
+    /// nor <see cref="Proxy"/> for a script that must have none (code mode's own policy; the launcher allows both).
+    /// </summary>
+    public SandboxTools? Tools { get; init; }
+
+    /// <summary>A7: the variables the launcher sets for a command with <see cref="Tools"/>; a policy may not also pass them.</summary>
+    public static ImmutableArray<string> ToolsEnvironmentNames { get; } = ["CORVID_TOOLS_SOCKET", "CORVID_TOOLS_TOKEN_FILE"];
+
+    /// <summary>
+    /// A7: variables set for the command to these values (not read from Corvid's environment), for example a script
+    /// runtime's settings. The name rules of <see cref="Environment"/> apply (secret-like names are refused), a name may not
+    /// be in both, and a value travels on the launcher's command line, so it must never be a secret: secrets reach commands
+    /// only through Corvid Vault, and the tools token through <see cref="Tools"/>.
+    /// </summary>
+    public ImmutableSortedDictionary<string, string> EnvironmentValues { get; init; } = ImmutableSortedDictionary<string, string>.Empty;
+
+    /// <summary>The longest <see cref="EnvironmentValues"/> value the launcher accepts.</summary>
+    public const int MaxEnvironmentValueChars = 32 * 1024;
+
+    /// <summary>
     /// Names whose values pass from Corvid's environment to the command. Secret-like names (tokens, keys, passwords,
     /// agent sockets) are refused: secrets reach commands only through Corvid Vault (plan §10.5).
     /// </summary>
@@ -94,6 +116,53 @@ public sealed record SandboxPolicy
             {
                 throw new ArgumentException($"{name} is set by the Vault proxy route; it cannot also be passed through.", nameof(Environment));
             }
+
+            if (Tools is not null && ToolsEnvironmentNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException($"{name} is set for the tools socket; it cannot also be passed through.", nameof(Environment));
+            }
+        }
+
+        foreach (var (name, value) in EnvironmentValues)
+        {
+            if (!EnvironmentNames.IsValid(name))
+            {
+                throw new ArgumentException($"{name} is not a valid environment variable name.", nameof(EnvironmentValues));
+            }
+
+            if (EnvironmentNames.IsSecretLike(name))
+            {
+                throw new ArgumentException($"{name} looks like a secret. Secrets reach commands only through Corvid Vault.", nameof(EnvironmentValues));
+            }
+
+            if (Environment.Contains(name, StringComparer.Ordinal))
+            {
+                throw new ArgumentException($"{name} is both passed through and set to a value.", nameof(EnvironmentValues));
+            }
+
+            if (Proxy is not null && ProxyEnvironmentNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException($"{name} is set by the Vault proxy route.", nameof(EnvironmentValues));
+            }
+
+            if (Tools is not null && ToolsEnvironmentNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException($"{name} is set for the tools socket.", nameof(EnvironmentValues));
+            }
+
+            if (value is null || value.Length > MaxEnvironmentValueChars || value.Contains('\0', StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"{name}'s value is missing, longer than {MaxEnvironmentValueChars} characters or holds a NUL.", nameof(EnvironmentValues));
+            }
+        }
+
+        if (Tools is { } tools)
+        {
+            Absolute(tools.SocketPath, nameof(SandboxTools.SocketPath));
+            if (!SandboxTools.IsValidToken(tools.Token))
+            {
+                throw new ArgumentException("The tools token must be 32 to 256 characters of A-Z, a-z, 0-9, '-' or '_'.", nameof(Tools));
+            }
         }
 
         if (Proxy is { } proxy)
@@ -129,6 +198,31 @@ public sealed record SandboxPolicy
 /// <param name="SocketPath">The per-sandbox socket. Absolute.</param>
 /// <param name="CaCertificatePem">The sandbox CA, PEM, public part only: the only certificate the command trusts.</param>
 public sealed record SandboxProxy(string SocketPath, string CaCertificatePem);
+
+/// <summary>
+/// A7: code mode's tools socket for one run. Corvid listens on <paramref name="SocketPath"/> (a Unix socket in a directory
+/// only this user can enter, outside the workspace, deleted after the run; put that directory in
+/// <see cref="SandboxPolicy.DeniedPaths"/> when it is not under /tmp or /run, so its neighbours stay out of view). The
+/// sandbox writes <paramref name="Token"/> to a 0600 file of its own and mounts it; the script reads it from
+/// <c>$CORVID_TOOLS_TOKEN_FILE</c> and sends it first (docs/architecture.md, "Code mode wire format").
+/// </summary>
+/// <param name="SocketPath">The socket on the host. Absolute.</param>
+/// <param name="Token">The run's token: 32 to 256 characters of A-Z, a-z, 0-9, '-' or '_'.</param>
+public sealed record SandboxTools(string SocketPath, string Token)
+{
+    /// <summary>Where the socket appears inside the sandbox.</summary>
+    public const string SocketInside = "/run/corvid-sandbox/tools.sock";
+
+    /// <summary>Where the token file appears inside the sandbox.</summary>
+    public const string TokenFileInside = "/run/corvid-sandbox/tools.token";
+
+    /// <summary>A token the launcher and the wire accept: 32 to 256 URL-safe characters.</summary>
+    public static bool IsValidToken(string? token) =>
+        token is { Length: >= 32 and <= 256 } && token.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+
+    /// <summary>The token is never printed with the record.</summary>
+    public override string ToString() => $"SandboxTools {{ SocketPath = {SocketPath} }}";
+}
 
 /// <summary>
 /// The launcher's rule for environment names, repeated here so a secret-like name is refused before any value leaves

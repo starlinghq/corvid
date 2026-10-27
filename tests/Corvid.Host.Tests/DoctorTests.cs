@@ -14,7 +14,7 @@ public sealed class DoctorTests
         await using var host = TestHost.Create();
         var checks = await host.Services.GetRequiredService<Doctor>().RunAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(["config", "models", "gpu", "sandbox", "checkpoints", "vault", "skills", "app"], checks.Select(check => check.Area).Distinct());
+        Assert.Equal(["config", "models", "gpu", "sandbox", "checkpoints", "vault", "skills", "code", "app"], checks.Select(check => check.Area).Distinct());
         // Nothing is placed on a GPU (C-029): the gpu area only informs.
         Assert.All(checks.Where(check => check.Area == "gpu"), check => Assert.Equal(CheckStatus.Info, check.Status));
         Assert.Contains(checks, check => check is { Name: "configuration", Status: CheckStatus.Ok });

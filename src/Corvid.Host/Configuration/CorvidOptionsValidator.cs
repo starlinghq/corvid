@@ -88,6 +88,21 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             errors.Add("Corvid:Turn:MaxOutputTokens must be between 16 and 65536.");
         if (options.Turn.ImageTurns is < 1 or > 64)
             errors.Add("Corvid:Turn:ImageTurns must be between 1 and 64.");
+        // A7: code mode's limits.
+        var code = options.Tools.Code;
+        if (code.TimeoutSeconds is < 1 or > 3600)
+            errors.Add("Corvid:Tools:Code:TimeoutSeconds must be between 1 and 3600.");
+        if (code.MaxCalls is < 1 or > 1000)
+            errors.Add("Corvid:Tools:Code:MaxCalls must be between 1 and 1000.");
+        if (code.MaxStdoutBytes is < 1024 or > 1024 * 1024 || code.MaxStderrBytes is < 1024 or > 1024 * 1024)
+            errors.Add("Corvid:Tools:Code:MaxStdoutBytes and MaxStderrBytes must be between 1024 and 1048576.");
+        // A7 review (security L4): tools no script may call, whatever the allowlist says.
+        if (code.Tools?.Where(Corvid.Tools.CodeMode.CodeModeCatalog.Denied.Contains).Distinct(StringComparer.Ordinal).ToList() is { Count: > 0 } denied)
+            errors.Add($"Corvid:Tools:Code:Tools may not list {string.Join(", ", denied)}: a script never calls a tool that delegates, asks the person, "
+                + "runs another script, writes memory, sends messages or changes schedules.");
+        foreach (var (setting, path) in new[] { ("Python", code.Python), ("Node", code.Node), ("Dotnet", code.Dotnet) })
+            if (path is { Length: > 0 } && !Path.IsPathFullyQualified(CorvidPaths.ExpandHome(path)))
+                errors.Add($"Corvid:Tools:Code:{setting} must be an absolute path.");
         if (options.Telemetry.OtlpEndpoint is { Length: > 0 } endpoint
             && (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")))
             errors.Add($"Corvid:Telemetry:OtlpEndpoint must be an absolute http or https URI, not '{endpoint}'.");

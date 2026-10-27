@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Corvid.Abstractions.Events;
 using Corvid.Host.Composition;
 using Corvid.Host.Sessions;
@@ -39,6 +40,8 @@ internal sealed class TurnReporter : ITurnObserver
 
     public void ToolStarted(string callId, string tool, bool approval) => _reporter.ToolStarted(callId, tool, approval);
 
+    public void ToolStarted(string callId, string tool, bool approval, string? parentCallId) => _reporter.ToolStarted(callId, tool, approval, parentCallId);
+
     public void ToolFinished(string callId, string tool, string outcome, TimeSpan elapsed) => _reporter.ToolFinished(callId, tool, outcome, elapsed);
 
     /// <summary>A5: a running call's output tail (K-2), as a <c>tool_call_update</c> whose content is the latest lines.</summary>
@@ -60,13 +63,16 @@ internal sealed class TurnReporter : ITurnObserver
     private static SessionUpdate? Live(SessionStreamUpdate update) => update switch
     {
         AnswerChunk chunk => new AgentMessageChunk(new TextContent(chunk.Text)),
+        TurnPlanned planned => Plan(planned),
         ToolCallStarted started => new ToolCall(started.CallId, started.Title, started.Kind, Status(started.Status))
         {
             RawInput = started.Input,
             Locations = Locations(started.Locations),
+            Meta = ParentMeta(started.ParentCallId),
         },
         ToolCallChanged changed => new ToolCallUpdate(changed.CallId)
         {
+            Meta = ParentMeta(changed.ParentCallId),
             Title = changed.Title,
             Status = changed.Status is { } status ? Status(status) : null,
             RawInput = changed.Input,
@@ -89,13 +95,16 @@ internal sealed class TurnReporter : ITurnObserver
     {
         PromptSent prompt => new UserMessageChunk(new TextContent(prompt.Text)),
         AnswerChunk chunk => new AgentMessageChunk(new TextContent(chunk.Text)),
+        TurnPlanned planned => Plan(planned),
         ToolCallStarted started => new ToolCall(started.CallId, started.Title, started.Kind, Status(started.Status))
         {
             RawInput = started.Input,
             Locations = Locations(started.Locations),
+            Meta = ParentMeta(started.ParentCallId),
         },
         ToolCallChanged changed => new ToolCallUpdate(changed.CallId)
         {
+            Meta = ParentMeta(changed.ParentCallId),
             Status = changed.Status is { } status ? Status(status) : null,
             RawOutput = changed.Output,
             Content = changed.OutputText is { } text ? [new ContentToolCallContent(new TextContent(text))] : null,
@@ -125,10 +134,45 @@ internal sealed class TurnReporter : ITurnObserver
         _ => null,
     };
 
+    /// <summary>
+    /// A7: an architect/editor turn's plan as a finished <c>think</c> step (<c>plan-{sequence}</c>), titled with who planned
+    /// and who edits, the plan as its content, live and on <c>session/load</c> alike. Model text, sent as text: the client
+    /// renders it, nothing runs it.
+    /// </summary>
+    internal static ToolCall Plan(TurnPlanned planned) =>
+        new("plan-" + planned.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            $"Plan by {planned.Plan.Planner} · edited by {planned.Plan.Editor}" + (planned.Plan.Attempt > 1 ? " (re-plan)" : ""),
+            ToolKinds.Think, ToolStatuses.Completed)
+        {
+            Content = [new ContentToolCallContent(new TextContent(planned.Text))],
+        };
+
     private static string Short(string text)
     {
         var line = text.ReplaceLineEndings(" ").Trim();
         return line.Length > 80 ? line[..80] + "…" : line;
+    }
+
+    /// <summary>
+    /// A7: ACP has no nested calls, so a call a code mode script made carries its parent in <c>_meta</c>:
+    /// <c>{"corvid":{"parentToolCallId":"call-3"}}</c>. Null (no <c>_meta</c>) for the model's own calls, so their messages
+    /// are as before.
+    /// </summary>
+    internal static JsonElement? ParentMeta(string? parentCallId)
+    {
+        if (parentCallId is null)
+            return null;
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteStartObject("corvid");
+            writer.WriteString("parentToolCallId", parentCallId);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+        using var document = JsonDocument.Parse(buffer.WrittenMemory);
+        return document.RootElement.Clone();
     }
 
     internal static ToolCallLocation[]? Locations(ImmutableArray<string> paths) =>

@@ -37,7 +37,7 @@ namespace Corvid.Kernel.Turns;
 /// Not thread-safe: the session actor runs one turn at a time. Every append re-reads the head, because the fabric, the
 /// approval pipeline and the memory writer append to the same log. Taint persists across turns until a user message.
 /// </remarks>
-public sealed class TurnRunner
+public sealed partial class TurnRunner
 {
     private const int MaxAppendAttempts = 8;
     private const string None = "none";
@@ -491,7 +491,13 @@ public sealed class TurnRunner
 
     /// <param name="Ask">Goes through the pre-execute checkpoint: a side effect, or a network read in a tainted session.</param>
     /// <param name="Spans">Extracted spans the arguments did not match: hints if the tool's binding refuses one of those arguments.</param>
-    private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments, bool Ask, IReadOnlyList<SlotDisagreement> Spans);
+    /// <param name="ParentCallId">A7: the running call this nested one was made from (code mode); null for the model's own.</param>
+    private sealed record ValidCall(string CallId, Offered Tool, JsonElement Arguments, bool Ask, IReadOnlyList<SlotDisagreement> Spans,
+        string? ParentCallId = null)
+    {
+        /// <summary>A7V1-3: a nested call's approval is denied by then (its parent run's end); null for no limit.</summary>
+        public DateTimeOffset? NotAfter { get; init; }
+    }
 
     private enum CallOutcome
     {
@@ -502,7 +508,7 @@ public sealed class TurnRunner
     }
 
     /// <summary>One turn's state. Lives only while the turn runs.</summary>
-    private sealed class Turn(TurnRunner runner, Envelope envelope)
+    private sealed partial class Turn(TurnRunner runner, Envelope envelope)
     {
         private readonly TurnServices _services = runner._services;
         private readonly TurnOptions _options = runner.OptionsNow();
@@ -523,6 +529,8 @@ public sealed class TurnRunner
         private readonly HashSet<string> _taintedResults = new(StringComparer.Ordinal);
         private ImmutableSortedDictionary<string, ImmutableArray<string>> _entities = ImmutableSortedDictionary<string, ImmutableArray<string>>.Empty;
         private ImmutableArray<Offered> _shortlist = [];
+        // A7V1-7: the tools the filter withheld when the shortlist was built.
+        private readonly HashSet<string> _withheldAtStart = new(StringComparer.Ordinal);
         private ImmutableArray<RetrievedItem> _recalled = [];
         private ImmutableArray<SkillOption> _skills = [];
         private string _skillNote = "";
@@ -608,8 +616,10 @@ public sealed class TurnRunner
                 delegates ? [FabricConditions.GeneratorSupportsDelegation] : []).ConfigureAwait(false);
             await LoadSkillAsync(verdicts, cancellationToken).ConfigureAwait(false);
 
-            if (Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed)
-                await EscalateAsync("difficulty", cancellationToken).ConfigureAwait(false);
+            // A7 review (depth M1): the escalation stays here, so a clarifying question is asked on the escalated model; the plan
+            // waits until the turn knows it goes on, after recall and the clarify decision (PlanBeforeLoopAsync).
+            var hard = Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed
+                && await EscalateAsync("difficulty", cancellationToken, plan: false).ConfigureAwait(false);
             if (verdicts.Verdicts.ContainsKey("needs_recall"))
                 await RecallAsync(Acted(verdicts, "needs_recall", out _), cancellationToken).ConfigureAwait(false);
 
@@ -632,6 +642,10 @@ public sealed class TurnRunner
             if (delegates && Acted(verdicts, "delegate", out _) && _catalogue.TryGetValue(DelegateTaskTool.ToolName, out var delegation)
                 && !(offered ?? _shortlist).Any(tool => tool.Function.Name == DelegateTaskTool.ToolName))
                 offered = (offered ?? _shortlist).Add(delegation);
+            // A7: the plan (a hard coding turn under ArchitectEditor, or one the person asked for), now that recall has run,
+            // the turn is not a question back, and the tools it is offered are known.
+            _turnTools = offered ?? _shortlist;
+            await PlanBeforeLoopAsync(hard, cancellationToken).ConfigureAwait(false);
             return await LoopAsync(offered ?? _shortlist, cancellationToken).ConfigureAwait(false);
         }
 
@@ -795,7 +809,11 @@ public sealed class TurnRunner
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var budgetSpent = _steps >= _options.MaxSteps;
-                var tools = finishing || budgetSpent ? [] : offered;
+                // A7V1-7: the filter again at every step, not only when the shortlist was built, so a tool it withholds from
+                // the generator now (code mode after a fallback or privacy retreat to an in-process model) is not offered.
+                var tools = finishing || budgetSpent ? [] : Filtered(offered);
+                if (required is not null && !tools.Any(tool => tool.Function.Name == required))
+                    required = null;
                 var nudge = budgetSpent && !finishing ? NudgeBudget : finishing ? NudgeFinish : null;
                 if (budgetSpent && status == TurnStatus.Answered)
                     status = TurnStatus.StepBudgetExhausted;
@@ -867,7 +885,9 @@ public sealed class TurnRunner
                 // call the turn stuck), so the generator can act on it. The step budget still bounds the turn.
                 if (!steered && Acted(step, "stuck", out _))
                 {
-                    if (!_options.EscalationAllowed || !await EscalateAsync("stuck", cancellationToken).ConfigureAwait(false))
+                    // A7: an editor stuck on its plan gets one re-plan before the turn's own stuck handling.
+                    if (!await ReplanAsync(cancellationToken).ConfigureAwait(false)
+                        && (!_options.EscalationAllowed || !await EscalateAsync("stuck", cancellationToken).ConfigureAwait(false)))
                     {
                         finishing = true;
                         status = TurnStatus.Stuck;
@@ -879,13 +899,26 @@ public sealed class TurnRunner
             }
         }
 
+        // Drops a tool the filter passed when the shortlist was built and withholds now; one it withheld then and the turn
+        // offers anyway (a confident delegate's delegate_task) stays.
+        private ImmutableArray<Offered> Filtered(ImmutableArray<Offered> tools) =>
+            _options.ToolFilter is null || tools.All(FilterKeeps) ? tools : [.. tools.Where(FilterKeeps)];
+
+        // Whether the turn's tool filter lets the tool be offered now (see Filtered); a nested call is held to it too.
+        private bool FilterKeeps(Offered tool) =>
+            _options.ToolFilter is not { } filter || _withheldAtStart.Contains(tool.Function.Name) || filter(tool.Descriptor);
+
         // ---- generator ----
 
+        /// <param name="binding">
+        /// A7: call this binding directly instead of the generator slot (an architect/editor turn's planner): no fallback and no
+        /// privacy retreat, so a refusal of its egress gate reaches the caller as <see cref="PrivacyEgressRefusedException"/>.
+        /// </param>
         private async Task<ChatResponse> GenerateAsync(ImmutableArray<Offered> tools, string? nudge, string? required,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, ModelBinding? binding = null)
         {
-            var generator = _services.Slots.GetChatClient(ModelSlots.Generator);
-            var profile = _services.Slots.Current(ModelSlots.Generator).Profile;
+            var generator = binding?.GetService<IChatClient>() ?? _services.Slots.GetChatClient(ModelSlots.Generator);
+            var profile = binding?.Profile ?? _services.Slots.Current(ModelSlots.Generator).Profile;
             _generatorId = profile.Id;
             var counter = Counter(generator);
             var budget = profile.AcceptedContext - _options.MaxOutputTokens - _options.ContextReserve;
@@ -893,7 +926,7 @@ public sealed class TurnRunner
                 + counter.CountTokens(tool.Function.JsonSchema.GetRawText()));
             // Prompt caching (plan §8): a model that caches on breakpoints keeps a frozen system prompt, so this turn's recalled
             // memory and skill go after the history as a one-shot note instead of into the system prompt.
-            var notes = string.Join("\n\n", new[] { MemoryNote(profile), _skillNote }.Where(part => part.Length > 0));
+            var notes = string.Join("\n\n", new[] { MemoryNote(profile), _skillNote, _planNote }.Where(part => part.Length > 0));
             var frozen = profile.Caching == PromptCachingStyle.Breakpoints;
             var noteTokens = frozen && notes.Length > 0 ? counter.CountTokens(notes) : 0;
             var system = SystemPrompt(profile, frozen ? "" : notes);
@@ -921,6 +954,8 @@ public sealed class TurnRunner
             _heldLocalOnly |= holdsLocalOnly;
             var options = new ModelRequestContext(runner.SessionId, runner.Tainted, holdsLocalOnly)
                 .Apply(new ChatOptions { MaxOutputTokens = _options.MaxOutputTokens });
+            if (_planning)
+                (options.AdditionalProperties ??= [])[ModelRequestKeys.Unstreamed] = true;
             if (!tools.IsEmpty)
             {
                 options.Tools = [.. tools.Select(tool => (AITool)tool.Function)];
@@ -1219,7 +1254,7 @@ public sealed class TurnRunner
         private async Task<CallOutcome> ExecuteAsync(ValidCall call, CancellationToken cancellationToken)
         {
             // The span covers the approval wait too: that is where a side-effecting call spends its time.
-            using var activity = StartToolActivity(call.CallId, call.Tool.Function.Name, call.Ask);
+            using var activity = StartToolActivity(call.CallId, call.Tool.Function.Name, call.Ask, call.ParentCallId);
             try
             {
                 var outcome = await ExecuteCoreAsync(call, cancellationToken).ConfigureAwait(false);
@@ -1243,7 +1278,8 @@ public sealed class TurnRunner
         }
 
         // Tags given at creation, so a listener's ActivityStarted (the CLI's tool panel) already sees them.
-        private Activity? StartToolActivity(string callId, string tool, bool approval) =>
+        // A7: a nested call's span carries its parent's id too (and is the parent span's child, being started inside it).
+        private Activity? StartToolActivity(string callId, string tool, bool approval, string? parentCallId = null) =>
             KernelTelemetry.Source.StartActivity(ActivityKind.Internal, tags:
             [
                 new(KernelTelemetry.OperationName, "execute_tool"),
@@ -1252,6 +1288,7 @@ public sealed class TurnRunner
                 new(KernelTelemetry.ToolType, "function"),
                 new(KernelTelemetry.ConversationId, runner.SessionId),
                 new(KernelTelemetry.ToolApproval, approval),
+                .. parentCallId is null ? [] : (KeyValuePair<string, object?>[])[new(KernelTelemetry.ToolParentCallId, parentCallId)],
             ], name: KernelTelemetry.ExecuteToolPrefix + tool);
 
         private async Task<CallOutcome> ExecuteCoreAsync(ValidCall call, CancellationToken cancellationToken)
@@ -1327,6 +1364,8 @@ public sealed class TurnRunner
                 ? new ToolOutputTail(_services.Time, _options.OutputTailInterval, _options.OutputTailChars, _options.OutputTailLines,
                     text => listener.ToolOutput(runner.SessionId, call.CallId, descriptor.Name, text))
                 : null;
+            // A7: a top-level call may make nested calls through the turn's own path (depth 1: a nested call cannot).
+            using var nested = call.ParentCallId is null ? new NestedCalls(call, _services.Time.GetUtcNow(), cancellationToken) : null;
             using (running)
             {
                 try
@@ -1341,9 +1380,23 @@ public sealed class TurnRunner
                         Output = tail is null ? null : tail.Write,
                         // A5: what the turn may be offered, the ceiling of a delegated child's toolset.
                         OfferedTools = new HashSet<string>(_catalogue.Keys, StringComparer.Ordinal),
+                        ParentCallId = call.ParentCallId,
+                        Invoker = nested is null ? null : (tool, input, token) => InvokeNestedAsync(nested, tool, input, token),
                     };
+                    if (nested is not null)
+                        nested.Context = context;
                     var arguments = context.AttachTo(JsonValues.ToArguments(call.Arguments));
-                    var value = await call.Tool.Function.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
+                    object? value;
+                    try
+                    {
+                        value = await call.Tool.Function.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        // Every nested call has its result before the parent's: the ones still running are cancelled.
+                        if (nested is not null)
+                            await nested.CloseAsync().ConfigureAwait(false);
+                    }
                     var result = JsonValues.ToElement(value);
                     await RecordAfterAsync().ConfigureAwait(false);
                     // The result is logged before the lease is released: a model switch refuses an issued call with no result.
@@ -1413,6 +1466,7 @@ public sealed class TurnRunner
                 Reversible = await ReversibleAsync(approvals, action).ConfigureAwait(false),
                 // A5: the session's own decider answers its risk question too.
                 Fabric = _services.Deciders is null ? null : _services.CurrentFabric(),
+                NotAfter = call.NotAfter,
             };
             ApprovalResult result;
             try
@@ -1596,8 +1650,12 @@ public sealed class TurnRunner
             {
                 lock (_gate)
                 {
-                    runner.Append(new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
-                        _localOnly ? true : null, _generatorId, TakeUsage()));
+                    // A7: a nested call was asked for by a running tool, not by a generator response: no generator, no usage.
+                    runner.Append(call.ParentCallId is { } parent
+                        ? new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
+                            _localOnly ? true : null, ParentCallId: parent)
+                        : new ToolCallIssued(call.CallId, call.Tool.Function.Name, call.Arguments, _steps, call.Tool.Descriptor.Risk.ReadOnly,
+                            _localOnly ? true : null, _generatorId, TakeUsage()));
                     _open.Add(call.CallId);
                 }
             }
@@ -1734,14 +1792,20 @@ public sealed class TurnRunner
             return true;
         }
 
-        private void IssueRejected(string callId, string tool, JsonElement arguments, bool? readOnly, JsonElement error)
+        private void IssueRejected(string callId, string tool, JsonElement arguments, bool? readOnly, JsonElement error, string? parentCallId = null)
         {
             // A call that never ran still gets its span, so a trace shows the repair the next response is asked for.
-            using var activity = StartToolActivity(callId, tool, approval: false);
+            using var activity = StartToolActivity(callId, tool, approval: false, parentCallId);
             activity?.SetTag(KernelTelemetry.ToolOutcome, "invalid_arguments");
             activity?.SetStatus(ActivityStatusCode.Error);
             lock (_gate)
-                runner.Append(new ToolCallIssued(callId, tool, arguments, _steps, readOnly, Generator: _generatorId, Usage: TakeUsage()), new ToolResult(callId, error, IsError: true));
+            {
+                var result = new ToolResult(callId, error, IsError: true, _localOnly && parentCallId is not null ? true : null);
+                runner.Append(parentCallId is null
+                    ? new ToolCallIssued(callId, tool, arguments, _steps, readOnly, Generator: _generatorId, Usage: TakeUsage())
+                    : new ToolCallIssued(callId, tool, arguments, _steps, readOnly, _localOnly ? true : null, ParentCallId: parentCallId), result);
+                KeepNestedResult(result);
+            }
         }
 
         // Read-only calls finish concurrently, so the shared turn state they touch is updated under the lock.
@@ -1749,7 +1813,9 @@ public sealed class TurnRunner
         {
             lock (_gate)
             {
-                runner.Append(new ToolResult(callId, result, isError, _localOnly ? true : null));
+                var logged = new ToolResult(callId, result, isError, _localOnly ? true : null);
+                runner.Append(logged);
+                KeepNestedResult(logged);
                 _open.Remove(callId);
                 if (lastToolResult is not null)
                     _lastToolResult = lastToolResult;
@@ -2078,6 +2144,8 @@ public sealed class TurnRunner
                         // A5: a guest never starts child sessions, whatever its allowlist says.
                         && function.Name != DelegateTaskTool.ToolName))
                     _catalogue[function.Name] = new Offered(function, descriptor);
+            if (_options.ToolFilter is { } withholds)
+                _withheldAtStart.UnionWith(_catalogue.Values.Where(tool => !withholds(tool.Descriptor)).Select(tool => tool.Function.Name));
             if (_catalogue.Count == 0 || !_services.Slots.TryCurrent(ModelSlots.TextEmbedder, out var binding)
                 || binding.Service is not IEmbeddingGenerator<string, Embedding<float>> embedder)
             {
@@ -2194,7 +2262,11 @@ public sealed class TurnRunner
             }
         }
 
-        private async Task<bool> EscalateAsync(string reason, CancellationToken cancellationToken)
+        /// <param name="plan">
+        /// A7: whether an architect/editor turn may plan now (<see cref="PlansOn"/>). False at ingress, where the plan waits
+        /// for <see cref="PlanBeforeLoopAsync"/>.
+        /// </param>
+        private async Task<bool> EscalateAsync(string reason, CancellationToken cancellationToken, bool plan = true)
         {
             // The policy governs every trigger (difficulty, stuck, repair, context), not only the ones the fabric is asked about.
             if (!_options.EscalationAllowed)
@@ -2204,6 +2276,9 @@ public sealed class TurnRunner
                 return false;
             runner.NoteBudgetChange(result);
             _escalations.Add($"{result.To!.Id}: {reason}");
+            // A7: a coding turn under ArchitectEditor (or one the person asked to plan) plans on the escalated model and hands back.
+            if (plan && PlansOn(reason))
+                await PlanAsync(reason, cancellationToken).ConfigureAwait(false);
             return true;
         }
 
@@ -2230,7 +2305,9 @@ public sealed class TurnRunner
                 egress.Add(Ask("deliver"));
             // skill_opportunity acts only on procedure evidence (its required condition): three tool calls, or a failed call
             // recovered by a different one of its family (C-026). Other turns are not asked: in the degraded tier each ask is
-            // a generator call. A replay or eval turn is never distilled again.
+            // a generator call. A replay or eval turn is never distilled again. A7 review (M2): _toolCalls counts the model's
+            // own calls only, never a code run's nested ones (a skill replays the model's calls; one script with many calls
+            // is one step), and the scan leaves nested calls out the same way.
             var learnable = _services.SkillLearning is not null && status == TurnStatus.Answered && _options.PinnedSkill is null
                 && envelope.Guest is null;
             // A recovery needs a failed call and a later one, so shorter turns skip the log read.
@@ -2358,6 +2435,7 @@ public sealed class TurnRunner
                 LessonQueued = _lessonQueued,
                 Question = status == TurnStatus.Clarifying ? _question : null,
                 Steers = _steered.Count,
+                Plans = [.. _plans],
             };
     }
 

@@ -81,9 +81,35 @@ public sealed record StagedBlockUpdate(string Id, string Block)
 
     public int Budget { get; init; }
 
-    /// <summary>The fill (0 to 1) from which "Consolidate the block…" is offered: 0.9.</summary>
+    /// <summary>The fill (0 to 1) from which "Consolidate the block…" is offered: the configured threshold, 0.9 by default.</summary>
     public double ConsolidateAt { get; init; } = 0.9;
+
+    /// <summary>
+    /// The update rewrites the whole block (a consolidation the block rewrite job staged, plan §9.5): <see cref="Added"/> is
+    /// the whole block as it would be, and <see cref="Diff"/> its lines against the block now.
+    /// </summary>
+    public bool Replaces { get; init; }
+
+    /// <summary>For an update that <see cref="Replaces"/> the block: the lines kept, removed and added, in order.</summary>
+    public IReadOnlyList<BlockDiffRow> Diff { get; init; } = [];
+
+    /// <summary>
+    /// A7 review: a rewrite made from an earlier revision of the block, which has changed since: approving it would fail,
+    /// and a diff against the block now would show changes it does not make, so it has none and only Reject is offered (the
+    /// sleep-time job rejects it and proposes again on its next pass).
+    /// </summary>
+    public bool Stale { get; init; }
 }
+
+public enum BlockLineKind
+{
+    Kept,
+    Removed,
+    Added,
+}
+
+/// <summary>One line of a block rewrite's diff.</summary>
+public sealed record BlockDiffRow(BlockLineKind Kind, string Text);
 
 /// <summary>A consolidation's proposal: the block rewritten shorter, and its size counted with the generator's tokenizer.</summary>
 public sealed record BlockConsolidation(string Block, string Text, int Tokens);
@@ -106,6 +132,12 @@ public sealed record CoreBlock(string Name, int Tokens, int Budget)
 
     /// <summary>The block's text, as the prompt carries it.</summary>
     public string Text { get; init; } = "";
+
+    /// <summary>
+    /// A7V1-5: the fill (0 to 1) from which consolidation is offered: the block rewrite job's threshold
+    /// (<c>Corvid:Memory:Consolidation:Threshold</c>), 0.9 by default.
+    /// </summary>
+    public double ConsolidateAt { get; init; } = 0.9;
 }
 
 /// <summary>A stored fact with its bi-temporal fields: valid from, valid until (when it stopped holding), recorded at.</summary>

@@ -549,6 +549,19 @@ public sealed class TurnSettings
     /// reduces only when Kev runs on the CPU.
     /// </summary>
     public ReducedCheckpoints ReducedCheckpoints { get; set; } = ReducedCheckpoints.Auto;
+
+    /// <summary>
+    /// A7, architect/editor turns (plan §6): when a coding turn escalates (difficulty or repair), the escalated model
+    /// writes one plan and the session's own model (or <see cref="EditorModel"/>) makes the edits; an editor that gets stuck
+    /// gets one re-plan. Default off. <c>/architect</c> asks for it for the next turn or the session, whatever this says.
+    /// </summary>
+    public bool ArchitectEditor { get; set; }
+
+    /// <summary>
+    /// A7: the model that applies an architect/editor turn's plan, by name (a catalogue model on the generator slot's
+    /// default, fallbacks or escalation ladder); unset, or a model not on them, uses the session's own generator.
+    /// </summary>
+    public string? EditorModel { get; set; }
 }
 
 /// <summary>Whether the fabric runs the reduced checkpoint profile (C-030).</summary>
@@ -571,6 +584,29 @@ public sealed class MemorySettings
 
     /// <summary>The lessons tier (C-025); it needs memory on.</summary>
     public LessonsSettings Lessons { get; set; } = new();
+
+    /// <summary>The block rewrite job (plan §9.5); it needs memory on and the extractor slot (the write path).</summary>
+    public ConsolidationSettings Consolidation { get; set; } = new();
+}
+
+public sealed class ConsolidationSettings
+{
+    /// <summary>
+    /// When every session is idle, a <c>user</c> or <c>agent</c> block at <see cref="Threshold"/> of its budget (or over it),
+    /// and an edit staged over its block's budget, is rewritten on the background generator and staged for review, and the
+    /// ending of duplicate facts is staged too; nothing is applied unapproved. Off, <c>/memory consolidate</c> and the app's
+    /// Consolidate still work on demand.
+    /// </summary>
+    public bool Background { get; set; } = true;
+
+    /// <summary>The fill (0 to 1) from which the background job rewrites a block.</summary>
+    public double Threshold { get; set; } = 0.9;
+
+    /// <summary>Minutes between the job's looks when no turn nudges it.</summary>
+    public int IntervalMinutes { get; set; } = 15;
+
+    /// <summary>Seconds the job waits after a turn ends before it checks that every session is idle, and between checks while one is busy.</summary>
+    public int IdleSeconds { get; set; } = 30;
 }
 
 public sealed class LessonsSettings
@@ -602,6 +638,42 @@ public sealed class ToolSettings
     /// <c>Corvid:Agents:MaxDepth</c> 0 turns it off too.
     /// </summary>
     public bool Delegate { get; set; } = true;
+
+    /// <summary>A7: code mode's <c>execute_code</c> (plan §15).</summary>
+    public CodeSettings Code { get; set; } = new();
+}
+
+/// <summary>
+/// A7: code mode (plan §15, parity row 1.6): <c>execute_code</c> runs a short C#, Python or JavaScript program in the
+/// sandbox with no network, and its tool calls go through the turn's own path. Offered only when the session's generator is
+/// a cloud or local-server model. Limits are Hermes' and enforced by Corvid, whatever the script does.
+/// </summary>
+public sealed class CodeSettings
+{
+    /// <summary>Register <c>execute_code</c> (needs <c>Corvid:Tools:Builtin</c>). Off by default.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>A run's wall-clock limit in seconds, including time its tool calls wait for approval.</summary>
+    public int TimeoutSeconds { get; set; } = 300;
+
+    /// <summary>Tool calls one run may make.</summary>
+    public int MaxCalls { get; set; } = 50;
+
+    /// <summary>Bytes of a run's standard output its result keeps.</summary>
+    public int MaxStdoutBytes { get; set; } = 50 * 1000;
+
+    /// <summary>Bytes of a run's standard error its result keeps.</summary>
+    public int MaxStderrBytes { get; set; } = 10 * 1000;
+
+    /// <summary>The tools a script may call, when the turn offers them too. Null: the built-in file tools, shell, web_fetch and memory search.</summary>
+    public List<string>? Tools { get; set; }
+
+    /// <summary>Absolute paths of the runtimes; unset ones are found on PATH (<c>python3</c>, <c>node</c>) or as the .NET SDK's host.</summary>
+    public string? Python { get; set; }
+
+    public string? Node { get; set; }
+
+    public string? Dotnet { get; set; }
 }
 
 public sealed class SchedulerSettings

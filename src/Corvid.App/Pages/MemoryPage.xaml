@@ -263,6 +263,28 @@
                 </Grid>
               </StackPanel>
             </Border>
+            <!-- A staged consolidation (plan §9.5): the rewrite's lines against the block now; removed on del-bg, added on add-bg. -->
+            <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="8" Background="{ThemeResource CorvidBg}"
+                    Visibility="{x:Bind ui:Ui.VisibleIf(ShowsRewriteDiff), Mode=OneWay}">
+              <ItemsControl ItemsSource="{x:Bind DiffLines}" IsTabStop="False" AutomationProperties.Name="The block rewritten, as a diff">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="memory:BlockDiffLineView">
+                    <Grid MinHeight="22" AutomationProperties.Name="{x:Bind AutomationName}">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="38" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Border Grid.ColumnSpan="2" Background="{ThemeResource CorvidAddBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsAdded)}" />
+                      <Border Grid.ColumnSpan="2" Background="{ThemeResource CorvidDelBg}" Visibility="{x:Bind ui:Ui.VisibleIf(IsRemoved)}" />
+                      <Border BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,1,0">
+                        <TextBlock Text="{x:Bind Sign}" FontSize="12.5" HorizontalAlignment="Right" Margin="0,0,8,0" VerticalAlignment="Center" />
+                      </Border>
+                      <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontSize="12.5" Margin="8,2,0,2" TextWrapping="Wrap" VerticalAlignment="Center" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </Border>
             <StackPanel Spacing="4" Visibility="{x:Bind ui:Ui.VisibleIf(IsEditing), Mode=OneWay}">
               <TextBlock Text="{x:Bind EditLabel, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" />
               <TextBox Text="{x:Bind EditText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MemTextBox}"
@@ -598,6 +620,9 @@
                     <TextBlock Text="{x:Bind ConsolidationOffer}" FontSize="12.5" Foreground="{ThemeResource CorvidAmber}" TextWrapping="Wrap" VerticalAlignment="Center" />
                     <controls:LinkButton Text="Consolidate in Review" FontSize="12.5" Command="{x:Bind OpenReview}" VerticalAlignment="Center"
                                          Visibility="{x:Bind ui:Ui.VisibleIf(CanOpenReview)}" />
+                    <controls:LinkButton Text="Consolidate now" FontSize="12.5" Command="{x:Bind ConsolidateNow}" VerticalAlignment="Center"
+                                         Visibility="{x:Bind ui:Ui.VisibleIf(CanConsolidateNow)}"
+                                         ToolTipService.ToolTip="The background generator rewrites the block shorter; the rewrite waits in Review as a diff until you approve it" />
                   </controls:WrapRowPanel>
                   <Border Background="{ThemeResource CorvidCodeBg}" CornerRadius="6" Padding="10,8">
                     <TextBlock Text="{x:Bind Text}" Style="{StaticResource CorvidBodyText}" IsTextSelectionEnabled="True" />

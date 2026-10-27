@@ -74,6 +74,15 @@ public sealed record TurnStepped(int Step, int? MaxSteps) : SessionStreamUpdate
 public sealed record AnswerChunk(string Text) : SessionStreamUpdate;
 
 /// <summary>
+/// A7: an architect/editor turn's plan (plan §6), from its <c>AssistantMessage</c> with a <see cref="TurnPlan"/>: written by
+/// <c>Plan.Planner</c> (the escalated model) for <c>Plan.Editor</c> (the session's own, or the configured editor), which
+/// makes the edits after it. Live once it is logged (its request is not streamed as the answer) and on replay. A model's
+/// text: untrusted, clean it before showing it.
+/// </summary>
+/// <param name="Sequence">The event's position in the log.</param>
+public sealed record TurnPlanned(string Text, TurnPlan Plan, long Sequence) : SessionStreamUpdate;
+
+/// <summary>
 /// Reasoning the generator streamed (ACP <c>agent_thought_chunk</c>, K-1): live only, a delta; the log does not keep it,
 /// so a replay has none.
 /// </summary>
@@ -121,6 +130,12 @@ public sealed record ToolCallStarted(string CallId, string Title, string Kind, T
 
     /// <summary>A5: the profile id of the generator that asked for it, from the log (<c>ToolCallIssued.Generator</c>); null when unknown.</summary>
     public string? Generator { get; init; }
+
+    /// <summary>
+    /// A7: the call this one was made from (code mode's script calling a tool: <c>ToolCallIssued.ParentCallId</c>); null for
+    /// the model's and the user's own calls. A surface shows it under its parent.
+    /// </summary>
+    public string? ParentCallId { get; init; }
 }
 
 /// <summary>A tool call changed (ACP <c>tool_call_update</c>): it finished, with what it did. Null or empty leaves a part as it was.</summary>
@@ -128,6 +143,9 @@ public sealed record ToolCallChanged(string CallId) : SessionStreamUpdate
 {
     /// <summary>A5: the profile id of the generator that asked for it, from the log, when the change brings the call's input.</summary>
     public string? Generator { get; init; }
+
+    /// <summary>A7: the call this one was made from, from the log, when the change brings the call's input; see <see cref="ToolCallStarted.ParentCallId"/>.</summary>
+    public string? ParentCallId { get; init; }
 
     public string? Title { get; init; }
 

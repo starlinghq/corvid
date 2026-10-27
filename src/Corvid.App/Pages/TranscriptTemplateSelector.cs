@@ -20,11 +20,14 @@ public sealed partial class TranscriptTemplateSelector : DataTemplateSelector
     public DataTemplate? Rewind { get; set; }
     public DataTemplate? Question { get; set; }
     public DataTemplate? Command { get; set; }
+    /// <summary>A7: an architect/editor turn's plan.</summary>
+    public DataTemplate? Plan { get; set; }
 
     /// <summary>Every template the selector picks from.</summary>
     public IEnumerable<DataTemplate> Templates => new[]
     {
         User, TurnHeader, Decisions, Switch, Tool, Approval, Taint, Answer, Thought, Notice, Detection, Compaction, Rewind, Question, Command,
+        Plan,
     }.OfType<DataTemplate>();
 
     protected override DataTemplate? SelectTemplateCore(object item) => item is TranscriptBlock block
@@ -45,6 +48,7 @@ public sealed partial class TranscriptTemplateSelector : DataTemplateSelector
             TranscriptBlockKind.Rewind => Rewind,
             TranscriptBlockKind.Question => Question,
             TranscriptBlockKind.Command => Command,
+            TranscriptBlockKind.Plan => Plan,
             _ => null,
         }
         : null;

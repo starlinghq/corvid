@@ -104,6 +104,21 @@ public sealed record CallVerdict(VerdictKind Kind)
 }
 
 /// <summary>
+/// A7: a code mode run (<c>execute_code</c>): the script and its language, which its card and its approval card show in
+/// full. Model text: the card reveals hidden characters (<see cref="SafeText.Reveal"/>), since this is what runs.
+/// </summary>
+/// <param name="Language">The language as surfaces name it: "Python", "C#", "JavaScript".</param>
+/// <param name="Source">The script as the call holds it.</param>
+public sealed record CodeRun(string Language, string Source)
+{
+    /// <summary>The tool calls the run may make (the host's limit), for "3 of 50 tool calls".</summary>
+    public int MaxCalls { get; init; } = 50;
+
+    /// <summary>The run's limits in words ("at most 50 tool calls, 1 MB per result …; no network").</summary>
+    public string? Limits { get; init; }
+}
+
+/// <summary>
 /// A tool call started or was announced (ACP <c>tool_call</c>). <see cref="ToolCallUpdate"/>s with the same id change it.
 /// </summary>
 /// <param name="Tool">The tool's name ("read_file").</param>
@@ -126,6 +141,15 @@ public sealed record ToolCall(string CallId, string Tool, ToolKind Kind, ToolCal
     /// <c>ModelSwitched</c> events); null when unknown. Configuration text: shown through <see cref="SafeText"/>.
     /// </summary>
     public string? Model { get; init; }
+
+    /// <summary>
+    /// A7: the call this one was made from: a code mode script's call names its run. The transcript shows it nested under
+    /// its run; null for the model's own calls.
+    /// </summary>
+    public string? ParentCallId { get; init; }
+
+    /// <summary>A7: for a code mode run, its script and language.</summary>
+    public CodeRun? Code { get; init; }
 }
 
 /// <summary>Changes to a tool call (ACP <c>tool_call_update</c>); a null or empty member leaves that part as it was.</summary>
@@ -159,4 +183,10 @@ public sealed record ToolCallUpdate(string CallId) : SessionUpdate
     public ImmutableArray<string> Locations { get; init; } = [];
 
     public CallVerdict? Verdict { get; init; }
+
+    /// <summary>A7: the run this call was made from, for an update that announces a call (see <see cref="ToolCall.ParentCallId"/>).</summary>
+    public string? ParentCallId { get; init; }
+
+    /// <summary>A7: how a code mode run ended, from its result, in words ("exit 0", "exit 1 · timed out").</summary>
+    public string? CodeOutcome { get; init; }
 }

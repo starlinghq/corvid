@@ -100,10 +100,13 @@ public sealed class SessionUpdateReporter : ITurnObserver
 
     public void Usage(long? inputTokens, long? outputTokens) => Then(() => Emit(new UsageReported(inputTokens, outputTokens)));
 
-    public void ToolStarted(string callId, string tool, bool approval) => Then(() =>
+    public void ToolStarted(string callId, string tool, bool approval) => ToolStarted(callId, tool, approval, null);
+
+    /// <summary>A7: a call started; <paramref name="parentCallId"/> is set for a nested call (code mode), from its span.</summary>
+    public void ToolStarted(string callId, string tool, bool approval, string? parentCallId) => Then(() =>
     {
         CatchUp();
-        Announce(callId, tool, approval);
+        Announce(callId, tool, approval, parentCallId);
     });
 
     public void ToolFinished(string callId, string tool, string outcome, TimeSpan elapsed) => Then(async () =>
@@ -114,9 +117,9 @@ public sealed class SessionUpdateReporter : ITurnObserver
             _finished.Add(callId);
             _tails.Remove(callId);
         }
-        Announce(callId, tool, approval: false);
         var (call, result, before, after, assessed, asked) = ReadNew(() => (_calls.GetValueOrDefault(callId), _results.GetValueOrDefault(callId),
             _before.GetValueOrDefault(callId), _after.GetValueOrDefault(callId), _assessed.GetValueOrDefault(callId), _asked.Contains(callId)));
+        Announce(callId, tool, approval: false, call?.ParentCallId);
         FlushLog();
         IReadOnlyList<FileDiff> diffs = [];
         if (before is not null && after is { Paths: { Length: > 0 } paths })
@@ -130,6 +133,7 @@ public sealed class SessionUpdateReporter : ITurnObserver
             Outcome = outcome,
             Input = call?.Arguments,
             Generator = call?.Generator,
+            ParentCallId = call?.ParentCallId,
             Output = result?.Result,
             OutputText = result is null ? null : ToolPresentation.ResultText(result.Result),
             Locations = _tools.Locations(call?.Arguments),
@@ -250,12 +254,25 @@ public sealed class SessionUpdateReporter : ITurnObserver
         return DrainAsync();
     }
 
-    private void Announce(string callId, string tool, bool approval)
+    private void Announce(string callId, string tool, bool approval, string? parentCallId = null)
     {
         lock (_gate)
             if (!_announced.Add(callId))
                 return;
-        Emit(new ToolCallStarted(callId, tool, _tools.Kind(tool), approval ? ToolCallState.Pending : ToolCallState.InProgress) { Tool = tool });
+        Emit(new ToolCallStarted(callId, tool, _tools.Kind(tool), approval ? ToolCallState.Pending : ToolCallState.InProgress)
+        {
+            Tool = tool,
+            ParentCallId = parentCallId,
+            // A7: a code mode run is announced with its script (issued to the log before it runs, and read by the catch-up
+            // just before), so a surface shows the source while it runs. Other calls stay announced without their input.
+            Input = CodeRunPresentation.IsCodeRun(tool) ? IssuedArguments(callId) : null,
+        });
+    }
+
+    private System.Text.Json.JsonElement? IssuedArguments(string callId)
+    {
+        lock (_calls)
+            return _calls.GetValueOrDefault(callId)?.Arguments;
     }
 
     private void Emit(SessionStreamUpdate update) => _emit(update with { At = update.At == default ? _time.GetUtcNow() : update.At });
@@ -370,6 +387,10 @@ public sealed class SessionUpdateReporter : ITurnObserver
                             break;
                         case TodosSet todos:
                             _fromLog.Add(new PlanChanged(todos.Items) { At = item.RecordedAt });
+                            break;
+                        // A7: an architect/editor turn's plan; the answer itself comes streamed, or at the turn's end.
+                        case AssistantMessage { Plan: { } plan } planned:
+                            _fromLog.Add(new TurnPlanned(planned.Text, plan, item.Sequence) { At = item.RecordedAt });
                             break;
                         case ToolCallIssued call:
                             _calls[call.CallId] = call;

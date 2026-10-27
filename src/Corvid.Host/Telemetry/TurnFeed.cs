@@ -33,6 +33,12 @@ public interface ITurnObserver
 
     void ToolStarted(string callId, string tool, bool approval) { }
 
+    /// <summary>
+    /// A7: a call started, with the call it was made from when it is nested (code mode's script calling a tool). The feed
+    /// calls this one; by default it forwards to the overload without the parent.
+    /// </summary>
+    void ToolStarted(string callId, string tool, bool approval, string? parentCallId) => ToolStarted(callId, tool, approval);
+
     /// <param name="outcome"><c>succeeded</c>, <c>failed</c>, <c>invalid_arguments</c>, <c>denied</c> or <c>cancelled</c>.</param>
     void ToolFinished(string callId, string tool, string outcome, TimeSpan elapsed) { }
 
@@ -46,6 +52,12 @@ public interface ITurnObserver
     /// previous tail. Untrusted text: clean it before showing it.
     /// </summary>
     void ToolOutput(string callId, string tool, string tail) { }
+
+    /// <summary>
+    /// A7: an architect/editor turn's plan was logged, written by <c>plan.Planner</c> for <c>plan.Editor</c>, whose calls
+    /// follow. Model text: untrusted, clean it before showing it.
+    /// </summary>
+    void Planned(Abstractions.Events.TurnPlan plan, string text) { }
 }
 
 public sealed record QuestionDecision(string Question, double Confidence, string Action, bool Acted);
@@ -114,12 +126,16 @@ public sealed class TurnFeed : IDisposable
 
         public void ToolOutput(string sessionId, string callId, string tool, string tail) =>
             feed.Publish(sessionId, observer => observer.ToolOutput(callId, tool, tail));
+
+        public void Planned(string sessionId, Abstractions.Events.TurnPlan plan, string text) =>
+            feed.Publish(sessionId, observer => observer.Planned(plan, text));
     }
 
     private void Started(Activity activity)
     {
         if (activity.Source.Name == KernelTelemetry.SourceName && IsTool(activity, out var session, out var callId, out var tool))
-            Publish(session, observer => observer.ToolStarted(callId, tool, activity.GetTagItem(KernelTelemetry.ToolApproval) is true));
+            Publish(session, observer => observer.ToolStarted(callId, tool, activity.GetTagItem(KernelTelemetry.ToolApproval) is true,
+                activity.GetTagItem(KernelTelemetry.ToolParentCallId) as string));
     }
 
     private void Stopped(Activity activity)

@@ -86,6 +86,8 @@ public static class SessionFold
             QuestionAsked question => OnQuestion(state, question),
             QuestionAnswered answered => OnQuestionAnswered(state, answered),
             CompactionUpdate compaction => AddNew(state, "compaction", id => new CompactionEntry(id, compaction) { Turn = 0 }),
+            // A7: an architect/editor turn's plan, in its turn where it was made, before the editor's calls.
+            TurnPlanned planned => OnPlanned(state, planned),
             Notice notice => AddNew(state, "notice", id => new NoticeEntry(id, notice)),
             _ => state,
         };
@@ -349,6 +351,7 @@ public static class SessionFold
                 Verdict = call.Verdict ?? existing.Verdict,
                 // A5: the latest word wins: the finished call brings the generator the log ties it to.
                 Model = Cleaned(call.Model) ?? existing.Model,
+                Code = call.Code ?? existing.Code,
                 StartedAt = call.Status == ToolCallStatus.InProgress && existing.Status == ToolCallStatus.Pending ? call.At : existing.StartedAt,
             };
             state = state with { Transcript = state.Transcript.SetItem(index, updated) };
@@ -366,8 +369,10 @@ public static class SessionFold
                 ApprovalId = state.Approvals.FirstOrDefault(request => request.CallId == call.CallId)?.ApprovalId,
                 Model = Cleaned(call.Model),
                 TurnModel = TurnFirstModel(state),
+                ParentCallId = call.ParentCallId,
+                Code = call.Code,
             };
-            state = Add(state, entry);
+            state = entry.ParentCallId is null ? Add(state, entry) : AddNested(state, entry);
         }
 
         return call.Status == ToolCallStatus.InProgress && state.Running ? state with { ActivitySince = call.At } : state;
@@ -380,11 +385,13 @@ public static class SessionFold
         if (index < 0 || state.Transcript[index] is not ToolEntry entry)
         {
             // An update for a call never announced: announce it with what the update says.
-            state = Add(state, new ToolEntry(id, change.CallId, "tool", ToolKind.Other, change.At)
+            var announced = new ToolEntry(id, change.CallId, "tool", ToolKind.Other, change.At)
             {
                 Turn = CurrentTurn(state),
                 Status = ToolCallStatus.Pending,
-            });
+                ParentCallId = change.ParentCallId,
+            };
+            state = announced.ParentCallId is null ? Add(state, announced) : AddNested(state, announced);
             index = IndexOf(state.Transcript, id);
             entry = (ToolEntry)state.Transcript[index];
         }
@@ -403,6 +410,7 @@ public static class SessionFold
             Locations = change.Locations.IsDefaultOrEmpty ? entry.Locations : change.Locations,
             Verdict = change.Verdict ?? entry.Verdict,
             StartedAt = started ? change.At : entry.StartedAt,
+            CodeOutcome = Cleaned(change.CodeOutcome) ?? entry.CodeOutcome,
         };
         state = state with { Transcript = state.Transcript.SetItem(index, updated) };
         return started && state.Running ? state with { ActivitySince = change.At } : state;
@@ -422,6 +430,8 @@ public static class SessionFold
                 {
                     ApprovalId = request.ApprovalId,
                     Status = tool.Status == ToolCallStatus.InProgress ? tool.Status : ToolCallStatus.Pending,
+                    // A7: a run announced by its prompt shows the script the prompt carries while it waits and runs.
+                    Code = tool.Code ?? request.Code,
                 }),
             };
         }
@@ -503,6 +513,22 @@ public static class SessionFold
         };
         state = Advance(state) with { Decisions = state.Decisions.Add(group) };
         return turn == 0 ? state : Add(state, new DecisionsEntry(group.Id, group, Summary: false) { Turn = turn });
+    }
+
+    /// <summary>
+    /// A7: a plan goes where the log has it: after the escalation that made it, above the row that hands the turn to its
+    /// editor. Live, that row can arrive first (the switch is told at once, the plan once the stream reads the log), so a
+    /// plan whose turn ends in the generator's return to its editor goes above that row.
+    /// </summary>
+    private static SessionView OnPlanned(SessionView state, TurnPlanned planned)
+    {
+        var entry = new TurnPlanEntry(NewId(state, "plan"), planned) { Turn = CurrentTurn(state) };
+        var transcript = state.Transcript;
+        var foot = FootIndex(transcript, entry.Turn);
+        if (foot > 0 && transcript[foot - 1] is SwitchEntry { Switch: { Kind: ModelSwitchKind.Returned } handBack } row && row.Turn == entry.Turn
+            && entry.Turn != 0 && handBack.Slot is "" or "generator" && handBack.To == planned.Editor)
+            return Advance(state) with { Transcript = transcript.Insert(foot - 1, entry) };
+        return Add(Advance(state), entry);
     }
 
     private static SessionView OnModelSwitched(SessionView state, ModelSwitched switched)
@@ -783,6 +809,7 @@ public static class SessionFold
         {
             Turn = turn,
             Next = state.Approvals.Count > 1 ? state.Approvals[1] : null,
+            ParentCallId = toolIndex >= 0 && without[toolIndex] is ToolEntry tool ? tool.ParentCallId : null,
         };
         var index = toolIndex >= 0 ? toolIndex + 1 : FootIndex(without, turn);
         if (existing == index)
@@ -832,6 +859,24 @@ public static class SessionFold
         }
 
         return state with { Transcript = transcript.Insert(index, entry) };
+    }
+
+    /// <summary>
+    /// A7: a code mode script's call goes right after its run's card and the run's earlier calls (with the run's turn), so
+    /// the transcript reads it under its run, live and on replay; the run counts it. A call whose run is not in the
+    /// transcript (cut away) is added as any other.
+    /// </summary>
+    private static SessionView AddNested(SessionView state, ToolEntry entry)
+    {
+        var transcript = state.Transcript;
+        var parentIndex = IndexOf(transcript, ToolId(entry.ParentCallId!));
+        if (parentIndex < 0 || transcript[parentIndex] is not ToolEntry parent)
+            return Add(state, entry);
+        var at = parentIndex + 1;
+        while (at < transcript.Count && (transcript[at] is ToolEntry tool && tool.ParentCallId == parent.CallId || transcript[at] is ApprovalEntry))
+            at++;
+        transcript = transcript.SetItem(parentIndex, parent with { NestedCalls = parent.NestedCalls + 1 });
+        return state with { Transcript = transcript.Insert(at, entry with { Turn = parent.Turn }) };
     }
 
     private static SessionView AddNew(SessionView state, string prefix, Func<string, TranscriptEntry> create)

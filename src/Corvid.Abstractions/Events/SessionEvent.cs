@@ -41,6 +41,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(ChildFinished), "child_finished")]
 [JsonDerivedType(typeof(ChildOf), "child_of")]
 [JsonDerivedType(typeof(WorkspaceBound), "workspace_bound")]
+[JsonDerivedType(typeof(MemoryJobRan), "memory_job_ran")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -59,8 +60,16 @@ public sealed record UserMessage(string Text,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<Media.ImageRef>? Images = null) : SessionEvent;
 // Usage (A5) is the generator calls' tokens since the previous call's record, on the answer that ended them; omitted when
 // null (no call reported any, or a message from elsewhere), so events written before it keep their persisted form.
+// Plan (A7, architect/editor turns, plan §6): set on a plan an escalated model wrote for the session's own (or the editor)
+// model to apply, mid-turn, before the edits; null on an answer. Omitted when null, so answers keep their persisted form,
+// and a binary older than A7 reads a plan as an ordinary assistant message (unknown properties are skipped).
 public sealed record AssistantMessage(string Text,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TurnPlan? Plan = null) : SessionEvent;
+// A7: who wrote an architect/editor turn's plan and who applies it. Planner and Editor are model profile ids; Trigger is what
+// made the turn plan (difficulty, context, repair, stuck for a re-plan, or architect when the person asked with /architect);
+// Attempt is 1 for the plan and 2 for the one re-plan a turn may make.
+public sealed record TurnPlan(string Planner, string Editor, string Trigger, int Attempt = 1);
 // A5: what one or more generator calls used, as their provider reported it (K-5 in the log). InputTokens and OutputTokens are
 // summed over the Calls it covers; PromptTokens is the latest call's prompt, which is what a context gauge shows. Each is
 // null when no call reported it.
@@ -89,12 +98,18 @@ public sealed record ClarificationAnswered(string QuestionId, string Answer) : S
 // Generator (A5) is the profile id of the generator whose response asked for the call ("qwen3.5-0.8b@cuda0"), so a switch
 // mid-turn is placed exactly on replay; omitted when null (the user's own `!` call, and events written before it). Usage (A5)
 // is on the first call a generator response issued: the tokens of the calls since the previous record, as on AssistantMessage.
+// ParentCallId (A7) is set on a nested call: one a running tool (code mode's script) made through the turn's own call path
+// (ToolCallContext.InvokeToolAsync), logged between its parent's call and the parent's result, with its own approval,
+// checkpoints and result. The model never asked for it, so the prompt and summaries leave it out with its result (the
+// parent's result says what the script did); surfaces show it under its parent. Its id is "{parent}.{n}". Omitted when null,
+// so events written before it keep their persisted form.
 public sealed record ToolCallIssued(string CallId, string ToolName, JsonElement Arguments,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Round = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ReadOnly = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Generator = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TokenUsage? Usage = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ParentCallId = null) : SessionEvent;
 // LocalOnly (A4) marks the result of a `!!` call, so a reader of one event (the episodic index) leaves it out without
 // finding its call; omitted when null.
 public sealed record ToolResult(string CallId, JsonElement Result, bool IsError = false,
@@ -151,6 +166,11 @@ public sealed record CompactionSummary(string? Goal, ImmutableArray<string> Cons
     ImmutableArray<string> Files, ImmutableArray<string> OpenQuestions, string? NextStep);
 public sealed record MemoryWritten(string MemoryId, string Operation) : SessionEvent;
 public sealed record SkillChanged(string SkillId, string Revision, string Author) : SessionEvent;
+// Plan §9.5: one run of a sleep-time memory job (Job, a MemoryJobs name) on Subject (block:user, a fact id), what came of it (Outcome:
+// staged, proposed, declined, refused or failed), why in Detail (sizes and reasons, never the memory's text), the staged
+// write's id when it staged one, and what started it (Trigger: idle, cli, app).
+public sealed record MemoryJobRan(string Job, string Subject, string Outcome, string Detail, string Trigger,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingId = null) : SessionEvent;
 // Null clears the standing goal. TodosSet replaces the todo list without changing earlier events.
 public sealed record GoalSet(string? Goal) : SessionEvent;
 public sealed record TodosSet(ImmutableArray<TodoItem> Items) : SessionEvent;
@@ -213,6 +233,18 @@ public sealed record McpToolHeld(string Server, string Tool, string Reason, stri
 public sealed record McpToolAccepted(string Server, string Tool, string Hash, bool Flagged = false) : SessionEvent;
 
 public sealed record McpPinsForgotten(string Server, int Tools) : SessionEvent;
+
+public static class MemoryJobs
+{
+    /// <summary>The event-log session the sleep-time memory jobs record their background runs in (plan §9.5).</summary>
+    public const string Session = "memory-jobs";
+
+    /// <summary>The block rewrite job: a core block over or near its budget rewritten to fit, staged for review.</summary>
+    public const string ConsolidateBlock = "consolidate_block";
+
+    /// <summary>The fact dedupe job: a current fact that says what an earlier one says, its ending staged for review.</summary>
+    public const string DedupeFacts = "dedupe_facts";
+}
 
 public static class McpSessions
 {

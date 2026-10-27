@@ -260,7 +260,10 @@ public sealed class ContextCompactor
         var lines = new List<string>();
         var views = PromptRenderer.DecidedViews(snapshot);
         var names = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var entry in snapshot.Transcript.Where(entry => entry.FromSequence >= range.From && entry.ThroughSequence <= range.Through))
+        // A7: nested calls stay out of the summary as they stay out of the prompt; the parent's result covers them.
+        var nested = PromptRenderer.NestedCallIds(snapshot.Transcript);
+        foreach (var entry in snapshot.Transcript.Where(entry => entry.FromSequence >= range.From && entry.ThroughSequence <= range.Through
+                     && !PromptRenderer.IsNested(entry, nested)))
         {
             if (entry.Content is Compacted earlier)
             {

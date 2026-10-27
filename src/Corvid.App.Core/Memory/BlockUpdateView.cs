@@ -52,6 +52,7 @@ public sealed class BlockUpdateView : ObservableObject
         ConsolidationNote = "consolidation is offered at " + MemoryText.Percent(update.ConsolidateAt);
         Context = SafeText.Reveal(update.Context, keepJoiners: true);
         Added = SafeText.Reveal(update.Added, keepJoiners: true);
+        DiffLines = update.Replaces ? [.. update.Diff.Select(row => new BlockDiffLineView(row))] : [];
         ApproveCommand = new AsyncRelayCommand(ct => RunAsync(() => _owner.ApproveBlockAsync(this, ct)), CanApprove);
         RejectCommand = new AsyncRelayCommand(ct => RunAsync(() => _owner.RejectBlockAsync(this, ct)), () => !_isBusy);
         CorrectCommand = new RelayCommand(ToggleCorrect);
@@ -126,12 +127,22 @@ public sealed class BlockUpdateView : ObservableObject
 
     public bool IsEditing => _isCorrecting || _isConsolidated;
 
-    public bool ShowsDiff => !IsEditing;
+    /// <summary>The two-line diff of an update that adds a line (its context, then the line).</summary>
+    public bool ShowsDiff => !IsEditing && !Update.Replaces;
+
+    /// <summary>The line diff of an update that rewrites the whole block (a staged consolidation): kept, removed, added.</summary>
+    public bool ShowsRewriteDiff => !IsEditing && Update.Replaces;
+
+    /// <summary>The rewrite's lines against the block now, any hidden character shown as its code.</summary>
+    public IReadOnlyList<BlockDiffLineView> DiffLines { get; }
+
+    /// <summary>Approving writes the whole block: a consolidation shown here, or a staged one.</summary>
+    public bool ReplacesBlock => _isConsolidated || Update.Replaces;
 
     public string CorrectLabel => IsEditing ? "Undo changes" : "Correct…";
 
     /// <summary>What the editor holds, for its label and screen readers.</summary>
-    public string EditLabel => _isConsolidated
+    public string EditLabel => _isConsolidated || Update.Replaces
         ? $"The {SafeText.Clean(Update.Block)} block, consolidated: approving replaces the whole block"
         : "The added line, corrected";
 
@@ -161,7 +172,7 @@ public sealed class BlockUpdateView : ObservableObject
     /// <summary>"consolidation is offered at 90%".</summary>
     public string ConsolidationNote { get; }
 
-    public bool CanConsolidate => IsNearBudget && !_isConsolidated;
+    public bool CanConsolidate => IsNearBudget && !_isConsolidated && !Update.Replaces;
 
     /// <summary>Why the budget could not be recounted for the edit ("could not count: …"); empty when it was.</summary>
     public string CountProblem
@@ -275,7 +286,7 @@ public sealed class BlockUpdateView : ObservableObject
 
     private static bool HiddenIn(string text) => MemoryText.HasHidden(text) || MemoryText.HasRevealedMarks(text);
 
-    private bool CanApprove() => !_isBusy && (!IsEditing || _editText.Trim().Length > 0) && !HiddenIn(TextToWrite);
+    private bool CanApprove() => !_isBusy && !Update.Stale && (!IsEditing || _editText.Trim().Length > 0) && !HiddenIn(TextToWrite);
 
     private async Task RunAsync(Func<Task> action)
     {
@@ -309,6 +320,8 @@ public sealed class BlockUpdateView : ObservableObject
     {
         OnPropertyChanged(nameof(IsEditing));
         OnPropertyChanged(nameof(ShowsDiff));
+        OnPropertyChanged(nameof(ShowsRewriteDiff));
+        OnPropertyChanged(nameof(ReplacesBlock));
         OnPropertyChanged(nameof(CorrectLabel));
         OnPropertyChanged(nameof(EditLabel));
         OnPropertyChanged(nameof(CanConsolidate));
@@ -316,4 +329,30 @@ public sealed class BlockUpdateView : ObservableObject
         ConsolidateCommand.NotifyCanExecuteChanged();
         ApproveCommand.NotifyCanExecuteChanged();
     }
+}
+
+/// <summary>One line of a block rewrite's diff on a Review card: its sign, its text with hidden characters shown.</summary>
+public sealed class BlockDiffLineView(BlockDiffRow row)
+{
+    public BlockDiffRow Row { get; } = row;
+
+    public string Sign { get; } = row.Kind switch
+    {
+        BlockLineKind.Added => "+",
+        BlockLineKind.Removed => "−",
+        _ => "",
+    };
+
+    public string Text { get; } = SafeText.Reveal(row.Text, keepJoiners: true);
+
+    public bool IsAdded => Row.Kind == BlockLineKind.Added;
+
+    public bool IsRemoved => Row.Kind == BlockLineKind.Removed;
+
+    public string AutomationName => Row.Kind switch
+    {
+        BlockLineKind.Added => "added: ",
+        BlockLineKind.Removed => "removed: ",
+        _ => "kept: ",
+    } + SafeText.Clean(Row.Text);
 }

@@ -82,6 +82,54 @@ internal sealed class WorkspaceComposer(CorvidOptions settings, VaultLocations v
             EgressLifetime = sandboxOptions.Timeout + TimeSpan.FromMinutes(1),
         }, egress);
 
+    /// <summary>
+    /// A7: scripts run in a sandbox of their own, whose timeout is code mode's time limit (the shell's is shorter); the same
+    /// launcher and confinement otherwise.
+    /// </summary>
+    private ISandbox CodeSandbox => _codeSandbox ??= OperatingSystem.IsLinux()
+        ? new BubblewrapSandbox(sandboxOptions with { Timeout = TimeSpan.FromSeconds(settings.Tools.Code.TimeoutSeconds) })
+        : sandbox;
+
+    private ISandbox? _codeSandbox;
+
+    /// <summary>A7: the code tool's options from <c>Corvid:Tools:Code</c>, the runtimes found once.</summary>
+    internal CodeToolOptions CodeOptions => _codeOptions ??= CodeOptionsFor(settings.Tools.Code, CodeRuntimes.Discover());
+
+    private CodeToolOptions? _codeOptions;
+
+    internal static CodeToolOptions CodeOptionsFor(CodeSettings code, CodeRuntimes found) => new()
+    {
+        Timeout = TimeSpan.FromSeconds(code.TimeoutSeconds),
+        MaxCalls = code.MaxCalls,
+        MaxStdoutBytes = code.MaxStdoutBytes,
+        MaxStderrBytes = code.MaxStderrBytes,
+        Tools = code.Tools is { } tools ? [.. tools] : CodeToolOptions.DefaultTools,
+        Runtimes = new CodeRuntimes(
+            code.Python is { Length: > 0 } python ? CorvidPaths.ExpandHome(python) : found.Python,
+            code.Node is { Length: > 0 } node ? CorvidPaths.ExpandHome(node) : found.Node,
+            code.Dotnet is { Length: > 0 } dotnet ? CorvidPaths.ExpandHome(dotnet) : found.Dotnet),
+        Clients = GeneratedClient,
+    };
+
+    /// <summary>
+    /// The client a script calls tools with (<see cref="Corvid.Tools.CodeMode.CodeModeClients"/>), written from the tools the
+    /// turn may offer; their descriptions are untrusted text the generators escape.
+    /// </summary>
+    internal static CodeClient GeneratedClient(CodeLanguage language, IReadOnlyList<Corvid.Tools.CodeMode.CodeModeTool> tools)
+    {
+        var generated = language switch
+        {
+            CodeLanguage.Python => Corvid.Tools.CodeMode.CodeModeLanguage.Python,
+            CodeLanguage.JavaScript => Corvid.Tools.CodeMode.CodeModeLanguage.JavaScript,
+            _ => Corvid.Tools.CodeMode.CodeModeLanguage.CSharp,
+        };
+        return new CodeClient(script => Corvid.Tools.CodeMode.CodeModeClients.Program(generated, tools, script));
+    }
+
+    /// <summary>A7: <c>execute_code</c> for a workspace's shell, describing tools from <paramref name="registry"/>; null when off.</summary>
+    public CodeTool? CodeToolFor(SandboxedShell shell, Func<ToolRegistry> registry) =>
+        settings.Tools.Builtin && settings.Tools.Code.Enabled ? new CodeTool(shell, CodeSandbox, CodeOptions, registry) : null;
+
     /// <summary>The file tools of a workspace, closed to the skills directory when it holds it.</summary>
     public static FileTools FileToolsFor(ApprovalEnvironment environment, ImmutableArray<string> skillsReadOnly)
     {
@@ -116,6 +164,9 @@ internal sealed class WorkspaceComposer(CorvidOptions settings, VaultLocations v
         {
             tools.Add(FileToolsFor(environment, guard.ReadOnly));
             tools.Add(new ShellTool(shell));
+            // A7: the workspace's own code tool, over its own shell's policy.
+            if (CodeToolFor(shell, () => tools) is { } code)
+                tools.Add(code);
         }
         if (guard.Refusal is null && Skills is { } store)
             tools.Add(new SkillFileTools(store, shell));

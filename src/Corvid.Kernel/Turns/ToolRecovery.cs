@@ -63,6 +63,10 @@ public static class ToolRecovery
         {
             switch (item.Payload)
             {
+                // A7 review (M2): the model's own calls only. A nested call (a code run's script calling a tool) is part
+                // of its parent's run: a skill replays the model's calls, so it is neither a step nor a recovery.
+                case ToolCallIssued { ParentCallId: not null }:
+                    break;
                 case ToolCallIssued call:
                     calls++;
                     issued[call.CallId] = (call, item.Sequence);

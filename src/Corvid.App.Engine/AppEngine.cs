@@ -120,6 +120,23 @@ public sealed class AppEngine : IAsyncDisposable
     /// <summary>Raises <see cref="MemoryChanged"/>.</summary>
     internal void NotifyMemoryChanged() => MemoryChanged?.Invoke();
 
+    // A7 e2e: the sleep-time pass stages block rewrites and duplicate facts' endings with no turn or page asking, after the
+    // turn's own notice; without this the Memory page and its badge never showed what an idle pass staged.
+    private Corvid.Memory.BlockConsolidator? _memoryJobs;
+
+    private void OnMemoryJobsStaged(int staged) => NotifyMemoryChanged();
+
+    /// <summary>Hears the runtime's sleep-time memory pass (<see cref="Corvid.Memory.BlockConsolidator.PassStaged"/>).</summary>
+    private void WatchMemoryJobs(CorvidRuntime runtime)
+    {
+        if (runtime.Memory?.Consolidator is not { } job)
+            return;
+        var previous = Interlocked.Exchange(ref _memoryJobs, job);
+        if (previous is not null)
+            previous.PassStaged -= OnMemoryJobsStaged;
+        job.PassStaged += OnMemoryJobsStaged;
+    }
+
     /// <summary>
     /// Starts the host (validating the configuration) and checks the model cache, then starts the runtime on the pool.
     /// A configuration the validator refuses, a host that cannot start for another reason (a hosted service that throws, a
@@ -187,11 +204,13 @@ public sealed class AppEngine : IAsyncDisposable
         {
             try
             {
-                started.TrySetResult(await factory.StartAsync(new Relay(step =>
+                var runtime = await factory.StartAsync(new Relay(step =>
                 {
                     Report(step);
                     progress?.Report(step);
-                }), HostsScheduler, _lifetime.Token).ConfigureAwait(false));
+                }), HostsScheduler, _lifetime.Token).ConfigureAwait(false);
+                WatchMemoryJobs(runtime);
+                started.TrySetResult(runtime);
                 // G-14, U-8: a gateway asked for starts with the runtime, not when its page is first opened.
                 _ = GatewayAsync();
                 WatchTakeOver();
@@ -286,6 +305,7 @@ public sealed class AppEngine : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(runtime);
         var engine = new AppEngine(host, ownsHost, Task.FromResult(runtime), [], null, new CancellationTokenSource(), hostGateway,
             hostScheduler: runtime.Options.Scheduler.Enabled && runtime.SchedulerState != CorvidRuntime.SchedulerNotHosted, time: time);
+        engine.WatchMemoryJobs(runtime);
         engine.WatchTakeOver();
         return engine;
     }
@@ -518,6 +538,8 @@ public sealed class AppEngine : IAsyncDisposable
             (takeOver, _takeOver) = (_takeOver, null);
         if (takeOver is not null)
             await takeOver.DisposeAsync().ConfigureAwait(false);
+        if (Interlocked.Exchange(ref _memoryJobs, null) is { } memoryJobs)
+            memoryJobs.PassStaged -= OnMemoryJobsStaged;
         await _lifetime.CancelAsync().ConfigureAwait(false);
         CorvidRuntime? runtime = null;
         try

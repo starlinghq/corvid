@@ -39,7 +39,7 @@ public sealed partial class CorvidRuntime
     /// prompt and its unattended run, not something said).
     /// </summary>
     public static bool IsSearchable(string sessionId) =>
-        sessionId is not (McpSessions.Pins or GatewaySessions.Ledger)
+        sessionId is not (McpSessions.Pins or GatewaySessions.Ledger or MemoryJobs.Session)
         && !sessionId.StartsWith(GatewaySessions.Prefix, StringComparison.Ordinal)
         && !sessionId.StartsWith("job:", StringComparison.Ordinal);
 

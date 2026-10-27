@@ -41,7 +41,7 @@ public static class AttachedJson
         typeof(CheckpointDecided), typeof(SlotModelChanged), typeof(ModelSwitched), typeof(TaintChanged), typeof(ChangesUpdate),
         typeof(CheckpointRecorded), typeof(SessionRewound), typeof(EngineStatus), typeof(QuestionAsked), typeof(QuestionAnswered),
         typeof(CompactionUpdate), typeof(Notice), typeof(ApprovalRequested), typeof(ApprovalResolved), typeof(DetectionMatched),
-        typeof(ToolCall), typeof(ToolCallUpdate),
+        typeof(ToolCall), typeof(ToolCallUpdate), typeof(TurnPlanned),
     ];
 
     /// <summary>The wire name of an update kind.</summary>
@@ -114,6 +114,7 @@ public static class AttachedJson
 [JsonSerializable(typeof(UserMessage))]
 [JsonSerializable(typeof(AgentMessageChunk))]
 [JsonSerializable(typeof(AgentThoughtChunk))]
+[JsonSerializable(typeof(TurnPlanned))]
 [JsonSerializable(typeof(TurnStarted))]
 [JsonSerializable(typeof(TurnProgress))]
 [JsonSerializable(typeof(TurnEnded))]

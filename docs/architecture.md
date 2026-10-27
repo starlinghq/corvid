@@ -173,6 +173,63 @@ breakpoints itself, C-015), restoring current bindings and pins from the log on 
 are not persisted), recording switch costs for `/insights`, and the
 media-embedder contract.
 
+### Architect/editor turns (A7)
+
+Plan §6's split, after Aider: for coding, the escalated model plans and the session's own model applies the edits. A turn
+mode in the kernel (`TurnRunner.Architect.cs`), not a child session; no new project, package, event type or checker rule.
+
+- **When.** `Corvid:Turn:ArchitectEditor` (`TurnOptions.ArchitectEditor`, default off): a coding turn, one whose
+  offered tools (after the ingress tool and intent verdicts) include one that changes files (`SideEffects.Filesystem`),
+  that escalates for `difficulty` or `repair` (not `context`: a history too long for the session's model would not fit
+  the editor either). A hard question answered directly is not a coding turn: the escalated model answers it. A difficulty
+  escalation happens at ingress, but its plan waits until after recall and the clarify decision, just before the loop, so
+  a turn that asks the person a question makes no plan and the planner sees recalled memory (A7 review).
+  `/architect` asks for it whatever the setting: `/architect` for the next turn, `/architect on` for every turn
+  of the session until `/architect off`, `/architect status` (held by the process, like the approval mode; refused when
+  the generator has no escalation ladder or the session may not escalate). A requested turn escalates at the same point
+  with the reason `architect` (plan §6's "the user asks for it"), unless an escalation already moved it; a turn that
+  ends in a question leaves the request for the next.
+- **Plan.** The escalated generator (the slot's binding, called directly through `GenerateAsync`'s binding override,
+  so a refusal is not retreated into a local "plan") gets the history and a nudge to write a short numbered plan, with no
+  tools. The request carries `corvid.unstreamed`, so the host does not stream it as the answer. The plan is logged as an
+  `AssistantMessage` with `Plan` (`TurnPlan(Planner, Editor, Trigger, Attempt)`, omitted on answers, so older logs read
+  and write as before), through the same append and credential scrub as an answer; its tokens ride on it. Every reader
+  of the log takes it as history (the prompt, compaction, the episodic index, Beacon export); titles skip it, recaps and
+  the audit name it a plan.
+- **Edit.** The generator slot then switches to the editor, logged as `ModelSwitched` with the new reason `editor`
+  (`SwitchReason.Editor`): not a de-escalation, so a person's session choice and a pin are untouched, and a reopened
+  session does not read it as a reset. The editor is resolved again once the plan returns, so a `/model` switch while the
+  planner wrote is honoured. It is `TurnOptions.EditorModel` (`Corvid:Turn:EditorModel`) when one of
+  the generator slot's bindings is that model (its default, fallbacks or ladder; the mix's for a child), else the
+  session's own generator. It runs the turn's ordinary loop with the plan in its history and a note (in the system
+  prompt, or after the history for a breakpoint-caching model) that names the planner and says the plan is a model's,
+  not the user's words. On a breakpoint-caching model the note is a one-shot message, so the frozen system prompt and its
+  cache are untouched; on any other model it changes the system prompt for the editor's calls of that turn only. The turn's end returns the slot to the session default as after any escalation.
+- **Re-plan.** An editor the step checkpoint calls `stuck` gets one re-plan: escalate again, a revised plan (attempt 2,
+  trigger `stuck`), hand back. After that, `stuck` escalates as before and the escalated model finishes. A second
+  `context` or `repair` escalation after a plan stays on the escalated model without planning again (an editor whose
+  window cannot hold the history would otherwise loop).
+- **Security.** Nothing about the split touches approvals, taint, egress or leases: every edit is a call through the
+  turn's own path. The planner's request passes the switch-time privacy hook and the egress gate inside its binding like
+  any request; a refusal (a tainted session under `Tainted: Refuse`, say) is recorded as `{editor}: privacy` on the
+  turn's escalations, the slot goes back to the editor logged with the switch reason `privacy` (not `editor`, so no
+  surface says a plan is being applied), and the turn goes on locally, unplanned. A plan written from tainted
+  context is a model's text: every surface cleans it, and it grants nothing.
+- **Surfaces.** `TurnResult.Plans`; `ITurnListener.Planned` → `ITurnObserver.Planned`. The host stream's `TurnPlanned(Text,
+  Plan, Sequence)`, live (the reporter reads it from the log, so it comes before the editor's calls) and on replay
+  (instead of `AnswerChunk`). `corvid chat` prints "planned by X · edited by Y" with the plan dimmed and says so in the
+  footer. ACP shows it as a finished `think` tool call `plan-{sequence}` titled "Plan by X · edited by Y" with the plan
+  as content, live and on `session/load` (the recorded exchanges changed only by `/architect` in the command list). The
+  app: `TurnPlanned` (`_corvid/turn_planned` attached), a collapsed row "planned by X · edited by Y" that opens to the
+  plan, placed above the hand-back row even when the live switch arrives first; the hand-back row reads "back to Y: to
+  apply the plan".
+- Tests: `ArchitectEditorTests` (kernel: the split, the listener, the re-plan, the context guard, a turn that never
+  escalates, the split off, a non-coding turn, `/architect` next turn and session, the editor model, the egress gate
+  refusing a tainted planner, the persisted form), `ArchitectStreamTests` (host), `AcpArchitectTests`,
+  `ChatArchitectTests`, `EngineArchitectTests`, `ArchitectPlanViewTests`.
+- Not built: read-only tools for the planner (it plans from the history alone), choosing the planner other than by the
+  ladder, a per-session editor choice, and a calibrated "coding task" question (the shortlist test stands in).
+
 ## Starling adapters (C-010)
 
 `Corvid.Models.Starling` is the in-process adapter for Starling's models (plan §1,
@@ -466,7 +523,8 @@ Plan §10.1 and §3.4, and `vault.md` §3.3 and "Implementation status". Linux o
 - `sandbox/Corvid.Sandbox.Launcher` builds `corvid-sandbox`, a Native AOT executable
   (`IsAotCompatible`, published and smoke-run in CI's aot job) with no package or project
   dependencies. Its command line is the contract (`corvid-sandbox --help`): `--workspace`,
-  `--chdir`, `--ro`, `--deny`, `--env NAME`, `--network`, `--proxy-socket` and `--proxy-ca` (V-003b, below),
+  `--chdir`, `--ro`, `--deny`, `--env NAME`, `--setenv NAME=VALUE` (A7), `--network`, `--proxy-socket` and `--proxy-ca`
+  (V-003b, below), `--tools-socket` and `--tools-token` (A7, [Code mode foundation](#code-mode-foundation-a7)),
   `--best-effort-layers`, `--bwrap`, `--status-file`, then `-- COMMAND`. Exit status is the command's, or 125 when the sandbox
   was not set up and nothing ran. The status file (JSON: `started`, `exitCode`, `layers`,
   `error`) tells a refusal from a command that exited 125. It is opened before anything runs,
@@ -540,7 +598,7 @@ paths such as tool caches in home, the HTTPS proxy route for sandboxed scripts (
 `corvid-exec` user and value injection for Vault's exec path, container and SSH backends,
 macOS and Windows, hiding the other credential stores the approval pipeline protects (`~/.kube`,
 `~/.netrc`, `~/.docker/config.json` and others) and Corvid's own configuration (`~/.config/corvid`; Landlock
-already blocks writes to it), and the code tool (§15). The shell tool (C-012) runs only through the sandbox and passes
+already blocks writes to it), and the code tool (§15; its tools socket and wire format are built, [A7](#code-mode-foundation-a7)). The shell tool (C-012) runs only through the sandbox and passes
 Vault's configured locations as denied paths (see [Built-in tools and scheduler](#built-in-tools-and-scheduler-c-012)).
 
 ## Memory store (C-008)
@@ -616,12 +674,69 @@ and deciders.
 
 Not built yet: sqlite-vec (no first-party .NET package; it would replace the scan behind
 `IVectorIndex` and needs a checker rule for its native library); Kev reranking of the top 8
-(§9.3); the consolidation job that rewrites an over-budget block (§9.5); relation extraction
-(`IExtractor` returns spans, so relations come only from callers) and entity aliasing; fact
-deduplication and merging; media memory (§9.4). C-015 added local-only facts (schema version 2) and core blocks that are
+(§9.3); relation extraction
+(`IExtractor` returns spans, so relations come only from callers) and entity aliasing; merging facts that say the same
+thing in other words; media memory (§9.4). A7 added the block rewrite job and the exact-duplicate fact dedupe (see
+[Sleep-time memory jobs](#sleep-time-memory-jobs-a7)). C-015 added local-only facts (schema version 2) and core blocks that are
 local-only by default, and the turn loop leaves both out of a cloud model's prompt. C-012 added the memory tools; C-013 added `/memory` (pending, approve, reject) and runs
 `EpisodicIndex.CatchUp` after each turn. C-011 starts the re-embed job when
 `embedder.text` switches and the write path when `remember` acts at egress.
+
+## Sleep-time memory jobs (A7)
+
+Plan §9.5 and §9.2 step 4. Two jobs, both in `Corvid.Memory`, both staging for review: nothing they produce is applied
+until a person approves it, since a core block enters every prompt and a fact feeds recall. No new project, package or
+checker rule.
+
+- **Block rewrite (`BlockConsolidator`).** A `user` or `agent` block at `Threshold` (0.9) of its budget or over it, counted
+  with the store's tokenizer (the generator's), is sent to the background generator (`CreateBackgroundSlots()`,
+  `DevicePriority.Background`) with a fixed system prompt (`BlockConsolidator.SystemPrompt`, on the egress gate's trusted
+  list) asking for a rewrite to `TargetFill` (0.75) of the budget that keeps every fact and instruction. The block is sent
+  as data between markers. Every request runs inside `ModelRequestContext(memory-jobs, tainted: false, block.LocalOnly)`
+  (`CorvidRuntimeFactory.ConsolidationRequest`), so the egress gate refuses to send a local-only block (the default) to a
+  cloud generator. The reply is untrusted: a code fence or echoed markers are stripped; an empty reply, one holding a
+  hidden character (control, format, variation selector or tag), one holding a credential value (C-040's detector), one
+  not shorter than the block and one over the budget after one retry are declined. A block holding a credential value is
+  never sent. The persona block is never rewritten. A rewrite that passes is staged by `MemoryWriter.StageConsolidation`
+  as a block proposal with replace semantics (`Content` is the whole block, `Consolidation = true`, `BlockRevision` the
+  revision it was made from, reason `consolidation: 57 of 60 tokens rewritten to 43`); approving it goes through
+  `ApproveAsync`'s block path, so a block changed since fails with the conflict and nothing is written.
+- **Over-budget edits.** An edit `EditBlockAsync` staged as `over_budget` gets a rewrite with the edit folded in
+  (`Supersedes` = the edit's pending id). Approving the rewrite resolves the edit as approved (`consolidated into …`);
+  rejecting the edit rejects its rewrite, which would otherwise write it after all.
+- **Fact dedupe (`FactDeduplicator`).** Current facts with the same words (case, spacing and a closing full stop ignored,
+  NFKC), the same relation and the same local-only mark: the earliest is kept and ending each later one is staged as an
+  `invalidate` with the kept fact as its neighbour (`MemoryWriter.StageDuplicate`, reason `duplicate: says what … says`).
+  Merging facts that say the same in other words needs judgement and is not built.
+- **The loop.** `BlockConsolidator.RunAsync` (started in `CorvidRuntime.Consolidation.cs`, awaited at disposal) wakes on
+  `Nudge()` after every delivered turn and every `Corvid:Memory:Consolidation:IntervalMinutes` (15), waits `IdleSeconds`
+  (30), and runs a pass only when every session open in the process is idle (`SessionActor.IsIdle`); while one is busy it
+  looks again every `IdleSeconds`. A pass rewrites the blocks that need it, then the over-budget edits, then runs the fact
+  dedupe. One consolidation waits per block; a rewrite a person rejected, or one the job declined in this process, is not
+  asked for again until the block changes. `Corvid:Memory:Consolidation:Background` (true) turns the loop off; the
+  on-demand paths stay. Both jobs need the write path (an extractor slot).
+- **Journey.** Background runs record in the `memory-jobs` log session (`MemoryJobs.Session`), which `/sessions`,
+  `/search`, the app's session list and prompt history leave out and Audit names "memory jobs": the staging's
+  `MemoryWritten(pending, staged)` and a `MemoryJobRan(job, subject, outcome, detail, trigger, pending_id)` event per
+  attempt (outcomes `staged`, `proposed`, `declined`, `refused`, `failed`; the detail holds sizes and reasons, never the
+  memory's text). Audit groups `MemoryJobRan` with memory and skills.
+- **Surfaces.** `/memory consolidate [user | agent]` stages a rewrite for the named block, or for each block at the
+  threshold, and prints it as a line diff (`BlockDiff`, longest common run of lines); `/memory approve` and `/memory
+  reject` resolve it. In the app, Consolidate on a staged block update (`ConsolidateAsync`) proposes the block rewritten
+  with the update folded in, which Approve writes as the whole block; "Consolidate now" on a block near its budget
+  (`ConsolidateBlockAsync`) stages a rewrite that appears in Review as a diff (`StagedBlockUpdate.Replaces`, `Diff`). The
+  demo service stages a stand-in rewrite. The ACP recordings were re-recorded for the `/memory` hint.
+- Tests: `Corvid.Memory.Tests.ConsolidationTests` (a scripted generator's rewrite staged and not applied; approve applies;
+  reject leaves the block and is not re-proposed; one per block; credentials in the block or the reply refused; over
+  budget retried then declined; hidden characters and empty replies declined; persona and blocks below the threshold
+  left alone; over-budget edits folded in and resolved; a stale approval writes nothing; the loop runs only when idle; a
+  proposal stages nothing), `DedupeTests`, `Corvid.Host.Tests.ConsolidationCommandTests` (`/memory consolidate` and
+  approve; a local-only block refused by the egress gate in front of a cloud generator; the idle trigger after a turn in
+  the jobs' own session), `Corvid.App.Engine.Tests.MemoryServiceTests` and `Corvid.App.Core.Tests.MemoryTests`.
+- Not built: merging near-duplicate facts (needs a decider or the generator and a calibrated floor), the other §9.5 jobs
+  (skill distillation and the curator have their own loops; recalibration, episode summaries), a `/journey` view over
+  `MemoryJobRan` (Audit shows the events), a CLI verb for the dedupe, a decider gate in front of consolidation, and a
+  persisted record of declined rewrites (kept in memory per process).
 
 ## Calibration and decision export (C-021)
 
@@ -4252,6 +4367,239 @@ exists on `TurnOptions` (`StateBudget`, `RecentEvents`, `DualShortlistStateBudge
   compaction inside a history, and a CI gate on the condition. Adding cases changes `cases_sha256`; S2's committed
   reports name the older versions, and an S2 re-run on this version includes history cases in its summaries (not its
   headline) unless filtered by tag.
+
+## Code mode foundation (A7)
+
+Plan §15 and parity row 1.6 (Hermes #74078: a script's tool calls must not get a weaker policy than the model's). The
+seams the code tool, its client generators and the surfaces build on. Nothing here runs a script yet. No new project: the
+launcher stays dependency-free, `Corvid.Sandbox` gains two records, `Corvid.Tools` the wire format, the kernel the
+nested-call path.
+
+- **Tools socket (sandbox).** `SandboxPolicy.Tools` (`SandboxTools(SocketPath, Token)`) mounts one host Unix socket
+  read-only at `/run/corvid-sandbox/tools.sock` and the run's token at `/run/corvid-sandbox/tools.token`, after the masks
+  and after `--tmpfs /run`, as V-003b mounts the proxy's: nothing else of the socket's host directory is in view. The
+  token never travels on a command line or in an environment: `BubblewrapSandbox` writes it (0600) to its own per-run
+  directory and passes `--tools-token FILE`; the launcher checks the file (not a symlink, regular, 1 to 1024 bytes, outside
+  the workspace) as it checks the CA, and refuses a missing socket. The launcher itself sets `CORVID_TOOLS_SOCKET` and
+  `CORVID_TOOLS_TOKEN_FILE`; an `--env` or `--setenv` of either is refused. The socket adds no network (the namespace stays
+  private; a host abstract socket stays unreachable); code mode's "no network" is its own policy (neither `Network` nor
+  `Proxy`), not the launcher's. A7 fix (A7V1-2): the run's status directory (its token, its proxy CA) and code mode's
+  socket directory are 0700 directories under one root, `SandboxScratch`: `$XDG_RUNTIME_DIR/corvid-runs` when the runtime
+  directory is set (the launcher hides the whole runtime directory from every command), else `corvid-runs-<user>` in
+  `TMPDIR`, which `BubblewrapSandbox` denies to every command it launches unless it is under `/tmp` or `/run` (replaced
+  anyway; a long-lived launch makes the root first, since the launcher hides only what exists). So no other sandbox's
+  command can list or read them, whatever `TMPDIR` is; the root is set to 0700 on every
+  use, which fails unless this user owns it. Commands Vault launches with the launcher itself do not deny the fallback
+  root. Test: `ConfinementTests.Another_runs_private_directory_cannot_be_seen_with_TMPDIR_outside_tmp`. `SandboxPolicy.EnvironmentValues` (`--setenv NAME=VALUE`) sets
+  values, under `--env`'s name rules (secret-like names refused, no name both passed and set, no proxy or tools name),
+  at most 32 KiB, no NUL; values are on the launcher's command line, so never secrets. `Prepare` (long-lived launches)
+  refuses `Tools`. Tests: `ToolsSocketTests` (confinement: the script reaches the mounted socket with the token, and not
+  the socket's neighbour, its host path or a host abstract socket; the token file is read-only; refusals run nothing) and
+  `ToolsSocketUnitTests`.
+- **Nested calls (kernel).** `ToolCallContext.Invoker` / `InvokeToolAsync(tool, args, ct)` → `NestedToolResult(CallId,
+  Result, IsError, Tainted)`. `TurnRunner` sets it on every top-level call (never on a nested one: depth 1). A nested call
+  takes the model's path: the tool must be in the turn's catalogue (`OfferedTools`), not `ask_user` and not the parent's own
+  tool; its arguments are validated against the schema; it asks exactly when a model's call would (a side effect; a network
+  read in a tainted session or one a detection rule flags), with taint read as of the call, so a script's earlier fetch
+  makes its later post ask; then `ExecuteAsync` runs it: its own lease (tracked, or parked while its approval is open)
+  under its own id `{parent}.{n}` while the parent keeps its tracked lease, the approval pipeline (blocking until
+  answered; the prompt's `CallId` is the nested id), checkpoints, the credential scrub, the log, and taint. Refusals come
+  back as error results (and are logged as rejected nested calls), never exceptions; a cancellation throws. Nested calls
+  of one parent run one at a time. When the parent's tool returns (or throws), its nested calls still running are
+  cancelled and awaited, so each has its result before the parent's; later calls throw `InvalidOperationException`. A
+  nested result that is outside content (a network tool's, or one the tool marked) marks the parent's result tainted,
+  so the parent's result is asked `injection` and taints the session as a network tool's does. The result returned is
+  the log's (scrubbed). A `/model` switch waits for the parent (it is tracked) even while a nested call is parked.
+- **`ToolCallIssued.ParentCallId`.** Set on a nested call, omitted when null (older logs read and write as before). The
+  prompt, budget clearing and compaction summaries leave nested calls and their results out (the model never asked for
+  them; the parent's result says what the script did); the decider's recent events, the episodic index and replay keep
+  them. The `execute_tool` span carries `corvid.tool.parent_call_id` and is the parent span's child. The
+  host stream carries it: `ToolCallStarted.ParentCallId` (live, from the span through
+  `ITurnObserver.ToolStarted(callId, tool, approval, parentCallId)`, whose default forwards to the older overload; on
+  replay, from the log) and `ToolCallChanged.ParentCallId` (from the log). ACP's wire is unchanged.
+
+### Code mode wire format (A7)
+
+Frozen at version 1; `Corvid.Tools.CodeMode` implements the host side (`CodeModeSession`, `CodeModeCatalog`).
+
+- **Transport.** The tools socket, a Unix stream socket. Each line is one compact UTF-8 JSON object ending in `\n` (a
+  trailing `\r` is ignored). A script may open several connections; each starts with a hello. Requests on a connection are
+  answered in order, one at a time (the host reads the next line after answering).
+- **Hello.** The script reads the token from `$CORVID_TOOLS_TOKEN_FILE` and sends `{"token":"<token>","v":1}`. The host
+  compares it in constant time and answers `{"ok":true,"v":1,"limits":{"calls":50,"request_bytes":262144,
+  "response_bytes":1048576,"total_response_bytes":8388608}}` (the run's limits), or
+  `{"id":null,"ok":false,"error":{"code":"unauthorized","message":…}}` and closes. A wrong `v` is `bad_request`.
+- **Request.** `{"id":<string of at most 128 characters, or integer>,"tool":"<name>","args":{…}}`; `args` may be left out.
+- **Response.** Success: `{"id":…,"ok":true,"result":<the tool's result as the log holds it>,"tainted":<bool>}`. Failure:
+  `{"id":…,"ok":false,"error":{"code":…,"message":…,"detail":<the kernel's error object, for tool_error>},"tainted":<bool,
+  when a call ran>}`; `id` is null when the request's could not be read. `tainted: true` means the result is outside
+  content. Codes: `unauthorized`, `bad_request`, `unknown_tool` (not in the descriptor; nothing ran), `call_limit`,
+  `too_large` (a request over `request_bytes`: nothing ran; a result over `response_bytes`: the call ran, its result is
+  withheld), `output_limit` (`total_response_bytes` reached; nothing ran), `tool_error` (refused, denied, not run or
+  failed in the turn), `cancelled`, `closed` (the run's parent call has finished; the host closes the connection).
+- **Limits** are the host's (`CodeModeLimits`), across all of a run's connections: 50 calls, 256 KiB per request line,
+  1 MiB per response line, 8 MiB of responses. The run's time limit is the sandbox's (`SandboxOptions.Timeout`).
+- **Tool descriptor** (what client generators read): `{"version":1,"tools":[{"name":…,"description":…,"parameters":
+  <JSON Schema object>}]}`, from `CodeModeCatalog.Describe(registry, context.OfferedTools, allowlist)`: the registry's
+  tools that the turn may offer and the allowlist names, ordered by name, leaving out tools with a secret parameter and
+  names that are not identifiers (`[A-Za-z_][A-Za-z0-9_]*`, at most 64). Descriptions are untrusted text (an MCP server
+  may have written them): a generator escapes them for the language it writes.
+
+### execute_code, the host side (A7)
+
+`Corvid.Tools.Builtin.CodeTool` (`execute_code`, beside `ShellTool`), `CodeRunner` and `ToolsSocketServer`. Off by default:
+`Corvid:Tools:Code:Enabled` (with `Corvid:Tools:Builtin`) registers it, per workspace like the shell (a bound tool).
+
+- **Arguments.** `language` (`python`, `javascript`, `csharp`) and `code`. The source parameter is `code`, not `source`:
+  `source` and `src` are path names to `ToolAnalyzer`.
+- **Its own approval kind.** `ApprovalOptions.CodeTools` (`BuiltinTools.CodeToolMapping`) resolves a call into a
+  `CodeAction`; `CodeAnalyzer` gives an analysis of kind `code` whose text is the source (what a card, the CLI and ACP
+  show), one command (`execute_code`, subcommand the language, effects execute and write) with **no targets** (nothing is
+  mined from the source) and one unresolved reason. So a script always asks, in every mode, and offers only "once": no
+  remembered rule and no `risk` answer runs a script unasked, and nothing is written to the rules file. The hardline
+  backstop still scans the source (`OpaqueScripts`: Vault's directory name, a disk formatter). Detection rules see the
+  call as a tool call. The tool runs only with an allowed `code` approval whose text and language are exactly the call's,
+  and only as a top-level call (it needs the turn's invoker). It is `[SideEffect(Process | Filesystem)] [Destructive]`, so
+  the turn takes a checkpoint before it, as for an unparsed shell command.
+- **The run.** The shell's policy for the workspace (its denials, its read-only paths, Vault's locations) with
+  `Network = false`, `Proxy = null` whatever `Corvid:Tools:ShellNetwork` says, and `SandboxTools(socket, token)`. The
+  socket is in a fresh 0700 directory under `SandboxScratch`'s private root (listed in `DeniedPaths` when the sandbox
+  would not hide it anyway, and also whenever the policy binds the root or a directory above it, such as a `/tmp`
+  workspace: A7 review), listening before the script starts and deleted after (best effort; the root drops `code-*` and
+  `corvid-sandbox-*` directories more than a day old, which a killed run leaves); the token is
+  `CodeModeProtocol.NewToken()`, written only by the sandbox. The source goes on standard input, never on a command line
+  or into the workspace: `python3 -I -B -` (isolated: neither the working directory nor the user's site is on
+  `sys.path`, so a workspace's `json.py` never shadows the client's imports),
+  `node --input-type=module -` (an ES module), and for C# a fixed `/bin/sh` wrapper that writes it to the sandbox's own
+  `/tmp/corvid-code/Program.cs` beside stub `Directory.Build.props` (`PublishAot=false`), `Directory.Build.targets`,
+  `Directory.Packages.props` and a `nuget.config` that clears every source, builds from there (the build's output
+  reaches stderr only when it fails), then runs the built `Program.dll` through the host with the workspace as its
+  working directory. Outside the workspace, so a repository's own build files and `global.json` are never read. A `#:` directive (package, SDK, project, property) is refused before anything runs, on any line as Roslyn ends lines (`\n`, a lone `\r`, U+0085, U+2028, U+2029) after any white space. A built app is not cached between runs: `.corvid/code` is writable by every sandboxed command, so a cache there could hand one script's planted build to the next run. The SDK's caches (`DOTNET_CLI_HOME`,
+  `NUGET_PACKAGES`) are under `<workspace>/.corvid/code/dotnet`, written by the sandbox alone, with a `.gitignore` of `*`;
+  `XDG_DATA_HOME` and `XDG_RUNTIME_DIR` point into the sandbox's `/tmp` (file-based apps' build cache; named mutexes).
+  Runtimes are found once by absolute path (`python3`, `node` on PATH; `dotnet` as `$DOTNET_ROOT/dotnet`, PATH or
+  `~/.dotnet/dotnet` with an `sdk/` beside it) or configured (`Corvid:Tools:Code:Python`, `Node`, `Dotnet`); a missing one
+  refuses its language. `corvid doctor` has a `code` row per runtime.
+- **The tools socket.** One `CodeModeSession` per run over `CodeModeCatalog.Describe(registry, context.OfferedTools,
+  Corvid:Tools:Code:Tools)` (default: the file tools, `shell`, `web_fetch`, memory search) and the parent call's invoker,
+  so every request takes the turn's path (approval per call, checkpoint, scrub, taint, egress, lease, and the step's tool
+  filter). `CodeModeCatalog.Denied` (`delegate_task`, `execute_code`, `skill_run_script`, `ask_user`, the memory writes,
+  `send_message`, the `cron_*` changes) is never callable from a script: the options validator refuses it in the
+  allowlist, `Describe` leaves it out and the turn refuses a nested call to it. At most 8 connections at once; a
+  connection whose serving throws ends alone (the run's stderr gets a `[corvid] the tools socket failed: …` line), and
+  when the script exits the server stops (never throwing, so the run's output survives), cancels any call still running
+  and waits for it, so each nested call has its result before the parent's.
+- **Limits** (`Corvid:Tools:Code`, Hermes' defaults): `TimeoutSeconds` 300 (wall clock, enforced by a sandbox of its own
+  whose `SandboxOptions.Timeout` it is; the time a call waits for its approval counts, so a script whose call is still
+  awaiting a person at the limit is stopped and that prompt is cancelled; the prompt's deadline is the run's end,
+  `ValidCall.NotAfter`), `MaxCalls` 50 (on the host, `call_limit`),
+  `MaxStdoutBytes` 50 000 and `MaxStderrBytes` 10 000 (the middle of longer output is cut, by UTF-8 bytes).
+- **Result.** `{"language","exit_code","stdout","stderr","timed_out"?,"error"?,"output_truncated"?,"tool_calls",
+  "calls":[{"call_id","tool","ok","tainted"}],"tainted"}`. `tainted` is true when any result the script received was
+  outside content; the kernel then marks the parent's result tainted too (asked `injection`, taints the session).
+- **Offered** only while the session's generator is a cloud or local-server model (plan §15): `CorvidRuntime` sets
+  `TurnOptions.ToolFilter` to `CodeModeFilter(slots)`, read at each turn's start, so a `/model` switch to an in-process
+  model withdraws it from the next turn, and a call to it is refused as not offered. A `/model` switch asked for while a
+  code run's nested call waits on its approval waits for that call like any running call: until the person answers or
+  the run's time limit denies it (`NotAfter`), at most `TimeoutSeconds`. The client the script is run with plugs
+  in as `CodeToolOptions.Clients` (`CodeClientFactory`: the program made of the source); the composed runtime sets
+  it to the generated clients ([where the A7 groups meet](#code-mode-where-the-a7-groups-meet)), and an editor model that
+  runs in process withholds the tool too.
+- **Tests.** `CodeToolTests` (the analysis, the refusals, the policy and command handed to the sandbox),
+  `CodeConfinementTests` (Python under the real launcher, CI-pinned: tool calls through the invoker, a call waiting on
+  its approval, a tainting result, the call budget, output caps, the time limit, the time limit while a call still waits,
+  the generated Python client beside a workspace `json.py`, no network even to the host's loopback, the shell's denials,
+  a wrong token), `CodeLanguageTests` (JavaScript, and C# beside a poisoned `Directory.Build.props` and `global.json`, run twice;
+  each skips without its runtime), `Corvid.Host.Tests.CodeModeTests` (a turn on a local-server generator whose script's
+  side effect asks under its own id and whose fetch taints the session; not offered to an in-process generator).
+
+### Code mode clients and surfaces (A7)
+
+The generated clients a script calls tools with, and how every surface shows a run and the calls its script made. No new
+project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the presentation in the host
+(`CodeRunPresentation`, `CodeRunCard`), and each surface reads them.
+
+- **Clients** (`CodeModeClients`), generated per run from the run's tools (`CodeModeCatalog.Describe`, or a descriptor
+  read back with `FromJson`): one typed wrapper per tool (arguments by position, required then optional in the schema's
+  order, or by name; in JavaScript by name means the required ones then one object of optional ones, or one object of
+  all of them; strings, integers, numbers, booleans and arrays of them typed, anything else JSON), the socket and token found in
+  `CORVID_TOOLS_SOCKET` and `CORVID_TOOLS_TOKEN_FILE`, the hello, one request at a time, and an error answer raised as an
+  exception carrying `code`, `message`, `detail` and `tainted`; `limits()` and the last call's taint are readable. Standard
+  library only, no package.
+  - **Python**: `CorvidToolError`; `corvid.read_file(path)` (also `import corvid_tools`), `call(tool, args)`,
+    `limits()`, `last_call_tainted()`. Synchronous.
+  - **JavaScript** (Node, an ES module): `CorvidToolError`; `await corvid.read_file(path, { start_line: 10 })`,
+    `corvid.call(tool, args)`, `corvid.limits()`, `corvid.lastCallTainted()`. An idle socket does not keep the script alive.
+  - **C#** (a file-based app): `CorvidTools.ReadFileAsync(path, …, cancellationToken)` returning the result as a
+    `JsonElement`, `CorvidTools.CallAsync`, `Limits`, `LastCallTainted`, `CorvidToolException`; global namespace, every type
+    fully qualified (no `using` can follow top-level statements), no reflection-based serialization.
+  - **Forms.** `Program(language, tools, script)` gives the program the code tool puts on standard input, the script's
+    lines keeping their numbers (A7 review): for Python a bootstrap that runs the client as the module `corvid_tools`,
+    then the script compiled as `script.py` (its source registered with `linecache`, so a traceback quotes it) in a
+    namespace of its own holding only `corvid`, both carried base64-encoded, so a script's `from __future__` imports are
+    its own and a script that rebinds `call`, `close` or `limits` breaks nothing (the wrappers call a private client);
+    for JavaScript `import * as corvid from "data:text/javascript;base64,…";` on the script's first line, the client a
+    module of its own; for C# the client's classes after the top-level statements. `Generate` gives the module forms
+    (`corvid_tools.py`, `corvid_tools.mjs`) for a script that imports a file beside it.
+  - **Exchanges.** Each client closes its connection when an exchange is cut short (cancelled, interrupted, a bad line),
+    on `closed` and `unauthorized`, and when an answer's `id` is another request's, so a call never reads an abandoned
+    call's answer as its own; the next call opens the socket again.
+  - **Untrusted text.** Descriptions and parameter names come from the descriptor (an MCP server may have written them).
+    They are emitted only inside double-quoted string literals escaped as JSON with every non-ASCII character as
+    `\uXXXX` (valid in all three languages), never in a comment, a docstring delimiter or a template literal; identifiers
+    are rebuilt from ASCII letters, digits and `_`, kept clear of each language's keywords and of the client's own names
+    (C# parameters are verbatim `@name`), and the wire still sends the descriptor's names. The generated text is ASCII.
+    The client is a convenience, not a boundary: the host enforces the token, the tools, the limits and the turn's path.
+  - Tests (`CodeModeClientTests`): each client, module and inline, run by `python3`, `node` and `dotnet run` against a
+    real `CodeModeSession` on a Unix socket with a fake invoker (a wrong token, required and optional arguments, taint, a
+    refused call, an unknown tool, keyword names, limits), a hostile description that would run code if it escaped its
+    literal, a Roslyn compile of the C# client without warnings, and the renaming rules; and (A7 review) a script that
+    rebinds the client's names, a working directory full of stdlib-named modules, errors naming the script's own line in
+    Python and JavaScript, and a cancelled C# call (the client compiled and loaded in the test) whose answer the next
+    call never reads.
+- **The run on the surfaces.** `CodeRunPresentation.Read` takes the language and source from `execute_code`'s
+  arguments (`language`, `code`); `Usage` and `Outcome` read its result (`tool_calls`, `exit_code`, `timed_out`,
+  `response_bytes`). A run is announced on the stream with its arguments (the reporter has read the issued call just
+  before), so its source shows while it runs; other calls are announced without input, as before.
+  - **App.** `ToolCall.ParentCallId`, `ToolCall.Code` (`CodeRun`: language, source, the run's call limit and limits in
+    words), `ToolCallUpdate.ParentCallId` and `CodeOutcome`. The fold puts a script's call right after its run's card
+    and the run's earlier calls (not at the turn's foot), with the run's turn, and counts it on the run, live and on
+    replay. The run's card shows "Python · 12 lines · 3 of 50 tool calls · exit 0" and the whole script in monospace (the
+    app has no syntax colouring), every character revealed (`SafeText.Reveal`: it is what ran); a script's call is drawn
+    indented under it. Review says "write_file via execute_code · turn 3" for a change a script's call made.
+  - **Approval card.** `ApprovalRequested.Code` carries the script from the prompt's in-memory arguments (what runs; the
+    transcript card's comes from the log, credential-scrubbed), shown whole and revealed, with the language and limits,
+    a note when it holds hidden characters, and the words that approving runs the script and that each tool it calls is
+    asked for on its own, as the model's own call would be. `CodeRunCard.Lines` gives the same for the terminal and
+    ACP (hidden characters, a lone CR and the line and paragraph separators as `\uXXXX`; never cut).
+  - **corvid chat.** A script's call is printed indented under its run (`    ↳ ✓ list_notes succeeded`), in the live
+    panel too, and the run's line counts them ("· 2 tool calls"); its approval box adds the card's lines. The box's
+    action text now shows hidden characters as escapes, for every prompt. A script's call asks in a box that says so
+    (`CodeRunCard.NestedLine`: "Asked by the script in call run-1 (call 2 of at most 50)."), read from the call the log
+    holds; ACP's permission request carries the same line as text (A7 review, security L3).
+  - **ACP.** ACP has no nested calls: a script's call is a `tool_call` (and its `tool_call_update`s and permission
+    request) with `_meta: {"corvid":{"parentToolCallId":"<run's id>"}}`, live and on `session/load`. The model's own calls
+    carry no `_meta`, so the recorded exchanges are unchanged. The run's permission request carries the card's lines as
+    text content.
+
+### Code mode where the A7 groups meet
+
+- **Clients wired.** `WorkspaceComposer.CodeOptionsFor` sets `CodeToolOptions.Clients` to `GeneratedClient`, which writes
+  `CodeModeClients.Program` for the run's language from `CodeModeCatalog.Describe`'s tools, so every script gets its client
+  (Python's bootstrap and JavaScript's import before the source, C#'s classes after it). `execute_code`'s description tells the model the three calling
+  forms. The client changes nothing about the boundary: the host still checks the token, the tools, the limits and the
+  turn's path.
+- **Architect/editor.** The planner is offered no tools, so it never writes a script; the editor is. `CodeModeFilter`
+  withholds `execute_code` when the session's generator runs in process and also when `Corvid:Turn:EditorModel` names a
+  generator binding that runs in process, so a server model's plan is never applied by an in-process model writing
+  scripts. A script the editor runs is approved and its calls asked exactly as in any turn.
+- **Sleep-time jobs.** A turn whose code run waits on its script's approval keeps its session busy
+  (`CorvidRuntime.SessionsIdle`), so the block rewrite does not run then; the turn's end nudges it.
+- Tests: `Corvid.Host.Tests.A7MeetingTests` (a generated Python, JavaScript and C# client on the real `execute_code`
+  server through a composed turn; an `/architect` turn whose editor runs a script; code mode withheld from an in-process
+  editor; the sleep-time pass during a code run). The surfaces' tests (ACP, chat, the engine) run their stand-in
+  `execute_code` on a local-server generator (`FakeModels(generatorPrivacy: LocalServer)`), since code mode is not
+  offered in process.
 
 ## Running the check
 

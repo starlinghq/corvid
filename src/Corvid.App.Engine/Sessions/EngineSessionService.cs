@@ -788,7 +788,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         var tools = await _engine.ToolsAsync().ConfigureAwait(false);
         while (true)
         {
-            var channel = _channels.GetOrAdd(sessionId, id => new Channel(id, new SessionUpdateTranslator(tools.WorkspaceRoot) { IsChildRunning = runtime.IsChildRunning }));
+            var channel = _channels.GetOrAdd(sessionId, id => new Channel(id, new SessionUpdateTranslator(tools.WorkspaceRoot) { IsChildRunning = runtime.IsChildRunning, CodeLimits = runtime.CodeLimits }));
             Task loading;
             lock (channel.Gate)
             {
@@ -1268,7 +1268,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// The conversations a person had, not the stores' own sessions (MCP pins, the gateway's delivery ledger, the session
     /// Memory's Hermes import stages its facts from).
     /// </summary>
-    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger or Memory.EngineMemoryService.ImportSession);
+    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger or Corvid.Abstractions.Events.MemoryJobs.Session or Memory.EngineMemoryService.ImportSession);
 
     // ---- Helpers ----
 

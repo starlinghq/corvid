@@ -408,6 +408,31 @@ public sealed class ApprovalCardBlock : TranscriptBlock
     private string _delegationText = "";
     private string _delegationWhole = "";
 
+    /// <summary>A7: the card is a code mode run's: it shows the whole script and <see cref="CodeNote"/>.</summary>
+    public bool HasCode { get; private set; }
+
+    /// <summary>A7V1-6: the call waiting is one a code run's script made (its title says so).</summary>
+    public bool IsNested { get; private set; }
+
+    /// <summary>A7V1-6: what a nested call's title adds.</summary>
+    public const string NestedNote = "(called by a code run's script)";
+
+    /// <summary>A7: "Code run: Python · 12 lines; at most 50 tool calls, …; no network".</summary>
+    public string CodeHeader { get; private set; } = "";
+
+    /// <summary>A7: the whole script, every character shown (<see cref="SafeText.Reveal"/>): what is approved is what runs.</summary>
+    public string CodeSource { get; private set; } = "";
+
+    /// <summary>A7: the script holds characters a reader cannot see; they are drawn as their codes.</summary>
+    public bool CodeHasHidden { get; private set; }
+
+    /// <summary>A7: what approving a script grants, and what it does not.</summary>
+    public string CodeNoteText => CodeNote;
+
+    /// <summary>A7: what approving a script grants, and what it does not (the card's words).</summary>
+    public const string CodeNote =
+        "Approving runs this script in the sandbox. Each tool it calls is asked for on its own, exactly as the model's own call would be; taint and egress apply to every call.";
+
     /// <summary>A5 review (security L5): a goal on the card is cut, and the whole of it can be shown.</summary>
     public bool CanShowWholeGoal { get => _canShowWholeGoal; private set => SetProperty(ref _canShowWholeGoal, value); }
 
@@ -493,11 +518,15 @@ public sealed class ApprovalCardBlock : TranscriptBlock
             Build(card);
         }
 
-        Title = card.Count > 1 ? $"Approval {card.Position} of {card.Count} · {Tool}" : $"Approval · {Tool}";
+        // A7V1-6: a call a code run's script made says so, on the card and to a screen reader.
+        IsNested = card.ParentCallId is not null;
+        var made = IsNested ? " " + NestedNote : "";
+        Title = (card.Count > 1 ? $"Approval {card.Position} of {card.Count} · {Tool}" : $"Approval · {Tool}") + made;
         PhoneTitle = card.Count > 1 ? $"Approval {card.Position} of {card.Count}" : "Approval";
         if (card.Next is { } next)
         {
-            var action = next.Tool == "shell" ? $"shell {next.Text}" : next.Text;
+            // A7V1-6: a queued code run is named, not quoted: its script is shown whole on its own card.
+            var action = next.Code is { } queued ? $"{next.Tool} · {queued.Language}" : next.Tool == "shell" ? $"shell {next.Text}" : next.Text;
             var ready = next.ProposedDiff is null ? "" : " (diff ready)";
             NextText = SessionText.Runs(string.Create(CultureInfo.InvariantCulture,
                 $"Next in the queue: `{action.Replace('`', '\'')}`{ready} · {card.Position + 1} of {card.Count}"));
@@ -525,11 +554,15 @@ public sealed class ApprovalCardBlock : TranscriptBlock
     private void Build(TranscriptEntry entry)
     {
         var request = ((ApprovalEntry)entry).Request;
-        CommandText = SafeText.Reveal(request.Tool == "shell" || request.Text.StartsWith(request.Tool, StringComparison.Ordinal)
-            ? request.Text
-            : $"{request.Tool} {request.Text}");
-        Unparsed = SafeText.Clean(request.Unparsed);
-        Commands = [.. request.Commands.Select(ParsedCommandView.From)];
+        // A7V1-6: a code run's script is shown once, whole, in its own block (CodeSource); the command line and the parsed
+        // commands would show it again.
+        CommandText = request.Code is { } script
+            ? SafeText.Reveal($"{request.Tool} · {script.Language}")
+            : SafeText.Reveal(request.Tool == "shell" || request.Text.StartsWith(request.Tool, StringComparison.Ordinal)
+                ? request.Text
+                : $"{request.Tool} {request.Text}");
+        Unparsed = request.Code is null ? SafeText.Clean(request.Unparsed) : "";
+        Commands = request.Code is null ? [.. request.Commands.Select(ParsedCommandView.From)] : [];
         Reasons = [.. request.Reasons.Select(reason => new ReasonView(reason.Label, SessionText.Runs(reason.Detail), SessionText.Runs(reason.Short ?? reason.Detail)))];
         ProposedDiff = request.ProposedDiff is { } diff ? new FileDiffView(diff) : null;
         Detections = [.. request.Detections.Select(detection => new DetectionView($"detection: {SafeText.Clean(detection.RuleId)}",
@@ -539,6 +572,13 @@ public sealed class ApprovalCardBlock : TranscriptBlock
         DelegationText = string.Join("\n", request.Delegation.Select(line => SafeText.Reveal(line)));
         _delegationWhole = string.Join("\n", request.DelegationWhole.Select(line => SafeText.Reveal(line)));
         CanShowWholeGoal = _delegationWhole.Length > 0;
+        // A7: a code mode run's whole script, every character shown, and what approving it does and does not grant.
+        HasCode = request.Code is not null;
+        CodeSource = request.Code is { } code ? SafeText.Reveal(code.Source.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd('\n')) : "";
+        CodeHeader = request.Code is { } run
+            ? $"Code run: {SafeText.Clean(run.Language)} · {ToolCardBlock.LineCount(run.Source)}" + (run.Limits is { Length: > 0 } limits ? $"; {SafeText.Clean(limits)}" : "")
+            : "";
+        CodeHasHidden = request.Code is { } hidden && SafeText.HasHidden(hidden.Source);
 
         var options = new List<ApprovalOptionView>
         {

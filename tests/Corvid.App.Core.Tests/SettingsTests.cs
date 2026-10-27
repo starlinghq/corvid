@@ -36,7 +36,7 @@ public sealed class SettingsTests
         Assert.True(settings.IsDemo);
         Assert.Contains("Nothing is written to disk", settings.DemoText, StringComparison.Ordinal);
         Assert.Equal("~/.config/corvid/corvid.json · 1 set for this run with --set", settings.Subtitle);
-        Assert.Equal(["Workspace and data", "Approvals", "Turns", "Privacy", "Devices and tools", "Hosting", "Serve and telemetry"],
+        Assert.Equal(["Workspace and data", "Approvals", "Turns", "Privacy", "Devices and tools", "Code mode", "Hosting", "Serve and telemetry"],
             settings.Groups.Select(group => group.Title));
         var steps = Field(settings, "Turn:MaxSteps");
         Assert.Equal("8", steps.Value);

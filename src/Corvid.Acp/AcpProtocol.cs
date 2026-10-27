@@ -186,6 +186,9 @@ internal static class ToolKinds
     public const string Search = "search";
     public const string Execute = "execute";
     public const string Fetch = "fetch";
+
+    /// <summary>A7: a step of thought, as an architect/editor turn's plan is shown.</summary>
+    public const string Think = "think";
     public const string Other = "other";
 }
 
@@ -207,6 +210,10 @@ internal sealed record ToolCall(string ToolCallId, string Title, string Kind, st
     public JsonElement? RawInput { get; init; }
 
     public JsonElement? RawOutput { get; init; }
+
+    /// <summary>A7: <c>{"corvid":{"parentToolCallId":…}}</c> on a call a code mode script made; absent otherwise.</summary>
+    [JsonPropertyName("_meta")]
+    public JsonElement? Meta { get; init; }
 }
 
 /// <summary>Changes to a tool call (<c>tool_call_update</c>); also the tool call shown in a permission request.</summary>
@@ -225,6 +232,10 @@ internal sealed record ToolCallUpdate(string ToolCallId) : SessionUpdate
     public JsonElement? RawInput { get; init; }
 
     public JsonElement? RawOutput { get; init; }
+
+    /// <summary>A7: <c>{"corvid":{"parentToolCallId":…}}</c> on a call a code mode script made; absent otherwise.</summary>
+    [JsonPropertyName("_meta")]
+    public JsonElement? Meta { get; init; }
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]

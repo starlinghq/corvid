@@ -44,6 +44,12 @@ public sealed record MemoryServices(
 
     /// <summary>Drafts lessons from queued turns in the background (C-025); null without lessons or a background generator.</summary>
     public Kernel.Lessons.LessonLearner? LessonLearner { get; init; }
+
+    /// <summary>
+    /// The block rewrite job (plan §9.5) on the background generator; null without the write path (no extractor slot). Its
+    /// background loop runs only with <c>Corvid:Memory:Consolidation:Background</c>.
+    /// </summary>
+    public BlockConsolidator? Consolidator { get; init; }
 }
 
 /// <summary>
@@ -138,6 +144,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         // C-025: lesson drafts, the same way.
         if (memory?.LessonLearner is { } lessons)
             _lessonLearning = Task.Run(() => lessons.RunAsync(_lifetime.Token));
+        // Plan §9.5: core blocks near their budget are rewritten in the background when the sessions are idle.
+        StartConsolidation();
     }
 
     /// <summary>
@@ -152,6 +160,13 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     public SkillServices Skills { get; }
 
     public CorvidOptions Options { get; }
+
+    /// <summary>
+    /// A7 e2e: the limits a code mode run starts with (<c>Corvid:Tools:Code</c>), as <c>execute_code</c> enforces them, for
+    /// the cards that show a run (an approval card says what the person grants).
+    /// </summary>
+    public Corvid.Tools.CodeMode.CodeModeLimits CodeLimits =>
+        Corvid.Tools.CodeMode.CodeModeLimits.Default with { MaxCalls = Options.Tools.Code.MaxCalls };
 
     /// <summary>
     /// The settings a running runtime takes without a restart (A4), by configuration key, with when each applies: the
@@ -577,6 +592,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             await _learning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         if (_lessonLearning is not null)
             await _lessonLearning.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        await ConsolidationStopped().ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         lock (_schedulerGate)
         {
             _schedulerLock?.Dispose();
@@ -620,6 +636,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         var messageId = Guid.NewGuid().ToString("N");
         var waiter = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
         _waiting[messageId] = waiter;
+        // A7 review (depth L2): the session goes busy: a sleep-time pass that is running gives way to the turn.
+        InterruptConsolidation();
         try
         {
             await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell, Images = images.IsDefault ? [] : images },
@@ -673,7 +691,34 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     /// <summary>The built-in tools' examples and the kernel's <c>ask_user</c>'s (K-6), for the shortlist.</summary>
     private static readonly IReadOnlyDictionary<string, ImmutableArray<string>> ToolExamples =
-        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal) { [AskUserTool.ToolName] = AskUserTool.Examples, [DelegateTaskTool.ToolName] = DelegateTaskTool.Examples };
+        new Dictionary<string, ImmutableArray<string>>(BuiltinTools.Examples, StringComparer.Ordinal)
+        {
+            [AskUserTool.ToolName] = AskUserTool.Examples, [DelegateTaskTool.ToolName] = DelegateTaskTool.Examples, [CodeTool.ToolName] = CodeTool.Examples,
+        };
+
+    /// <summary>
+    /// A7: offers <c>execute_code</c> only while the session's generator is a cloud or local-server model; an in-process one
+    /// (0.8B) writes poor code (plan §15). Every other tool passes.
+    /// </summary>
+    /// <remarks>
+    /// A7 int: an architect/editor turn hands its tools to the editor (<paramref name="editorModel"/>, else the session's own
+    /// generator, which the current one is at the turn's start). An editor named in process withholds code mode too, so a
+    /// plan from a server model is never applied by an in-process model writing scripts.
+    /// </remarks>
+    internal static Func<Corvid.Tools.ToolDescriptor, bool> CodeModeFilter(SessionModelSlots slots, string? editorModel = null) => tool =>
+        tool.Name != CodeTool.ToolName
+        || slots.TryCurrent(ModelSlots.Generator, out var generator) && generator.Profile.Privacy != PrivacyClass.Local
+            && !(EditorFor(slots, editorModel) is { } editor && editor.Profile.Privacy == PrivacyClass.Local);
+
+    // The generator binding an editor model names, as the turn runner picks it (by profile id or name@placement), or null.
+    private static ModelBinding? EditorFor(SessionModelSlots slots, string? editorModel)
+    {
+        if (editorModel is not { Length: > 0 } wanted || !slots.TryConfiguration(ModelSlots.Generator, out var configuration))
+            return null;
+        return new[] { configuration.Default }.Concat(configuration.Fallbacks).Concat(configuration.Escalation)
+            .FirstOrDefault(binding => string.Equals(binding.Profile.Id, wanted, StringComparison.OrdinalIgnoreCase)
+                || binding.Profile.Id.StartsWith(wanted + "@", StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>One session's turn services over the shared ones. Scheduled runs are not interactive: nobody can be asked.</summary>
     private TurnServices Services(SessionModelSlots slots, bool interactive, ToolRegistry? tools = null, SessionSettings? session = null,
@@ -739,6 +784,12 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
                 AsksQuestions = child is null,
                 // C-005 has no examples file; C-012 wrote the built-in tools' examples by hand.
                 ToolExamples = ToolExamples,
+                // A7 (plan §15): code mode only for a generator that runs outside this process (a cloud or local-server
+                // model), read at each turn's start, so a /model switch changes it from the next turn.
+                ToolFilter = CodeModeFilter(slots, turn.EditorModel),
+                // A7: architect/editor turns, and the model that applies a plan.
+                ArchitectEditor = turn.ArchitectEditor,
+                EditorModel = turn.EditorModel,
             },
         };
     }
@@ -904,6 +955,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         // Queued before the sender hears back, so MaintenanceIdleAsync after SendAsync always covers this turn.
         if (Memory is { } memory)
             QueueCatchUp(memory, delivery.Request.SessionId);
+        NudgeConsolidation();
         // K-9: after an answered exchange, a session without a title gets one from the local generator, in the background.
         // Not for sessions nobody looks at as a conversation here (an HTTP client's, non-interactive): each would cost a call.
         if (delivery.Result is { Status: TurnStatus.Answered, Text: not null } && Titles is { Unavailable: null, Options.Generate: true }

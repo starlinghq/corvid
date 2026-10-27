@@ -39,8 +39,10 @@ internal sealed class PermissionPrompter(AcpConnectionContext context, AcpSessio
         var content = new List<ToolCallContent>();
         if (tools?.ProposedDiff(toolName, arguments) is { } diff)
             content.Add(TurnReporter.Diff(diff));
-        // A5: a spawn's children (goal, tools, budget, models) or the child that asks, as every surface shows them.
-        var children = await Corvid.Host.Composition.DelegationCard.LinesAsync(context.Runtime, prompt, cancellationToken).ConfigureAwait(false);
+        // A5: a spawn's children (goal, tools, budget, models) or the child that asks, as every surface shows them; A7: a code
+        // run's language, limits and whole source, and that each tool the script calls is asked on its own.
+        var children = await Corvid.Host.Composition.CodeRunCard.WithDelegationAsync(context.Runtime, prompt, cancellationToken, whole: false)
+            .ConfigureAwait(false);
         if (children.Count > 0)
             content.Add(new ContentToolCallContent(new TextContent(string.Join("\n", children))));
         var reasons = string.Join("\n", prompt.Reasons.Select(reason => $"• {reason.Detail} ({reason.Code})"));
@@ -61,6 +63,8 @@ internal sealed class PermissionPrompter(AcpConnectionContext context, AcpSessio
             RawInput = arguments,
             Locations = tools is null ? null : TurnReporter.Locations(tools.Locations(arguments)),
             Content = [.. content],
+            // A7: a script's call names the code run it was made from.
+            Meta = TurnReporter.ParentMeta(call?.ParentCallId),
         }, [.. options]);
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, state.TurnCancelled);

@@ -24,9 +24,14 @@ internal sealed class InstrumentedChatClient(IChatClient inner, ModelProfile pro
         try
         {
             ChatResponse response;
-            if (stream is not null && HostTelemetry.StreamingSessionOf(Activity.Current) is { } session && stream.HasObservers(session))
+            var session = stream is not null && HostTelemetry.StreamingSessionOf(Activity.Current) is { } watched && stream.HasObservers(watched)
+                ? watched
+                : null;
+            // A7: an architect/editor turn's plan is not streamed as the answer; surfaces show it once it is logged.
+            if (session is not null
+                && options?.AdditionalProperties?.TryGetValue(global::Corvid.Models.Privacy.ModelRequestKeys.Unstreamed, out _) != true)
             {
-                stream.Publish(session, observer => observer.GenerationStarted());
+                stream!.Publish(session, observer => observer.GenerationStarted());
                 var updates = new List<ChatResponseUpdate>();
                 await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken).ConfigureAwait(false))
                 {
@@ -39,18 +44,15 @@ internal sealed class InstrumentedChatClient(IChatClient inner, ModelProfile pro
                             stream.Publish(session, observer => observer.Thought(thought));
                 }
                 response = updates.ToChatResponse();
-                if (response.Usage is { } used && (used.InputTokenCount is not null || used.OutputTokenCount is not null))
-                    stream.Publish(session, observer => observer.Usage(used.InputTokenCount, used.OutputTokenCount));
-                else
-                {
-                    // L3 (A5 review): a provider that reports no usage is estimated, so a child's token budget still counts it.
-                    var (input, output) = Estimate(messages, response);
-                    stream.Publish(session, observer => observer.UsageEstimated(input, output));
-                }
+                PublishUsage(stream!, session, messages, response);
             }
             else
             {
                 response = await base.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+                // A7 review (depth M3): an unstreamed request (a plan) still costs tokens: its usage is published once the
+                // response is in (no generation start and no text), so a child's token budget counts the planner too.
+                if (session is not null)
+                    PublishUsage(stream!, session, messages, response);
             }
             Describe(activity, response.ModelId, response.Usage, response.FinishReason);
             failed = false;
@@ -94,6 +96,18 @@ internal sealed class InstrumentedChatClient(IChatClient inner, ModelProfile pro
             if (failed)
                 activity?.SetStatus(ActivityStatusCode.Error);
             latency.Record(Stopwatch.GetElapsedTime(started), failed);
+        }
+    }
+
+    private void PublishUsage(TurnFeed stream, string session, IEnumerable<ChatMessage> messages, ChatResponse response)
+    {
+        if (response.Usage is { } used && (used.InputTokenCount is not null || used.OutputTokenCount is not null))
+            stream.Publish(session, observer => observer.Usage(used.InputTokenCount, used.OutputTokenCount));
+        else
+        {
+            // L3 (A5 review): a provider that reports no usage is estimated, so a child's token budget still counts it.
+            var (input, output) = Estimate(messages, response);
+            stream.Publish(session, observer => observer.UsageEstimated(input, output));
         }
     }
 

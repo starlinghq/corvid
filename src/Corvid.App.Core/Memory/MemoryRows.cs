@@ -56,7 +56,10 @@ public sealed class MemoryTab : ObservableObject
     public RelayCommand Open { get; }
 }
 
-/// <summary>A core block with its meter: "user", "318 / 350", amber from 90%, and "local-only · revision 14 · updated 14:02".</summary>
+/// <summary>
+/// A core block with its meter: "user", "318 / 350", amber from the consolidation threshold (90% by default), and
+/// "local-only · revision 14 · updated 14:02".
+/// </summary>
 public sealed class CoreBlockView(CoreBlock block, TimeProvider time)
 {
     public CoreBlock Block { get; } = block;
@@ -67,8 +70,8 @@ public sealed class CoreBlockView(CoreBlock block, TimeProvider time)
 
     public double Fraction => Block.Budget <= 0 ? 0 : (double)Block.Tokens / Block.Budget;
 
-    /// <summary>At or past 90% of its budget, where consolidation is offered.</summary>
-    public bool IsNearBudget => Fraction >= 0.9;
+    /// <summary>At or past the consolidation threshold of its budget (<see cref="CoreBlock.ConsolidateAt"/>), where consolidation is offered.</summary>
+    public bool IsNearBudget => Fraction >= Block.ConsolidateAt;
 
     public string Detail { get; } = MemoryText.BlockDetail(block, time);
 
@@ -85,11 +88,17 @@ public sealed class CoreBlockView(CoreBlock block, TimeProvider time)
 
     public bool CanOpenReview => IsNearBudget && HasPendingUpdate;
 
+    /// <summary>Asks the block rewrite job for a shorter rewrite, staged in Review (plan §9.5).</summary>
+    public System.Windows.Input.ICommand? ConsolidateNow { get; init; }
+
+    /// <summary>Near its budget with nothing waiting for it: "Consolidate now" is offered.</summary>
+    public bool CanConsolidateNow => IsNearBudget && !HasPendingUpdate && ConsolidateNow is not null;
+
     /// <summary>The Core blocks tab's line under a block near its budget (F11: "offers consolidation").</summary>
     public string ConsolidationOffer => !IsNearBudget ? ""
         : HasPendingUpdate
             ? "Near its budget: consolidation is offered with the update waiting in Review."
-            : "Near its budget: consolidation is offered with the next staged write to it.";
+            : "Near its budget: consolidate it now, or with the next staged write to it.";
 
     public string AutomationName => $"{Name} block, {Block.Tokens} of {Block.Budget} tokens{(IsNearBudget ? ", near its budget" : "")}, {Detail}";
 }

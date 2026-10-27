@@ -32,7 +32,10 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
         cancellationToken.ThrowIfCancellationRequested();
 
         string launcher = LocateLauncher();
-        DirectoryInfo statusDirectory = Directory.CreateTempSubdirectory("corvid-sandbox-"); // mode 0700
+        IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
+        policy = HidingScratch(policy, source);
+        // A7V1-2: under the root every sandbox hides, so no other command sees the token or the CA, whatever TMPDIR is.
+        DirectoryInfo statusDirectory = SandboxScratch.CreateDirectory("corvid-sandbox-", source); // mode 0700
         try
         {
             string statusFile = Path.Combine(statusDirectory.FullName, "status.json");
@@ -46,6 +49,16 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
                 await File.WriteAllTextAsync(caFile, proxy.CaCertificatePem, cancellationToken).ConfigureAwait(false);
             }
 
+            string? tokenFile = null;
+            if (policy.Tools is { } tools)
+            {
+                // A7: like the CA, never on a command line or in an environment, which other processes could read.
+                tokenFile = Path.Combine(statusDirectory.FullName, "tools.token");
+                await File.WriteAllTextAsync(tokenFile, "", cancellationToken).ConfigureAwait(false);
+                File.SetUnixFileMode(tokenFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                await File.WriteAllTextAsync(tokenFile, tools.Token, cancellationToken).ConfigureAwait(false);
+            }
+
             var start = new ProcessStartInfo(launcher)
             {
                 UseShellExecute = false,
@@ -53,13 +66,12 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            foreach (string argument in Arguments(policy, command, statusFile, _options, caFile))
+            foreach (string argument in Arguments(policy, command, statusFile, _options, caFile, tokenFile))
             {
                 start.ArgumentList.Add(argument);
             }
 
             start.Environment.Clear();
-            IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
             foreach (string name in policy.Environment.Concat(LauncherEnvironment).Distinct(StringComparer.Ordinal))
             {
                 if (source.TryGetValue(name, out string? value))
@@ -166,8 +178,14 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
             throw new ArgumentException("A prepared launch owns its standard input; StandardInput must be null.", nameof(command));
         if (policy.Proxy is not null)
             throw new ArgumentException("A prepared launch cannot use the Vault proxy route yet (V-003b covers run-to-completion commands only).", nameof(policy));
+        if (policy.Tools is not null)
+            throw new ArgumentException("A prepared launch cannot use the tools socket (A7 covers run-to-completion commands only).", nameof(policy));
         var environment = new Dictionary<string, string>(StringComparer.Ordinal);
         IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
+        // A long-lived command must have the root hidden from the start, before any run makes it.
+        if (SandboxScratch.DeniedRoot(policy, source) is not null)
+            SandboxScratch.EnsureRoot(source);
+        policy = HidingScratch(policy, source);
         foreach (string name in policy.Environment.Concat(LauncherEnvironment).Distinct(StringComparer.Ordinal))
         {
             if (source.TryGetValue(name, out string? value))
@@ -177,12 +195,23 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
         return new SandboxLaunch(LocateLauncher(), [.. Arguments(policy, command, statusFile, _options)], environment);
     }
 
+    /// <summary>
+    /// A7V1-2: the policy with <see cref="SandboxScratch.DeniedRoot(SandboxPolicy?, IReadOnlyDictionary{string, string}?)"/> denied when there is one, so this command cannot see
+    /// another run's status directory (its tools token, its proxy CA) or code mode's tools socket.
+    /// </summary>
+    internal static SandboxPolicy HidingScratch(SandboxPolicy policy, IReadOnlyDictionary<string, string> environment) =>
+        SandboxScratch.DeniedRoot(policy, environment) is { } root && !policy.DeniedPaths.Contains(root, StringComparer.Ordinal)
+            ? policy with { DeniedPaths = policy.DeniedPaths.Add(root) }
+            : policy;
+
     /// <summary>The launcher's exit code when it refused and nothing ran; its status file says why.</summary>
     public const int RefusedExitCode = NotStarted;
 
     /// <summary>The launcher's command line for a policy; the launcher's usage text is the contract.</summary>
     /// <param name="proxyCaFile">Where <see cref="SandboxPolicy.Proxy"/>'s CA was written; required with a proxy.</param>
-    internal static List<string> Arguments(SandboxPolicy policy, SandboxCommand command, string? statusFile, SandboxOptions options, string? proxyCaFile = null)
+    /// <param name="toolsTokenFile">Where <see cref="SandboxPolicy.Tools"/>' token was written; required with the tools socket.</param>
+    internal static List<string> Arguments(SandboxPolicy policy, SandboxCommand command, string? statusFile, SandboxOptions options, string? proxyCaFile = null,
+        string? toolsTokenFile = null)
     {
         var a = new List<string> { "--workspace", policy.Workspace };
         if (command.WorkingDirectory is not null)
@@ -214,6 +243,17 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
         {
             a.AddRange(["--proxy-socket", proxy.SocketPath,
                 "--proxy-ca", proxyCaFile ?? throw new ArgumentException("A proxy needs its CA written to a file.", nameof(proxyCaFile))]);
+        }
+
+        foreach (var (name, value) in policy.EnvironmentValues)
+        {
+            a.AddRange(["--setenv", name + "=" + value]);
+        }
+
+        if (policy.Tools is { } tools)
+        {
+            a.AddRange(["--tools-socket", tools.SocketPath,
+                "--tools-token", toolsTokenFile ?? throw new ArgumentException("The tools socket needs its token written to a file.", nameof(toolsTokenFile))]);
         }
 
         if (!options.RequireKernelLayers)

@@ -17,6 +17,12 @@ public enum SwitchReason
     /// returns to it and it lasts past the turn until they change it (<see cref="SessionModelSlots.SetSessionDefaultAsync"/>).
     /// </summary>
     Session,
+    /// <summary>
+    /// A7: an architect/editor turn's plan is made and the slot goes to the model that applies it (the session's own, or the
+    /// configured editor) for the rest of the turn. Neither the person's choice nor a pin changes; the turn's end returns
+    /// the slot to the session default as after any escalated turn.
+    /// </summary>
+    Editor,
 }
 
 /// <summary>How long a person's switch lasts (A5): the session's choice, the session's choice pinned, or this turn only.</summary>
@@ -47,6 +53,7 @@ public static class SwitchReasons
         SwitchReason.DeEscalation => "de_escalation",
         SwitchReason.Privacy => "privacy",
         SwitchReason.Session => "session",
+        SwitchReason.Editor => "editor",
         _ => throw new ArgumentOutOfRangeException(nameof(reason)),
     };
 }

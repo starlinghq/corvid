@@ -277,6 +277,9 @@ public sealed class EngineReviewService : IReviewService, IDisposable
         var named = new ReviewFile(path, 0, 0)
         {
             Tool = last.Tool,
+            // A7: a change a code mode script's call made names the run it came from.
+            Via = ledger.Calls.TryGetValue(last.CallId, out var issued) && issued.ParentCallId is { } parent
+                && ledger.Calls.TryGetValue(parent, out var run) ? run.ToolName : null,
             Turn = ledger.TurnAt(last.CallSequence),
             CheckpointId = first.Before.Checkpoint.CheckpointId,
         };

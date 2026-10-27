@@ -179,6 +179,8 @@ public sealed class CorvidRuntimeFactory(
                     Timeout = TimeSpan.FromSeconds(settings.Approvals.TimeoutSeconds),
                     // Without the mapping the shell tool never runs: it requires the approval of its command line.
                     ShellTools = BuiltinTools.ShellToolMapping,
+                    // A7: execute_code's calls are assessed as the script they run; without it the code tool never runs.
+                    CodeTools = BuiltinTools.CodeToolMapping,
                     // C-023: the built-in rule pack after the hardline list; enforce rules force a prompt, never more.
                     Detections = settings.Detections.Enabled
                         ? new DetectionEngine(RulePack.BuiltIn(), BuiltinTools.ShellToolMapping, settings.Detections.Enforce)
@@ -206,6 +208,12 @@ public sealed class CorvidRuntimeFactory(
                 var shellTools = new ShellTool(shell).CreateTools();
                 toolRegistry.AddRange(shellTools);
                 bound.UnionWith(fileTools.Concat(shellTools).Select(tool => tool.Name));
+                // A7: code mode, bound to the workspace like the shell whose policy its scripts run under.
+                if (workspaces.CodeToolFor(shell, () => toolRegistry) is { } code)
+                {
+                    toolRegistry.Add(code);
+                    bound.Add(CodeTool.ToolName);
+                }
                 toolRegistry.Add(builtin.Web!);
                 toolRegistry.Add(new CronTools(jobs));
                 // K-6: the generator's clarifying question, which the turn loop recognises (offered in interactive turns only).
@@ -512,6 +520,45 @@ public sealed class CorvidRuntimeFactory(
             learner = new Kernel.Lessons.LessonLearner(lessons, log, (Microsoft.Extensions.AI.IChatClient)generator.Service,
                 new Kernel.Lessons.LessonLearnerOptions { Generator = generator.Profile.Id });
         }
-        return new MemoryServices(database, blocks, episodes, vectors, retriever, writer) { Lessons = lessons, LessonLearner = learner };
+        return new MemoryServices(database, blocks, episodes, vectors, retriever, writer)
+        {
+            Lessons = lessons,
+            LessonLearner = learner,
+            Consolidator = writer is null ? null : Consolidator(settings, composer, blocks, facts, writer, log),
+        };
     }
+
+    /// <summary>
+    /// The block rewrite job (plan §9.5) on the background generator at background priority. Every request carries the
+    /// block's local-only mark, so the egress gate never sends a local-only block to a cloud generator (plan §10.4).
+    /// </summary>
+    internal static IDisposable ConsolidationRequest(Corvid.Memory.CoreBlock block) =>
+        new Corvid.Models.Privacy.ModelRequestContext(Abstractions.Events.MemoryJobs.Session, Tainted: false, block.LocalOnly).Enter();
+
+    private static BlockConsolidator Consolidator(CorvidOptions settings, ModelComposer composer, CoreBlockStore blocks, FactGraph facts, MemoryWriter writer,
+        SqliteEventLog log)
+    {
+        var generator = composer.CreateBackgroundSlots().Get(ModelSlots.Generator).Default;
+        var configured = settings.Memory.Consolidation;
+        return new BlockConsolidator(blocks, writer, (Microsoft.Extensions.AI.IChatClient)generator.Service, log,
+            ConsolidationRequest,
+            new BlockConsolidatorOptions
+            {
+                Threshold = configured.Threshold is > 0 and <= 1 ? configured.Threshold : BlockConsolidatorOptions.Default.Threshold,
+                Interval = configured.IntervalMinutes > 0 ? TimeSpan.FromMinutes(configured.IntervalMinutes) : Timeout.InfiniteTimeSpan,
+                MaxOutputTokens = settings.Turn.MaxOutputTokens > 0 ? Math.Min(settings.Turn.MaxOutputTokens, 2_048) : 1_024,
+                IdleDelay = TimeSpan.FromSeconds(Math.Max(0, configured.IdleSeconds)),
+                // Never a spin: a busy session is looked at again at most five times a second.
+                BusyRetry = TimeSpan.FromSeconds(Math.Max(0.2, configured.IdleSeconds)),
+            })
+        {
+            Deduplicator = new FactDeduplicator(facts, writer, log),
+            // A7V1-5: a local-only block the gate will not send to a cloud generator is refused once, not failed at every pass.
+            IsEgressRefusal = EgressRefusal,
+        };
+    }
+
+    /// <summary>A7V1-5: the egress gate refused to send a request (a local-only block to a cloud model).</summary>
+    internal static bool EgressRefusal(Exception exception) =>
+        exception is Corvid.Models.Privacy.PrivacyEgressRefusedException || exception.InnerException is Corvid.Models.Privacy.PrivacyEgressRefusedException;
 }

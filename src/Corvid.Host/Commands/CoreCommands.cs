@@ -29,6 +29,8 @@ public static class CoreCommands
             .Add(new SlashCommand("help", "List the commands.", "", Help))
             .Add(new SlashCommand("model", "Pick a model: lists a slot's models numbered, or switches one for this session.",
                 ModelUsage, ModelAsync) { Aliases = ["models"], DuringTurn = true })
+            // A7: architect/editor turns asked for by the person; it sets what the next turn does, so it runs beside one.
+            .Add(new SlashCommand("architect", ArchitectCommand.Summary, ArchitectCommand.Usage, ArchitectCommand.Run) { DuringTurn = true })
             .Add(new SlashCommand("status", "Slots with their device, queue depth and median latency; the session's state.", "", Status))
             .Add(new SlashCommand("goal", "Show, set or clear the standing goal.", "[text | clear]", Goal))
             .Add(new SlashCommand("approvals", "Pending approvals and the remembered approval rules.", "", Approvals))
@@ -377,7 +379,8 @@ public static class CoreCommands
 
     // ---- /memory ----
 
-    private const string MemoryUsage = "[pending] | approve <id> [operation] | reject <id> | import hermes [<hermes home>] [--dry-run]"
+    private const string MemoryUsage = "[pending] | approve <id> [operation] | reject <id> | consolidate [user | agent]"
+        + " | import hermes [<hermes home>] [--dry-run]"
         + " | lessons [pending | approve <id> [supersedes <old>] | reject <id> [reason] | supersede <old> <new>]";
 
     private static async ValueTask<CommandOutput> MemoryAsync(SlashCommandContext context, SlashInvocation invocation, CancellationToken cancellationToken)
@@ -414,16 +417,87 @@ public static class CoreCommands
                 var operation = rest.FirstOrDefault();
                 if (operation is not null && operation is not (MemoryOperations.Add or MemoryOperations.Update or MemoryOperations.Invalidate or MemoryOperations.Noop))
                     return CommandOutput.Error("The operation is add, update, invalidate or noop.");
-                var result = await writer.ApproveAsync(id, operation, cancellationToken: cancellationToken).ConfigureAwait(false);
-                return CommandOutput.Success($"Approved {id}: {result.Operation ?? "written"} {result.MemoryId}.");
+                // A7 e2e: an unknown or already resolved id is the person's typo or a second answer, not a crash of the chat.
+                try
+                {
+                    var result = await writer.ApproveAsync(id, operation, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    return CommandOutput.Success($"Approved {id}: {result.Operation ?? "written"} {result.MemoryId}.");
+                }
+                catch (Exception exception) when (exception is KeyNotFoundException or InvalidOperationException)
+                {
+                    return CommandOutput.Error(exception.Message + " /memory pending lists what waits.");
+                }
             case ["reject", var id]:
-                writer.Reject(id, cancellationToken: cancellationToken);
+                try
+                {
+                    writer.Reject(id, cancellationToken: cancellationToken);
+                }
+                catch (Exception exception) when (exception is KeyNotFoundException or InvalidOperationException)
+                {
+                    return CommandOutput.Error(exception.Message + " /memory pending lists what waits.");
+                }
                 return CommandOutput.Success($"Rejected {id}.");
+            case ["consolidate", .. var blocks] when blocks.Count() <= 1:
+                return await ConsolidateAsync(context, blocks.FirstOrDefault(), cancellationToken).ConfigureAwait(false);
             case ["import", "hermes", .. var rest] when rest.Count(argument => argument != "--dry-run") <= 1:
                 return await ImportHermesAsync(context, writer, rest, cancellationToken).ConfigureAwait(false);
             default:
                 return CommandOutput.Error("Usage: /memory " + MemoryUsage + ".");
         }
+    }
+
+    /// <summary>
+    /// <c>/memory consolidate [user | agent]</c> (plan §9.5): the block (or each block at the job's threshold) rewritten to its
+    /// budget on the background generator and staged for review, shown as a diff. Nothing is written until
+    /// <c>/memory approve</c>.
+    /// </summary>
+    private static async Task<CommandOutput> ConsolidateAsync(SlashCommandContext context, string? block, CancellationToken cancellationToken)
+    {
+        if (context.Runtime.Memory is not { Consolidator: { } job } memory)
+            return CommandOutput.Warning("Consolidation needs the memory write path (an extractor slot).");
+        if (block is not null && !BlockConsolidator.Blocks.Contains(block))
+            return CommandOutput.Error(block == CoreBlockNames.Persona
+                ? "The persona block is edited only by you; it is never rewritten."
+                : "Usage: /memory consolidate [user | agent].");
+        List<string> names = block is not null ? [block] : [.. BlockConsolidator.Blocks.Where(name => job.Needs(memory.Blocks.Get(name)))];
+        if (names.Count == 0)
+            return CommandOutput.Text("No block is near its budget (" + string.Join(", ", BlockConsolidator.Blocks.Select(name =>
+                    $"{name} {memory.Blocks.CountTokens(memory.Blocks.Get(name).Content)} of {memory.Blocks.Get(name).BudgetTokens} tokens"))
+                + "). /memory consolidate <user | agent> rewrites one anyway.");
+        var lines = new List<string>();
+        var staged = 0;
+        foreach (var name in names)
+        {
+            var result = await job.StageAsync(context.Session.Id, name, "cli", cancellationToken).ConfigureAwait(false);
+            // A7 review: the diff is against the revision the job rewrote, not the block read before it ran.
+            var before = result.Source ?? "";
+            switch (result.Status)
+            {
+                case BlockRewriteStatus.Staged:
+                    staged++;
+                    lines.Add($"{result.Pending!.PendingId}: the {name} block, {result.TokensBefore} of {result.Budget} tokens rewritten to "
+                        + $"{result.TokensAfter}. /memory approve {result.Pending.PendingId} replaces the block; /memory reject leaves it.");
+                    lines.AddRange(BlockDiff.Lines(before, result.Text!).Select(line => line.Kind switch
+                    {
+                        BlockDiffKind.Removed => "  - ",
+                        BlockDiffKind.Added => "  + ",
+                        _ => "    ",
+                    } + TerminalText.Visible(line.Text)));
+                    break;
+                case BlockRewriteStatus.NotNeeded:
+                    lines.Add($"{name}: {result.Detail}.");
+                    break;
+                default:
+                    lines.Add($"{name}: not staged, {result.Detail}.");
+                    break;
+            }
+        }
+        return new CommandOutput
+        {
+            Title = staged > 0 ? "Consolidation staged for review" : "Nothing staged",
+            Lines = [.. lines],
+            Tone = staged > 0 ? OutputTone.Success : OutputTone.Warning,
+        };
     }
 
     // ---- /memory lessons (C-025) ----

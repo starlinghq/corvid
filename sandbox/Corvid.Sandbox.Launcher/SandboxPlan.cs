@@ -42,6 +42,32 @@ internal sealed partial record SandboxPlan
     /// <summary>The sandbox CA file on the host, canonical; mounted at <see cref="ProxyCaInside"/>.</summary>
     public string? ProxyCa { get; init; }
 
+    /// <summary>A7: code mode's tools socket on the host, canonical; mounted at <see cref="ToolsSocketInside"/>.</summary>
+    public string? ToolsSocket { get; init; }
+
+    /// <summary>A7: the run's token file on the host, canonical; mounted at <see cref="ToolsTokenInside"/>.</summary>
+    public string? ToolsToken { get; init; }
+
+    public const string ToolsSocketInside = ProxyDirectoryInside + "/tools.sock";
+
+    public const string ToolsTokenInside = ProxyDirectoryInside + "/tools.token";
+
+    /// <summary>The largest token file accepted; a token is under 100 bytes.</summary>
+    public const int MaxToolsTokenBytes = 1024;
+
+    /// <summary>The largest <c>--setenv</c> value accepted.</summary>
+    public const int MaxSetEnvironmentValueChars = 32 * 1024;
+
+    /// <summary>
+    /// A7: the variables a command with the tools socket gets, set by the launcher itself (so the secret-name rule, which is
+    /// about values leaving Corvid's own environment, does not apply). An --env or --setenv of one of these names is refused.
+    /// </summary>
+    internal static readonly IReadOnlyList<KeyValuePair<string, string>> ToolsEnvironment =
+    [
+        new("CORVID_TOOLS_SOCKET", ToolsSocketInside),
+        new("CORVID_TOOLS_TOKEN_FILE", ToolsTokenInside),
+    ];
+
     /// <summary>Where the proxy's two files appear inside: under the sandbox's own empty /run, nothing else beside them.</summary>
     public const string ProxyDirectoryInside = "/run/corvid-sandbox";
 
@@ -222,10 +248,56 @@ internal sealed partial record SandboxPlan
                 throw new RefusedException($"--env {name} collides with a variable the proxy sets; it is not passed through.");
             }
 
+            if (request.ToolsSocket is not null && ToolsEnvironment.Any(p => string.Equals(p.Key, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new RefusedException($"--env {name} collides with a variable the tools socket sets; it is not passed through.");
+            }
+
             if (environment(name) is { } value)
             {
                 env.Add(name + "=" + value);
             }
+        }
+
+        // A7: values given on the command line, under the same name rules as --env. Never secrets: a secret-like name is
+        // refused, and the value is visible on this command line.
+        var setNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string pair in request.SetEnvironment)
+        {
+            int equals = pair.IndexOf('=', StringComparison.Ordinal);
+            string name = equals > 0 ? pair[..equals] : throw new RefusedException($"--setenv {pair} must be NAME=VALUE.");
+            string value = pair[(equals + 1)..];
+            if (!EnvironmentName().IsMatch(name))
+            {
+                throw new RefusedException($"--setenv {name} is not a valid variable name.");
+            }
+
+            if (IsSecretLike(name))
+            {
+                throw new RefusedException($"--setenv {name} looks like a secret. Secrets reach commands only through Corvid Vault.");
+            }
+
+            if (request.ProxySocket is not null && ProxyEnvironment.Any(p => string.Equals(p.Key, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new RefusedException($"--setenv {name} collides with a variable the proxy sets.");
+            }
+
+            if (request.ToolsSocket is not null && ToolsEnvironment.Any(p => string.Equals(p.Key, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new RefusedException($"--setenv {name} collides with a variable the tools socket sets.");
+            }
+
+            if (!setNames.Add(name) || request.Environment.Contains(name, StringComparer.Ordinal))
+            {
+                throw new RefusedException($"--setenv {name} is given twice (or also with --env).");
+            }
+
+            if (value.Length > MaxSetEnvironmentValueChars || value.Contains('\0', StringComparison.Ordinal))
+            {
+                throw new RefusedException($"--setenv {name}'s value is longer than {MaxSetEnvironmentValueChars} characters or holds a NUL.");
+            }
+
+            env.Add(name + "=" + value);
         }
 
         string? proxySocket = null, proxyCa = null;
@@ -236,6 +308,16 @@ internal sealed partial record SandboxPlan
                 : throw new RefusedException($"--proxy-socket {request.ProxySocket} does not exist.");
             proxyCa = CheckProxyCa(request.ProxyCa, workspace);
             env.AddRange(ProxyEnvironment.Select(p => p.Key + "=" + p.Value));
+        }
+
+        string? toolsSocket = null, toolsToken = null;
+        if (request.ToolsSocket is not null && request.ToolsToken is not null)
+        {
+            toolsSocket = Native.RealPath(Absolute(request.ToolsSocket, "--tools-socket")) is { } socket && File.Exists(socket)
+                ? socket
+                : throw new RefusedException($"--tools-socket {request.ToolsSocket} does not exist.");
+            toolsToken = CheckToolsToken(request.ToolsToken, workspace);
+            env.AddRange(ToolsEnvironment.Select(p => p.Key + "=" + p.Value));
         }
 
         string? resolv = null;
@@ -271,6 +353,8 @@ internal sealed partial record SandboxPlan
             ResolvConf = resolv,
             ProxySocket = proxySocket,
             ProxyCa = proxyCa,
+            ToolsSocket = toolsSocket,
+            ToolsToken = toolsToken,
             Stage2 = launcher.Stage2Command,
             Stage2Environment = stage2Env,
             OutsideNamespaces = outside,
@@ -324,6 +408,12 @@ internal sealed partial record SandboxPlan
         if (ProxySocket is not null && ProxyCa is not null)
         {
             a.AddRange(["--ro-bind", ProxySocket, ProxySocketInside, "--ro-bind", ProxyCa, ProxyCaInside]);
+        }
+
+        // A7: the same for code mode's tools socket and its token: the socket alone, never its host directory.
+        if (ToolsSocket is not null && ToolsToken is not null)
+        {
+            a.AddRange(["--ro-bind", ToolsSocket, ToolsSocketInside, "--ro-bind", ToolsToken, ToolsTokenInside]);
         }
 
         a.AddRange(["--chdir", WorkingDirectory, "--clearenv"]);
@@ -402,6 +492,37 @@ internal sealed partial record SandboxPlan
         if (!IsCertificatesOnly(text))
         {
             throw new RefusedException($"--proxy-ca {path} must hold PEM CERTIFICATE blocks and nothing else.");
+        }
+
+        return real;
+    }
+
+    /// <summary>
+    /// A7: the token file the command will read: a regular file (not a symlink), small, and outside the workspace, so the
+    /// command can neither swap it nor point it at another file.
+    /// </summary>
+    private static string CheckToolsToken(string path, string workspace)
+    {
+        string absolute = Absolute(path, "--tools-token");
+        var info = new FileInfo(absolute);
+        if (info.LinkTarget is not null)
+        {
+            throw new RefusedException($"--tools-token {path} is a symlink.");
+        }
+
+        if (!info.Exists || Native.RealPath(absolute) is not { } real)
+        {
+            throw new RefusedException($"--tools-token {path} does not exist.");
+        }
+
+        if (Under(real, workspace))
+        {
+            throw new RefusedException($"--tools-token {real} is inside the workspace {workspace}.");
+        }
+
+        if (info.Length is 0 or > MaxToolsTokenBytes)
+        {
+            throw new RefusedException($"--tools-token {path} is empty or larger than {MaxToolsTokenBytes} bytes.");
         }
 
         return real;

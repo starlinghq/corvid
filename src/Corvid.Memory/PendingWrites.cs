@@ -54,6 +54,19 @@ public sealed record ProposedRelation(ProposedEntity Subject, string Predicate, 
 /// <param name="Operation">The decider's choice among the <c>memory_op</c> options, or null when it gave no answer.</param>
 /// <param name="TargetFactId">For update and invalidate, the neighbour the operation applies to (the best-ranked one).</param>
 /// <param name="BlockRevision">For a block edit, the revision the new content was written against.</param>
+/// <param name="Consolidation">
+/// A block rewrite the consolidation job proposed (plan §9.5): <see cref="Content"/> replaces the whole block, shorter, with
+/// the meaning kept. Applied only when a person approves it, like every block write.
+/// </param>
+/// <param name="Supersedes">
+/// For a consolidation of a staged edit (one over its block's budget), that edit's pending id: approving the rewrite
+/// resolves it, since the rewrite folds it in.
+/// </param>
+/// <param name="Tainted">
+/// Asked for while the session held content from outside the user (plan §10.3), or, on a consolidation, folding in an edit
+/// that was: the reviewer is told, and the sleep-time job never folds such an edit in on its own.
+/// </param>
+/// <param name="FoldsInSession">For a consolidation that folds in a staged edit, the session that asked for that edit.</param>
 public sealed record MemoryProposal(
     string? Operation,
     string? TargetFactId,
@@ -66,7 +79,11 @@ public sealed record MemoryProposal(
     string? Content = null,
     long? BlockRevision = null,
     ProposedRelation? Relation = null,
-    bool? LocalOnly = null);
+    bool? LocalOnly = null,
+    bool? Consolidation = null,
+    string? Supersedes = null,
+    bool? Tainted = null,
+    string? FoldsInSession = null);
 
 /// <param name="Reason">Why it was staged: the policy's reason (<c>no answer</c> from the degraded tier, <c>below threshold</c>), or <c>over_budget</c>.</param>
 /// <param name="DecisionId">The <c>memory_op</c> decision, whose outcome is recorded when the write is resolved.</param>

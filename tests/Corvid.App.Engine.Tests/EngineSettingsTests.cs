@@ -89,6 +89,40 @@ public sealed class EngineSettingsTests
         Assert.Null((await ReadAsync(fixture))["Corvid"]!["Telemetry"]!["OtlpEndpoint"]);
     }
 
+    // A7V1-1: code mode is switched on, and its limits set, from the Settings page; the host's defaults and words.
+    [Fact]
+    public async Task CodeModeIsSwitchedOnFromTheSettingsPageWithItsLimits()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var service = new EngineSettingsService(fixture.Engine);
+        var defaults = new Corvid.Host.Configuration.CodeSettings();
+        var loaded = await service.LoadAsync(Token);
+        Assert.Equal(
+            ["false", defaults.TimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), defaults.MaxCalls.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                defaults.MaxStdoutBytes.ToString(System.Globalization.CultureInfo.InvariantCulture), defaults.MaxStderrBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)],
+            [loaded.Values["Tools:Code:Enabled"], loaded.Values["Tools:Code:TimeoutSeconds"], loaded.Values["Tools:Code:MaxCalls"],
+                loaded.Values["Tools:Code:MaxStdoutBytes"], loaded.Values["Tools:Code:MaxStderrBytes"]]);
+        Assert.False(string.IsNullOrWhiteSpace(SettingsCatalogue.Find("Tools:Code:Enabled").Description));
+
+        var refused = await service.SaveAsync(new Dictionary<string, string> { ["Tools:Code:MaxCalls"] = "0", ["Tools:Code:MaxStderrBytes"] = "10" }, Token);
+        Assert.False(refused.Written);
+        Assert.Equal(["Corvid:Tools:Code:MaxCalls must be between 1 and 1000.", "Corvid:Tools:Code:MaxStdoutBytes and MaxStderrBytes must be between 1024 and 1048576."],
+            refused.Problems.Select(problem => problem.Message));
+
+        var write = await service.SaveAsync(new Dictionary<string, string>
+        {
+            ["Tools:Code:Enabled"] = "true",
+            ["Tools:Code:MaxCalls"] = "5",
+            ["Tools:Code:TimeoutSeconds"] = "120",
+        }, Token);
+
+        Assert.True(write.Written, write.Message);
+        Assert.Equal(["Tools:Code:Enabled", "Tools:Code:MaxCalls", "Tools:Code:TimeoutSeconds"], write.RestartKeys.Order(StringComparer.Ordinal));
+        var code = (await ReadAsync(fixture))["Corvid"]!["Tools"]!["Code"]!;
+        Assert.True((bool)code["Enabled"]!);
+        Assert.Equal((5, 120), ((int)code["MaxCalls"]!, (int)code["TimeoutSeconds"]!));
+    }
+
     [Fact]
     public async Task AValueTheValidatorRefusesWritesNothing()
     {

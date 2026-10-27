@@ -155,6 +155,135 @@ public sealed class PolicyTests
     }
 }
 
+public sealed class ScratchTests
+{
+    // A7V1-2: the root every sandbox hides: in the runtime directory when it is set, else in TMPDIR, denied unless the
+    // sandbox replaces it anyway.
+    [Fact]
+    public void The_private_root_is_denied_only_where_the_sandbox_does_not_already_hide_it()
+    {
+        using var runtime = new TempDirectory();
+        var withRuntime = new Dictionary<string, string> { ["XDG_RUNTIME_DIR"] = runtime.Path, ["TMPDIR"] = "/srv/ci/tmp" };
+        var withTmpdir = new Dictionary<string, string> { ["TMPDIR"] = "/srv/ci/tmp/" };
+        var withTmp = new Dictionary<string, string> { ["TMPDIR"] = "/tmp" };
+
+        Assert.Equal(Path.Combine(runtime.Path, SandboxScratch.RuntimeRootName), SandboxScratch.Root(withRuntime));
+        Assert.Null(SandboxScratch.DeniedRoot(withRuntime));
+        Assert.StartsWith("/srv/ci/tmp/corvid-runs-", SandboxScratch.DeniedRoot(withTmpdir), StringComparison.Ordinal);
+        Assert.Null(SandboxScratch.DeniedRoot(withTmp));
+        Assert.Null(SandboxScratch.DeniedRoot(new Dictionary<string, string>()));
+
+        var policy = SandboxPolicy.ForWorkspace("/w") with { DeniedPaths = ["/secret"] };
+        Assert.Equal(["/secret", SandboxScratch.Root(withTmpdir)], BubblewrapSandbox.HidingScratch(policy, withTmpdir).DeniedPaths);
+        Assert.Equal(["/secret"], BubblewrapSandbox.HidingScratch(policy, withTmp).DeniedPaths);
+    }
+
+    // A7 review (security L6): the sandbox's own /tmp (or its hidden runtime directory) covers the root only while the policy
+    // binds nothing above it; a /tmp workspace or read-only path, or one of / itself, would show it, so it is denied then.
+    [Fact]
+    public void The_private_root_is_denied_when_the_policy_binds_a_directory_above_it()
+    {
+        using var runtime = new TempDirectory();
+        var withTmp = new Dictionary<string, string> { ["TMPDIR"] = "/tmp" };
+        var withRuntime = new Dictionary<string, string> { ["XDG_RUNTIME_DIR"] = runtime.Path };
+        var root = SandboxScratch.Root(withTmp);
+
+        Assert.Equal(root, SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/tmp"), withTmp));
+        Assert.Equal(root, SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/tmp/"), withTmp));
+        Assert.Equal(root, SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/"), withTmp));
+        Assert.Equal(root, SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/w") with { ReadOnlyPaths = ["/tmp"] }, withTmp));
+        Assert.Equal(SandboxScratch.Root(withRuntime), SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace(runtime.Path), withRuntime));
+        // A workspace beside the root, or inside /tmp but not above the root, leaves it to the sandbox's own /tmp.
+        Assert.Null(SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/tmp/project"), withTmp));
+        Assert.Null(SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace(root + "-other"), withTmp));
+        Assert.Null(SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/w"), withRuntime));
+        Assert.Equal([root], BubblewrapSandbox.HidingScratch(SandboxPolicy.ForWorkspace("/tmp"), withTmp).DeniedPaths);
+    }
+
+    // A7 review (L5): a run killed before its cleanup leaves its directory; the root sheds run directories older than a day
+    // and nothing else.
+    [Fact]
+    public void Run_directories_left_for_more_than_a_day_are_removed_and_nothing_else_is()
+    {
+        using var runtime = new TempDirectory();
+        var environment = new Dictionary<string, string> { ["XDG_RUNTIME_DIR"] = runtime.Path };
+        var root = SandboxScratch.EnsureRoot(environment);
+        var old = DateTime.UtcNow - TimeSpan.FromDays(2);
+        string Made(string name, DateTime written)
+        {
+            var path = Path.Combine(root, name);
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "tools.token"), "x");
+            Directory.SetLastWriteTimeUtc(path, written);
+            return path;
+        }
+        var staleCode = Made("code-0123456789ab", old);
+        var staleSandbox = Made("corvid-sandbox-0123456789ab", old);
+        var staleCustom = Made("corvid-code-0123456789abcdef", old);
+        var fresh = Made("code-ba9876543210", DateTime.UtcNow);
+        var other = Made("someone-elses", old);
+
+        SandboxScratch.EnsureRoot(environment);
+
+        Assert.False(Directory.Exists(staleCode));
+        Assert.False(Directory.Exists(staleSandbox));
+        Assert.False(Directory.Exists(staleCustom));
+        Assert.True(Directory.Exists(fresh));
+        Assert.True(Directory.Exists(other));
+    }
+
+    [Fact]
+    public void A_runs_directory_is_private_and_under_the_root()
+    {
+        using var runtime = new TempDirectory();
+        var environment = new Dictionary<string, string> { ["XDG_RUNTIME_DIR"] = runtime.Path };
+
+        var directory = SandboxScratch.CreateDirectory("corvid-code-", environment);
+
+        Assert.Equal(SandboxScratch.Root(environment), directory.Parent!.FullName);
+        Assert.StartsWith("corvid-code-", directory.Name, StringComparison.Ordinal);
+        var owner = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Assert.Equal(owner, File.GetUnixFileMode(directory.FullName));
+        Assert.Equal(owner, File.GetUnixFileMode(directory.Parent.FullName));
+    }
+
+    // A long-lived launch (an MCP server) is started before any run may have made the root: it is made then, so the launcher
+    // (which hides only what exists) hides it from that command for its whole life.
+    [Fact]
+    public void A_prepared_launch_makes_the_root_it_denies()
+    {
+        var tmp = System.IO.Path.Combine(AppContext.BaseDirectory, "scratch-" + Guid.NewGuid().ToString("N"));
+        var launcher = System.IO.Path.Combine(AppContext.BaseDirectory, "launcher-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmp);
+        File.WriteAllText(launcher, "");
+        try
+        {
+            var environment = new Dictionary<string, string> { ["PATH"] = "/usr/bin", ["TMPDIR"] = tmp };
+            var root = SandboxScratch.DeniedRoot(environment)!;
+            Assert.False(Directory.Exists(root));
+
+            var launch = new BubblewrapSandbox(new SandboxOptions { LauncherPath = launcher, Environment = environment })
+                .Prepare(SandboxPolicy.ForWorkspace("/w"), new SandboxCommand("notes-mcp"));
+
+            Assert.True(Directory.Exists(root));
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(root));
+            Assert.Equal(["--workspace", "/w", "--deny", root], launch.Arguments.Take(4));
+        }
+        finally
+        {
+            File.Delete(launcher);
+            Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public string Path { get; } = Directory.CreateTempSubdirectory("corvid-scratch-test-").FullName;
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+}
+
 public sealed class LauncherTests
 {
     [Theory]

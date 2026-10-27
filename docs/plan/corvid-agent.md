@@ -322,7 +322,7 @@ The degraded tier is also the A/B baseline for spike S2: the same golden set run
 - **What escalation targets:** a profile-ordered list, for example local 0.8B → local-server 27B → cloud. Each step must be allowed by the privacy policy for the current content (§10.4).
 - **Escalation is visible.** The CLI shows "escalating to <model>: <reason>", the gateway appends a short footnote, and `/insights` reports the escalation rate as a headline metric.
 - **De-escalation.** After an escalated turn finishes, the slot returns to the session's default unless the user pinned the model. The session's default is the model the person chose for the session, when they chose one (A5: a switch made "for this session", at any time and mid-turn, lasts until they change or forget it; a running turn takes it at its next step boundary), else the configured one. "Default for new sessions" is a separate choice, written to `corvid.json`. The decider is switchable per session in the same way.
-- **Architect/editor split** (from Aider): for coding, the escalated model plans and the local model applies mechanical edits. Phase 3.
+- **Architect/editor split** (from Aider): for coding, the escalated model plans and the local model applies mechanical edits. Built in A7 as a turn mode ([architecture](../architecture.md#architecteditor-turns-a7)): `Corvid:Turn:ArchitectEditor` splits a coding turn that escalates for difficulty or repair, and `/architect` asks for it; the plan is logged with its planner, the session's own model (or `Corvid:Turn:EditorModel`) makes the edits, a stuck editor gets one re-plan, and the egress gate applies to the planner as to any cloud call. An editor that runs in process is offered no code mode (§15), even when the session's generator is a server model.
 
 ## 7. Tool calling that works with small models
 
@@ -408,6 +408,14 @@ Background jobs run on the device scheduler at the lowest priority, when the use
 - Compact old sessions into episode summaries.
 
 Every job writes events and is reviewable with `/journey` (Hermes' timeline view).
+
+**Built in A7** ([architecture](../architecture.md#sleep-time-memory-jobs-a7)): the first two jobs. When every session in the
+process is idle (woken after each turn, then every `Corvid:Memory:Consolidation:IntervalMinutes`), a `user` or `agent` block
+at its threshold is rewritten to its budget on the background generator and an edit staged over its budget gets a rewrite
+that fits; exact-duplicate facts have their ending staged. Nothing is applied unapproved: every result is a staged write with its
+diff, in Corvid's own `memory-jobs` session (`MemoryJobRan`), which conversations and search leave out. `/memory consolidate`
+and the app's Consolidate now run the rewrite on demand; a `local_only` block never reaches a cloud generator. The other
+jobs are not built.
 
 ## 10. Safety
 
@@ -519,6 +527,15 @@ Secrets live in **Corvid Vault** (`corvid-vault`), a separate, model-free proces
   - .NET 10 file-based apps (`dotnet run script.cs`) with a generated `CorvidTools` client
   - Python and JavaScript through the same RPC stub
   - Hermes' limits are kept: timeout, call count and output size.
+- **Built in A7** ([architecture](../architecture.md#execute_code-the-host-side-a7)): `execute_code` (off by default,
+  `Corvid:Tools:Code:Enabled`) in Python, JavaScript (an ES module) and C# (a file-based app built in the sandbox's `/tmp`),
+  offered only while the session's generator, and its editor, run outside this process. The script is approved as code (its
+  whole source on the card, "once" only), runs in the sandbox with no network, and reaches the host only through a per-run
+  Unix socket with a per-run token; each tool it calls goes through the turn's own call path (the approval pipeline per
+  call, checkpoints, the credential scrub, taint, egress and leases) and is logged under the run (`ParentCallId`). The
+  generated clients (`corvid.read_file(…)`, `await corvid.read_file(…)`, `await CorvidTools.ReadFileAsync(…)`) cover the
+  turn's offered tools and `Corvid:Tools:Code:Tools`. The CLI, ACP (`_meta.corvid.parentToolCallId`) and the app show
+  the run with its source and its calls under it.
 - **Checkpoints.** A shadow git store per project. A checkpoint is taken before any write, patch or destructive shell action, and recorded as a `CheckpointTaken` event, so `/rollback N` and `/undo` share one model. A write ledger preserves the user's own edits during restore.
 
 ## 16. Observability, evals and the learning flywheel
@@ -581,6 +598,8 @@ ACP, OpenAI-compatible API, MCP client and server, gateway with Telegram, Discor
 ### Phase 3: depth
 
 Subagents, code mode, media memory, remaining gateway adapters, voice, two-tier decider, architect/editor, desktop UI, decision-data export, and personal Kev adapters if U-5 lands.
+
+Built so far: subagents (A5), the desktop UI on the engine (A0 to A6), and in A7 code mode (§15), architect/editor turns (§6) and the first sleep-time memory jobs (§9.5).
 
 ### Building without Kev (decided 2026-10-18, Kev available 2026-10-19)
 

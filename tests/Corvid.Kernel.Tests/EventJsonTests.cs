@@ -47,7 +47,20 @@ public sealed class EventJsonTests
         [typeof(ChildFinished)] = "child_finished",
         [typeof(ChildOf)] = "child_of",
         [typeof(WorkspaceBound)] = "workspace_bound",
+        [typeof(MemoryJobRan)] = "memory_job_ran",
     };
+
+    [Fact]
+    public void The_a7_memory_job_event_has_its_documented_persisted_form()
+    {
+        Assert.Equal("""
+            {"type":"memory_job_ran","job":"consolidate_block","subject":"block:user","outcome":"staged","detail":"consolidation: 38 of 40 tokens rewritten to 17","trigger":"idle","pending_id":"pending:1"}
+            """, EventJson.Serialize(new MemoryJobRan(MemoryJobs.ConsolidateBlock, "block:user", "staged",
+                "consolidation: 38 of 40 tokens rewritten to 17", "idle", "pending:1")));
+        Assert.Equal("""
+            {"type":"memory_job_ran","job":"consolidate_block","subject":"block:agent","outcome":"declined","detail":"the rewrite was empty","trigger":"cli"}
+            """, EventJson.Serialize(new MemoryJobRan(MemoryJobs.ConsolidateBlock, "block:agent", "declined", "the rewrite was empty", "cli")));
+    }
 
     [Fact]
     public void The_a6_workspace_event_has_its_documented_persisted_form()
@@ -117,6 +130,21 @@ public sealed class EventJsonTests
         Assert.Equal(json, EventJson.Serialize(restored));
         using var document = JsonDocument.Parse(json);
         Assert.Equal(WireNames[value.GetType()], document.RootElement.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void A_nested_call_carries_its_parent_and_older_calls_read_and_write_as_before()
+    {
+        // A7: an older stored call has no parent_call_id; it reads back with none and writes back unchanged.
+        const string stored = """{"type":"tool_call_issued","call_id":"c1","tool_name":"add_note","arguments":{"text":"x"},"round":1}""";
+        var older = Assert.IsType<ToolCallIssued>(EventJson.Deserialize(EventJson.Version, stored));
+        Assert.Null(older.ParentCallId);
+        Assert.Equal(stored, EventJson.Serialize(older));
+
+        var nested = new ToolCallIssued("c1.1", "add_note", Samples.Json("""{"text":"x"}"""), 1, false, ParentCallId: "c1");
+        var json = EventJson.Serialize(nested);
+        Assert.Equal("""{"type":"tool_call_issued","call_id":"c1.1","tool_name":"add_note","arguments":{"text":"x"},"round":1,"read_only":false,"parent_call_id":"c1"}""", json);
+        Assert.Equal("c1", Assert.IsType<ToolCallIssued>(EventJson.Deserialize(EventJson.Version, json)).ParentCallId);
     }
 
     [Fact]

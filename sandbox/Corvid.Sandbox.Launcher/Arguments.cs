@@ -25,6 +25,18 @@ internal sealed record LaunchRequest
     /// <summary>The sandbox CA's PEM, the only certificate the command's trust variables name.</summary>
     public string? ProxyCa { get; init; }
 
+    /// <summary>
+    /// A7: code mode's tools socket on the host (a Unix socket Corvid listens on for one run), mounted read-only at
+    /// <see cref="SandboxPlan.ToolsSocketInside"/>. Given with <see cref="ToolsToken"/>.
+    /// </summary>
+    public string? ToolsSocket { get; init; }
+
+    /// <summary>A7: the file holding the run's tools token, mounted read-only at <see cref="SandboxPlan.ToolsTokenInside"/>.</summary>
+    public string? ToolsToken { get; init; }
+
+    /// <summary>A7: NAME=VALUE pairs set for the command as given (not read from any environment). Never secrets.</summary>
+    public IReadOnlyList<string> SetEnvironment { get; init; } = [];
+
     /// <summary>Run even when Landlock or seccomp is unavailable. bubblewrap is never optional.</summary>
     public bool BestEffortLayers { get; init; }
 
@@ -100,6 +112,13 @@ internal static class Arguments
                                   variables (SSL_CERT_FILE and others) name the CA alone. Needs --proxy-ca; not with --network.
           --proxy-ca PATH         The sandbox CA certificate (PEM, certificates only, at most 64 KiB, not a symlink, outside
                                   the workspace). Needs --proxy-socket. An --env name the proxy sets is refused.
+          --setenv NAME=VALUE     Set NAME to VALUE for the command. Repeatable. The --env name rules apply (secret-like
+                                  names are refused); the value is on this command line, so it must never be a secret.
+          --tools-socket PATH     Code mode's tools socket (a Unix socket on the host), mounted read-only at
+                                  /run/corvid-sandbox/tools.sock, which CORVID_TOOLS_SOCKET names. Needs --tools-token.
+          --tools-token PATH      The run's token file (a regular file, not a symlink, at most 1 KiB, outside the
+                                  workspace), mounted read-only at /run/corvid-sandbox/tools.token, which
+                                  CORVID_TOOLS_TOKEN_FILE names. Needs --tools-socket.
           --best-effort-layers    Run without Landlock or seccomp when the kernel lacks them (never without bubblewrap).
           --bwrap PATH            bubblewrap to use (default: the first bwrap on PATH, then /usr/bin/bwrap).
           --status-file PATH      Write a JSON status: whether the command started, its exit code, the layers applied.
@@ -110,11 +129,12 @@ internal static class Arguments
 
     public static LaunchRequest ParseLaunch(IReadOnlyList<string> args)
     {
-        string? workspace = null, chdir = null, bwrap = null, status = null, proxySocket = null, proxyCa = null;
+        string? workspace = null, chdir = null, bwrap = null, status = null, proxySocket = null, proxyCa = null, toolsSocket = null, toolsToken = null;
         bool network = false, bestEffort = false;
         var ro = new List<string>();
         var deny = new List<string>();
         var env = new List<string>();
+        var setEnv = new List<string>();
         int i = 0;
         for (; i < args.Count && args[i] != "--"; i++)
         {
@@ -128,6 +148,9 @@ internal static class Arguments
                 case "--network": network = true; break;
                 case "--proxy-socket": proxySocket = Value(args, ref i); break;
                 case "--proxy-ca": proxyCa = Value(args, ref i); break;
+                case "--setenv": setEnv.Add(Value(args, ref i)); break;
+                case "--tools-socket": toolsSocket = Value(args, ref i); break;
+                case "--tools-token": toolsToken = Value(args, ref i); break;
                 case "--best-effort-layers": bestEffort = true; break;
                 case "--bwrap": bwrap = Value(args, ref i); break;
                 case "--status-file": status = Value(args, ref i); break;
@@ -145,6 +168,11 @@ internal static class Arguments
             throw new RefusedException("--proxy-socket cannot be combined with --network: the proxy is the only route out.");
         }
 
+        if ((toolsSocket is null) != (toolsToken is null))
+        {
+            throw new RefusedException("--tools-socket and --tools-token go together: give both or neither.");
+        }
+
         return new LaunchRequest
         {
             Workspace = workspace ?? throw new RefusedException("--workspace is required."),
@@ -155,6 +183,9 @@ internal static class Arguments
             Network = network,
             ProxySocket = proxySocket,
             ProxyCa = proxyCa,
+            ToolsSocket = toolsSocket,
+            ToolsToken = toolsToken,
+            SetEnvironment = setEnv,
             BestEffortLayers = bestEffort,
             BubblewrapPath = bwrap,
             StatusFile = status,
