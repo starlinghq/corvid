@@ -782,7 +782,7 @@ every test project, and tests where the groups meet (`tests/Corvid.Host.Tests/A7
   script's calls and its approval box adds the card's lines; ACP marks a script's calls with
   `_meta.corvid.parentToolCallId`. Review says "write_file via execute_code · turn N".
 - **Architect/editor turns (`a7/architect`).** `/architect [on | off | status]` and `Corvid:Turn:ArchitectEditor` (a coding
-  turn that escalates for difficulty, context or repair): the escalated model writes a plan with no tools, logged as an
+  turn that escalates for difficulty or repair): the escalated model writes a plan with no tools, logged as an
   `AssistantMessage` with its `TurnPlan`, then the generator slot goes back to the session's own model (or
   `Corvid:Turn:EditorModel`) with the new switch reason `editor`, which makes the edits; a stuck editor gets one re-plan.
   The plan is never streamed as the answer: the stream, ACP (a `think` tool call), chat and the app (a plan row) show it

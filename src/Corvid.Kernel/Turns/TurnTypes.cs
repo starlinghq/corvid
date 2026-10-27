@@ -75,8 +75,8 @@ public sealed record TurnOptions
     public bool EscalationAllowed { get; init; } = true;
 
     /// <summary>
-    /// A7, architect/editor turns (plan §6): when a coding turn (one whose shortlist holds a tool that changes files)
-    /// escalates for difficulty, context or repair, the escalated model writes one plan without tools and the session's own
+    /// A7, architect/editor turns (plan §6): when a coding turn (one offered a tool that changes files)
+    /// escalates for difficulty or repair, the escalated model writes one plan without tools and the session's own
     /// model (or <see cref="EditorModel"/>) makes the edits with it; an editor that gets stuck gets one re-plan. Off by
     /// default: escalation then moves the whole turn, as before. <c>/architect</c> asks for it per turn or session.
     /// </summary>

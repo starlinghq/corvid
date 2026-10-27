@@ -27,13 +27,13 @@ internal static class ArchitectCommand
         switch (invocation.Arguments)
         {
             case []:
-                if (planner is null)
-                    return ValueTask.FromResult(NoPlanner());
+                if (Refusal(runner, planner) is { } refused)
+                    return ValueTask.FromResult(refused);
                 runner.Architect = ArchitectRequest.NextTurn;
                 return ValueTask.FromResult(CommandOutput.Success($"The next turn plans first: {split}."));
             case ["on"]:
-                if (planner is null)
-                    return ValueTask.FromResult(NoPlanner());
+                if (Refusal(runner, planner) is { } refusedOn)
+                    return ValueTask.FromResult(refusedOn);
                 runner.Architect = ArchitectRequest.Session;
                 return ValueTask.FromResult(CommandOutput.Success($"Every turn of this session plans first, until /architect off: {split}."));
             case ["off"]:
@@ -42,7 +42,9 @@ internal static class ArchitectCommand
                     ? "Turns plan first only when a coding turn escalates (Corvid:Turn:ArchitectEditor)."
                     : "Turns no longer plan first."));
             case ["status"]:
-                return ValueTask.FromResult(CommandOutput.Text(Status(runner.Architect, context.Runtime.Options.Turn.ArchitectEditor, split)));
+                return ValueTask.FromResult(CommandOutput.Text(runner.EscalationAllowed
+                    ? Status(runner.Architect, context.Runtime.Options.Turn.ArchitectEditor, split)
+                    : "Architect/editor: off; this session may not escalate its generator, so no model can write a plan."));
             default:
                 return ValueTask.FromResult(CommandOutput.Error("Usage: /architect " + Usage + "."));
         }
@@ -66,6 +68,13 @@ internal static class ArchitectCommand
             ? TerminalText.Visible(configuration.Escalation[0].Profile.Id)
             : null;
 
-    private static CommandOutput NoPlanner() => CommandOutput.Error(
-        "The generator has no escalation target to plan with: give it a ladder (Corvid:Models:Slots:generator:Escalation).");
+    // A7 review (L5): a plan comes from an escalation, so a session whose policy allows none, or a generator with no ladder,
+    // cannot have one; the request is refused with why instead of being accepted and quietly never planning.
+    private static CommandOutput? Refusal(TurnRunner runner, string? planner) =>
+        !runner.EscalationAllowed
+            ? CommandOutput.Error("This session may not escalate its generator (its turn policy keeps it on the session's own model), "
+                + "so no model can write a plan; /architect needs escalation.")
+            : planner is null
+                ? CommandOutput.Error("The generator has no escalation target to plan with: give it a ladder (Corvid:Models:Slots:generator:Escalation).")
+                : null;
 }

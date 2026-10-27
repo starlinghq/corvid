@@ -179,11 +179,16 @@ Plan §6's split, after Aider: for coding, the escalated model plans and the ses
 mode in the kernel (`TurnRunner.Architect.cs`), not a child session; no new project, package, event type or checker rule.
 
 - **When.** `Corvid:Turn:ArchitectEditor` (`TurnOptions.ArchitectEditor`, default off): a coding turn, one whose
-  shortlist holds a tool that changes files (`SideEffects.Filesystem`), that escalates for `difficulty`, `context` or
-  `repair`. `/architect` asks for it whatever the setting: `/architect` for the next turn, `/architect on` for every turn
+  offered tools (after the ingress tool and intent verdicts) include one that changes files (`SideEffects.Filesystem`),
+  that escalates for `difficulty` or `repair` (not `context`: a history too long for the session's model would not fit
+  the editor either). A hard question answered directly is not a coding turn: the escalated model answers it. A difficulty
+  escalation happens at ingress, but its plan waits until after recall and the clarify decision, just before the loop, so
+  a turn that asks the person a question makes no plan and the planner sees recalled memory (A7 review).
+  `/architect` asks for it whatever the setting: `/architect` for the next turn, `/architect on` for every turn
   of the session until `/architect off`, `/architect status` (held by the process, like the approval mode; refused when
-  the generator has no escalation ladder). A requested turn escalates at ingress with the reason `architect` (plan §6's
-  "the user asks for it"), unless an escalation already moved it.
+  the generator has no escalation ladder or the session may not escalate). A requested turn escalates at the same point
+  with the reason `architect` (plan §6's "the user asks for it"), unless an escalation already moved it; a turn that
+  ends in a question leaves the request for the next.
 - **Plan.** The escalated generator (the slot's binding, called directly through `GenerateAsync`'s binding override,
   so a refusal is not retreated into a local "plan") gets the history and a nudge to write a short numbered plan, with no
   tools. The request carries `corvid.unstreamed`, so the host does not stream it as the answer. The plan is logged as an
@@ -193,11 +198,13 @@ mode in the kernel (`TurnRunner.Architect.cs`), not a child session; no new proj
   the audit name it a plan.
 - **Edit.** The generator slot then switches to the editor, logged as `ModelSwitched` with the new reason `editor`
   (`SwitchReason.Editor`): not a de-escalation, so a person's session choice and a pin are untouched, and a reopened
-  session does not read it as a reset. The editor is `TurnOptions.EditorModel` (`Corvid:Turn:EditorModel`) when one of
+  session does not read it as a reset. The editor is resolved again once the plan returns, so a `/model` switch while the
+  planner wrote is honoured. It is `TurnOptions.EditorModel` (`Corvid:Turn:EditorModel`) when one of
   the generator slot's bindings is that model (its default, fallbacks or ladder; the mix's for a child), else the
   session's own generator. It runs the turn's ordinary loop with the plan in its history and a note (in the system
   prompt, or after the history for a breakpoint-caching model) that names the planner and says the plan is a model's,
-  not the user's words. The turn's end returns the slot to the session default as after any escalation.
+  not the user's words. On a breakpoint-caching model the note is a one-shot message, so the frozen system prompt and its
+  cache are untouched; on any other model it changes the system prompt for the editor's calls of that turn only. The turn's end returns the slot to the session default as after any escalation.
 - **Re-plan.** An editor the step checkpoint calls `stuck` gets one re-plan: escalate again, a revised plan (attempt 2,
   trigger `stuck`), hand back. After that, `stuck` escalates as before and the escalated model finishes. A second
   `context` or `repair` escalation after a plan stays on the escalated model without planning again (an editor whose

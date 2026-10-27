@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Corvid.Abstractions.Events;
 using Corvid.Models;
 using Corvid.Models.Privacy;
@@ -20,7 +21,7 @@ public enum ArchitectRequest
 }
 
 /// <summary>
-/// A7, architect/editor turns (plan §6, after Aider): when a coding turn escalates (difficulty, context or repair) and
+/// A7, architect/editor turns (plan §6, after Aider): when a coding turn escalates (difficulty or repair) and
 /// <see cref="TurnOptions.ArchitectEditor"/> is on, or the person asked with <c>/architect</c>, the escalated generator writes
 /// one plan, with no tools, logged as an <see cref="AssistantMessage"/> with its <see cref="TurnPlan"/>; the generator slot
 /// then returns to the session's own model (or <see cref="TurnOptions.EditorModel"/>), which makes the edits with the plan
@@ -55,6 +56,12 @@ public sealed partial class TurnRunner
         }
     }
 
+    /// <summary>
+    /// A7 review (L5): whether this session's turns may escalate the generator (<see cref="TurnOptions.EscalationAllowed"/>);
+    /// without it no plan can be made, so <c>/architect</c> refuses.
+    /// </summary>
+    public bool EscalationAllowed => _options.EscalationAllowed;
+
     // Whether the starting turn was asked to plan: a NextTurn request is used up by it.
     private bool TakeArchitectRequest()
     {
@@ -80,25 +87,44 @@ public sealed partial class TurnRunner
         private bool _architectAsked;
         // Set while the planner's request is built, so the host does not stream it as the answer.
         private bool _planning;
-        // The editor's note: apply the plan above. Empty until a plan is made.
+        // The editor's note: apply the plan above. Empty until a plan is made. A7 review (L7): on a model that caches on
+        // breakpoints (PromptCachingStyle.Breakpoints) it travels, with recalled memory and the skill, as a one-shot user
+        // message after the history, so the frozen system prompt and its cache stay as they were; on any other model it joins
+        // the system prompt for the rest of this turn's calls, so the editor's calls start a new prefix there, and the next
+        // turn's prompt has no note again. The plan itself is in the history as an AssistantMessage either way.
         private string _planNote = "";
+
+        // A7 review (depth M2): the tools the turn was offered after the ingress verdicts (tool and intent), which decide
+        // whether it is a coding turn; null before they are known.
+        private ImmutableArray<Offered>? _turnTools;
 
         /// <summary>
         /// Whether an escalation for <paramref name="reason"/> plans first: the turn has made no plan yet, and either the person
-        /// asked (<c>/architect</c>), or <see cref="TurnOptions.ArchitectEditor"/> is on, the trigger is difficulty, context or
-        /// repair, and the turn is a coding one (its shortlist holds a tool that changes files).
+        /// asked (<c>/architect</c>), or <see cref="TurnOptions.ArchitectEditor"/> is on, the trigger is difficulty or repair
+        /// (not context: a history too long for the session's model would not fit the editor either), and the turn is a coding
+        /// one (a tool it is offered changes files).
         /// </summary>
         private bool PlansOn(string reason) => _plans.Count == 0 && envelope.Shell is null && (reason == ArchitectTrigger
-            || _options.ArchitectEditor && reason is "difficulty" or "context" or "repair" && CodingTurn());
-
-        private bool CodingTurn() => _shortlist.Any(tool => (tool.Descriptor.Risk.SideEffects & SideEffects.Filesystem) != 0);
+            || _options.ArchitectEditor && reason is "difficulty" or "repair" && CodingTurn());
 
         /// <summary>
-        /// At ingress, after the difficulty question: a turn the person asked to plan (<c>/architect</c>) plans now, escalating
-        /// first unless an escalation already moved the generator off the session's model (and planned, or not).
+        /// A7 review (depth M2): a tool the turn is offered (after the tool and intent verdicts, not the embedding shortlist)
+        /// changes files. A hard question answered directly is not a coding turn, so the escalated model answers it, with no
+        /// plan and no hand-back.
         /// </summary>
-        private async Task PlanOnRequestAsync(CancellationToken cancellationToken)
+        private bool CodingTurn() => (_turnTools ?? _shortlist).Any(tool => (tool.Descriptor.Risk.SideEffects & SideEffects.Filesystem) != 0);
+
+        /// <summary>
+        /// A7 review (depth M1): just before the loop, after recall and the clarify decision, so a turn that asks the person a
+        /// question makes no plan and the planner sees the recalled memory. A hard coding turn under
+        /// <see cref="TurnOptions.ArchitectEditor"/> plans on the model the difficulty escalation moved to; then a turn the person
+        /// asked to plan (<c>/architect</c>) plans, escalating first unless an escalation already moved the generator off the
+        /// editor. The request is taken here, so a clarifying turn leaves it for the next.
+        /// </summary>
+        private async Task PlanBeforeLoopAsync(bool escalated, CancellationToken cancellationToken)
         {
+            if (escalated && PlansOn("difficulty"))
+                await PlanAsync("difficulty", cancellationToken).ConfigureAwait(false);
             _architectAsked = runner.TakeArchitectRequest();
             if (!_architectAsked || _plans.Count > 0 || envelope.Shell is not null)
                 return;
@@ -159,6 +185,7 @@ public sealed partial class TurnRunner
             {
                 // Plan §10.4: the gate refused the planner before anything was sent; the work stays local, unplanned.
                 // Named for the model the work stays on, as a slot's privacy retreat is.
+                editor = EditorBinding();
                 _escalations.Add($"{editor.Profile.Id}: {PrivacyRetreat}");
                 // A7 e2e: logged as the privacy retreat it is, so no surface says "back to apply the plan" when none was made.
                 await HandBackAsync(editor, cancellationToken, SwitchReason.Privacy).ConfigureAwait(false);
@@ -177,6 +204,8 @@ public sealed partial class TurnRunner
             }
             if (text.Length == 0)
                 return;
+            // A7 review (L6): the editor as it is now, so a /model switch while the planner wrote is honoured.
+            editor = EditorBinding();
             var plan = new TurnPlan(planner.Profile.Id, editor.Profile.Id, trigger, attempt);
             runner.Append(new AssistantMessage(text, TakeUsage(), plan));
             _plans.Add(plan);

@@ -2,6 +2,7 @@ using Corvid.Abstractions.Events;
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
 using Corvid.Host.Sessions;
+using Corvid.Host.Telemetry;
 using Corvid.Kernel.Sessions;
 using Corvid.Kernel.Turns;
 using Microsoft.Extensions.DependencyInjection;
@@ -79,6 +80,80 @@ public sealed class ArchitectStreamTests
         Assert.Equal(plan, replayed.Plan);
         Assert.Equal(["Two notes."], updates.OfType<AnswerChunk>().Select(chunk => chunk.Text));
         Assert.True(updates.IndexOf(replayed) < updates.FindIndex(update => update is ToolCallStarted));
+    }
+
+    [Fact]
+    public async Task Review_M3_the_planners_tokens_are_published_though_its_call_is_not_streamed()
+    {
+        // A child's token budget counts what the feed publishes (Usage, UsageEstimated): the planner's unstreamed call must be
+        // in it, without a generation start or text of its own.
+        var models = Models();
+        await using var host = TestHost.Create(models);
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var session = runtime.OpenSession(surface: "test");
+        await Run(runtime, session, "/architect", host);
+        var usage = new UsageCounter();
+
+        using (runtime.Feed.Subscribe(session.Id, usage))
+            Assert.Single((await session.SendAsync("list my notes", Ct)).Result!.Plans);
+
+        Assert.Single(models.Larger.Calls);
+        Assert.Equal(0, models.Larger.StreamedCalls);
+        Assert.DoesNotContain("larger model", usage.Text.ToString(), StringComparison.Ordinal);
+        // Every streamed call started a generation and published its tokens; the plan published its tokens too.
+        Assert.True(usage.Started > 0);
+        Assert.Equal(usage.Started + 1, usage.Calls);
+        Assert.Equal((usage.Started + 1) * (42 + 7), usage.Tokens);
+    }
+
+    [Fact]
+    public async Task Review_L5_architect_refuses_with_a_reason_when_the_session_may_not_escalate()
+    {
+        await using var host = TestHost.Create(Models());
+        var runtime = await host.StartAsync();
+        await using var _ = runtime;
+        var opened = runtime.OpenSession(surface: "test");
+        var runner = new TurnRunner(opened.Id, new TurnServices
+        {
+            Log = runtime.Log,
+            Slots = opened.Slots,
+            Fabric = runtime.Fabric,
+            Tools = new Corvid.Tools.ToolRegistry(),
+            Options = new TurnOptions { EscalationAllowed = false },
+        });
+        var session = new CorvidSession(runtime, opened.Id, opened.Slots, runner, opened.Actor);
+
+        foreach (var line in new[] { "/architect", "/architect on" })
+        {
+            var refused = await Run(runtime, session, line, host);
+            Assert.Equal(OutputTone.Error, refused.Tone);
+            Assert.Contains("may not escalate", refused.ToPlainText(), StringComparison.Ordinal);
+            Assert.Equal(ArchitectRequest.None, runner.Architect);
+        }
+        Assert.Contains("may not escalate", (await Run(runtime, session, "/architect status", host)).ToPlainText(), StringComparison.Ordinal);
+    }
+
+    private sealed class UsageCounter : ITurnObserver
+    {
+        public int Started;
+        public int Calls;
+        public long Tokens;
+        public System.Text.StringBuilder Text { get; } = new();
+
+        public void GenerationStarted() => Interlocked.Increment(ref Started);
+
+        void ITurnObserver.Text(string delta)
+        {
+            lock (Text)
+                Text.Append(delta);
+        }
+
+        public void Usage(long? inputTokens, long? outputTokens)
+        {
+            Interlocked.Increment(ref Calls);
+            Interlocked.Add(ref Tokens, (inputTokens ?? 0) + (outputTokens ?? 0));
+        }
     }
 
     [Fact]

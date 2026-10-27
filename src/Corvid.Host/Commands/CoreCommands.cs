@@ -468,8 +468,9 @@ public static class CoreCommands
         var staged = 0;
         foreach (var name in names)
         {
-            var before = memory.Blocks.Get(name).Content;
             var result = await job.StageAsync(context.Session.Id, name, "cli", cancellationToken).ConfigureAwait(false);
+            // A7 review: the diff is against the revision the job rewrote, not the block read before it ran.
+            var before = result.Source ?? "";
             switch (result.Status)
             {
                 case BlockRewriteStatus.Staged:
