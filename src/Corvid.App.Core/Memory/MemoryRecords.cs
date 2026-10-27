@@ -92,6 +92,13 @@ public sealed record StagedBlockUpdate(string Id, string Block)
 
     /// <summary>For an update that <see cref="Replaces"/> the block: the lines kept, removed and added, in order.</summary>
     public IReadOnlyList<BlockDiffRow> Diff { get; init; } = [];
+
+    /// <summary>
+    /// A7 review: a rewrite made from an earlier revision of the block, which has changed since: approving it would fail,
+    /// and a diff against the block now would show changes it does not make, so it has none and only Reject is offered (the
+    /// sleep-time job rejects it and proposes again on its next pass).
+    /// </summary>
+    public bool Stale { get; init; }
 }
 
 public enum BlockLineKind

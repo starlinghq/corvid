@@ -28,6 +28,15 @@ public sealed record BlockConsolidatorOptions
 
     /// <summary>How soon the loop looks again when it found a session busy.</summary>
     public TimeSpan BusyRetry { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// A7 review (depth L1): how long the sleep-time pass leaves a rewrite whose generator call failed before asking again;
+    /// doubled after each further failure of the same rewrite, up to <see cref="MaxFailureBackoff"/>.
+    /// </summary>
+    public TimeSpan FailureBackoff { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>The longest the sleep-time pass waits before asking again for a rewrite that keeps failing.</summary>
+    public TimeSpan MaxFailureBackoff { get; init; } = TimeSpan.FromHours(6);
 }
 
 public enum BlockRewriteStatus
@@ -53,6 +62,12 @@ public enum BlockRewriteStatus
 public sealed record BlockRewrite(BlockRewriteStatus Status, string Block, string? Text, int TokensBefore, int TokensAfter, int Budget,
     long Revision, string Detail, PendingWrite? Pending = null)
 {
+    /// <summary>
+    /// The text that was rewritten (the block at <see cref="Revision"/>, or a staged edit's content), so a diff of the rewrite
+    /// is against what it was made from, not the block read again later. Null when nothing was rewritten.
+    /// </summary>
+    public string? Source { get; init; }
+
     /// <summary>A7V1-5: refused because the egress gate would not send the block (it is local-only) to the generator.</summary>
     public bool EgressRefused { get; init; }
 }
@@ -102,6 +117,11 @@ public sealed class BlockConsolidator
     // A7V1-5: rewrites of a local-only block the egress gate refused to send: not asked for again while the block is the same
     // and still local-only (marked shareable, it may go). Under _declined's lock.
     private readonly HashSet<(string Block, long Revision, string? Supersedes)> _egressRefused = [];
+    // A7 review (depth L1): rewrites whose generator call failed: how often, and not before when the pass asks again. Under
+    // _declined's lock; an entry goes once the rewrite is made (and is never matched again once the block changes).
+    private readonly Dictionary<(string Block, long Revision, string? Supersedes), (int Failures, DateTimeOffset NotBefore)> _failed = [];
+    // A7 review (depth L2): the running sleep-time pass's own cancellation, cancelled by Interrupt when a session goes busy.
+    private CancellationTokenSource? _pass;
 
     /// <param name="generator">The background generator, at background device priority.</param>
     /// <param name="log">The event log <see cref="MemoryJobRan"/> is appended to.</param>
@@ -189,6 +209,8 @@ public sealed class BlockConsolidator
         try
         {
             var current = _blocks.Get(block);
+            // A7 review (depth M4): one made from an older revision of the block no longer blocks a new one.
+            _writer.RetireStaleConsolidation(block, cancellationToken);
             if (_writer.PendingConsolidation(block) is { } waiting)
                 return NotNeeded(current, $"a consolidation of the {block} block already waits for review ({waiting.PendingId})", waiting);
             return await RewriteAndStageAsync(sessionId, current, current.Content, null, trigger, cancellationToken).ConfigureAwait(false);
@@ -202,47 +224,96 @@ public sealed class BlockConsolidator
     /// <summary>
     /// One sleep-time pass: each of <see cref="Blocks"/> over its budget or at the threshold, then each staged edit over its
     /// block's budget, rewritten and staged in <see cref="MemoryJobs.Session"/>. A block with a consolidation waiting, or
-    /// whose same rewrite a person rejected or the job declined, is left alone.
+    /// whose same rewrite a person rejected or the job declined, is left alone; one made from an older revision of the block
+    /// is rejected as stale first, so it no longer blocks a new one. An edit staged while its session held outside content is
+    /// never folded in here: it waits, marked tainted, for a person. A rewrite whose generator call failed is asked for again
+    /// only after a backoff that doubles with each failure (<see cref="BlockConsolidatorOptions.FailureBackoff"/>).
     /// </summary>
-    public async Task<IReadOnlyList<BlockRewrite>> RunOnceAsync(string trigger = "idle", CancellationToken cancellationToken = default)
+    /// <param name="isIdle">
+    /// A7 review (depth L2): asked again before each rewrite; once it says a session is busy the pass stops, staging nothing
+    /// more. <see cref="Interrupt"/> also cancels a rewrite already in flight.
+    /// </param>
+    public async Task<IReadOnlyList<BlockRewrite>> RunOnceAsync(string trigger = "idle", CancellationToken cancellationToken = default,
+        Func<bool>? isIdle = null) =>
+        (await PassAsync(trigger, isIdle, cancellationToken).ConfigureAwait(false)).Results;
+
+    private async Task<(IReadOnlyList<BlockRewrite> Results, bool Interrupted)> PassAsync(string trigger, Func<bool>? isIdle,
+        CancellationToken cancellationToken)
     {
         await _running.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var results = new List<BlockRewrite>();
+        var duplicates = 0;
+        using var pass = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Volatile.Write(ref _pass, pass);
+        bool Busy() => pass.IsCancellationRequested || isIdle is not null && !isIdle();
         try
         {
-            var results = new List<BlockRewrite>();
             foreach (var name in Blocks)
             {
+                _writer.RetireStaleConsolidation(name, cancellationToken);
                 var block = _blocks.Get(name);
-                if (Needs(block) && Fresh(block.Name, block.Revision, null, block.LocalOnly))
-                    results.Add(await RewriteAndStageAsync(MemoryJobs.Session, block, block.Content, null, trigger, cancellationToken)
-                        .ConfigureAwait(false));
+                if (!Needs(block) || !Fresh(block.Name, block.Revision, null, block.LocalOnly))
+                    continue;
+                if (Busy())
+                    return (results, true);
+                results.Add(await RewriteAndStageAsync(MemoryJobs.Session, block, block.Content, null, trigger, pass.Token)
+                    .ConfigureAwait(false));
             }
-            // §9.2 step 4: an edit staged over its block's budget gets a rewrite that fits, the edit folded in.
-            foreach (var edit in _writer.ListPending().Where(write => write is { Kind: PendingKind.Block, Proposal.Consolidation: not true }))
+            // §9.2 step 4: an edit staged over its block's budget gets a rewrite that fits, the edit folded in. A7 review
+            // (security M1): never a tainted one, whose words came with outside content; a person reviews it as it stands.
+            foreach (var edit in _writer.ListPending().Where(write => write is { Kind: PendingKind.Block, Proposal.Consolidation: not true }
+                && !MemoryWriter.IsTainted(write)))
             {
                 if (edit.Proposal is not { Block: { } name, Content: { } content, BlockRevision: { } revision } || !Blocks.Contains(name))
                     continue;
                 var block = _blocks.Get(name);
                 if (block.Revision != revision || _blocks.CountTokens(content) <= block.BudgetTokens || !Fresh(name, revision, edit.PendingId, block.LocalOnly))
                     continue;
-                results.Add(await RewriteAndStageAsync(MemoryJobs.Session, block, content, edit.PendingId, trigger, cancellationToken)
+                if (Busy())
+                    return (results, true);
+                results.Add(await RewriteAndStageAsync(MemoryJobs.Session, block, content, edit.PendingId, trigger, pass.Token)
                     .ConfigureAwait(false));
             }
+            if (Busy())
+                return (results, true);
             // The other sleep-time job that needs no generator: duplicate facts, their ending staged for review.
-            var duplicates = Deduplicator?.StageDuplicates(MemoryJobs.Session, trigger).Count ?? 0;
-            var staged = results.Count(result => result.Status == BlockRewriteStatus.Staged) + duplicates;
-            if (staged > 0)
-                PassStaged?.Invoke(staged);
-            return results;
+            duplicates = Deduplicator?.StageDuplicates(MemoryJobs.Session, trigger).Count ?? 0;
+            return (results, false);
+        }
+        catch (OperationCanceledException) when (pass.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // A session went busy while a rewrite was in flight: the pass stops; a later idle pass asks again.
+            return (results, true);
         }
         finally
         {
+            Interlocked.CompareExchange(ref _pass, null, pass);
             _running.Release();
+            var staged = results.Count(result => result.Status == BlockRewriteStatus.Staged) + duplicates;
+            if (staged > 0)
+                PassStaged?.Invoke(staged);
         }
     }
 
     /// <summary>Wakes the background loop: a turn ended or a block changed.</summary>
     public void Nudge() => Volatile.Read(ref _wake).TrySetResult();
+
+    /// <summary>
+    /// A7 review (depth L2): a session went busy (a message was posted to it). A sleep-time pass that is running stops and its
+    /// rewrite in flight is cancelled, so the background generator gives way to the turn; the loop looks again later. An
+    /// on-demand rewrite (<see cref="StageAsync"/>, <see cref="ProposeAsync"/>) is the person's and is not interrupted.
+    /// </summary>
+    public void Interrupt()
+    {
+        try
+        {
+            Volatile.Read(ref _pass)?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The pass ended meanwhile.
+        }
+    }
 
     /// <summary>
     /// The sleep-time loop, until cancelled: after each nudge (and every <see cref="BlockConsolidatorOptions.Interval"/>) it
@@ -269,7 +340,8 @@ public sealed class BlockConsolidator
                     busy = !isIdle();
                     if (busy)
                         continue;
-                    await RunOnceAsync("idle", cancellationToken).ConfigureAwait(false);
+                    // A7 review (depth L2): a session that goes busy during the pass stops it; looked at again as busy.
+                    busy = (await PassAsync("idle", isIdle, cancellationToken).ConfigureAwait(false)).Interrupted;
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -310,23 +382,44 @@ public sealed class BlockConsolidator
         if (_writer.PendingConsolidation(block) is not null || _writer.ConsolidationRejected(block, revision, supersedes))
             return false;
         lock (_declined)
-            return !_declined.Contains((block, revision, supersedes)) && !(localOnly && _egressRefused.Contains((block, revision, supersedes)));
+            return !_declined.Contains((block, revision, supersedes)) && !(localOnly && _egressRefused.Contains((block, revision, supersedes)))
+                && !(_failed.TryGetValue((block, revision, supersedes), out var failed) && _time.GetUtcNow() < failed.NotBefore);
+    }
+
+    // A7 review (depth L1): a failed generator call is asked again after a backoff, doubled per failure and capped.
+    private void NoteOutcome(CoreBlock block, string? supersedes, BlockRewriteStatus status)
+    {
+        var key = (block.Name, block.Revision, supersedes);
+        lock (_declined)
+        {
+            if (status != BlockRewriteStatus.Failed)
+            {
+                _failed.Remove(key);
+                return;
+            }
+            var failures = _failed.TryGetValue(key, out var before) ? before.Failures + 1 : 1;
+            var first = _options.FailureBackoff;
+            var wait = first <= TimeSpan.Zero ? TimeSpan.Zero
+                : TimeSpan.FromTicks((long)Math.Min(_options.MaxFailureBackoff.Ticks, first.Ticks * Math.Pow(2, Math.Min(failures - 1, 30))));
+            _failed[key] = (failures, _time.GetUtcNow() + wait);
+        }
     }
 
     private async Task<BlockRewrite> RewriteAndStageAsync(string sessionId, CoreBlock block, string content, string? supersedes, string trigger,
         CancellationToken cancellationToken)
     {
         var rewrite = await RewriteAsync(block, content, cancellationToken).ConfigureAwait(false);
+        NoteOutcome(block, supersedes, rewrite.Status);
         if (rewrite.Status == BlockRewriteStatus.Proposed)
         {
+            // The edit folded in (its session and taint) is named by the writer.
             var reason = string.Create(CultureInfo.InvariantCulture,
-                $"{MemoryWriter.ConsolidationReason}: {rewrite.TokensBefore} of {rewrite.Budget} tokens rewritten to {rewrite.TokensAfter}")
-                + (supersedes is null ? "" : $", folding in {supersedes}");
+                $"{MemoryWriter.ConsolidationReason}: {rewrite.TokensBefore} of {rewrite.Budget} tokens rewritten to {rewrite.TokensAfter}");
             try
             {
                 var staged = _writer.StageConsolidation(sessionId, block.Name, rewrite.Text!, block.Revision, reason, supersedes);
                 rewrite = staged.Status == MemoryWriteStatus.Staged
-                    ? rewrite with { Status = BlockRewriteStatus.Staged, Pending = staged.Pending, Detail = reason }
+                    ? rewrite with { Status = BlockRewriteStatus.Staged, Pending = staged.Pending, Detail = staged.Pending!.Reason }
                     : rewrite with { Status = BlockRewriteStatus.Refused, Text = null, Detail = "the rewrite " + staged.Reason };
             }
             catch (ArgumentException exception)
@@ -388,7 +481,10 @@ public sealed class BlockConsolidator
             var after = _blocks.CountTokens(text);
             if (after <= budget && after < before)
                 return Result(BlockRewriteStatus.Proposed,
-                    string.Create(CultureInfo.InvariantCulture, $"{before} of {budget} tokens rewritten to {after}"), text, after);
+                    string.Create(CultureInfo.InvariantCulture, $"{before} of {budget} tokens rewritten to {after}"), text, after) with
+                {
+                    Source = content,
+                };
             detail = after >= before
                 ? string.Create(CultureInfo.InvariantCulture, $"the rewrite is not shorter ({after} tokens, the block {before})")
                 : string.Create(CultureInfo.InvariantCulture, $"the rewrite is {after} tokens, over the budget of {budget}");

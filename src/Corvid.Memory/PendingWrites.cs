@@ -62,6 +62,11 @@ public sealed record ProposedRelation(ProposedEntity Subject, string Predicate, 
 /// For a consolidation of a staged edit (one over its block's budget), that edit's pending id: approving the rewrite
 /// resolves it, since the rewrite folds it in.
 /// </param>
+/// <param name="Tainted">
+/// Asked for while the session held content from outside the user (plan §10.3), or, on a consolidation, folding in an edit
+/// that was: the reviewer is told, and the sleep-time job never folds such an edit in on its own.
+/// </param>
+/// <param name="FoldsInSession">For a consolidation that folds in a staged edit, the session that asked for that edit.</param>
 public sealed record MemoryProposal(
     string? Operation,
     string? TargetFactId,
@@ -76,7 +81,9 @@ public sealed record MemoryProposal(
     ProposedRelation? Relation = null,
     bool? LocalOnly = null,
     bool? Consolidation = null,
-    string? Supersedes = null);
+    string? Supersedes = null,
+    bool? Tainted = null,
+    string? FoldsInSession = null);
 
 /// <param name="Reason">Why it was staged: the policy's reason (<c>no answer</c> from the degraded tier, <c>below threshold</c>), or <c>over_budget</c>.</param>
 /// <param name="DecisionId">The <c>memory_op</c> decision, whose outcome is recorded when the write is resolved.</param>

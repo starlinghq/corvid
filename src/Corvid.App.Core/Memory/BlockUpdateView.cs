@@ -286,7 +286,7 @@ public sealed class BlockUpdateView : ObservableObject
 
     private static bool HiddenIn(string text) => MemoryText.HasHidden(text) || MemoryText.HasRevealedMarks(text);
 
-    private bool CanApprove() => !_isBusy && (!IsEditing || _editText.Trim().Length > 0) && !HiddenIn(TextToWrite);
+    private bool CanApprove() => !_isBusy && !Update.Stale && (!IsEditing || _editText.Trim().Length > 0) && !HiddenIn(TextToWrite);
 
     private async Task RunAsync(Func<Task> action)
     {

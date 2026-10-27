@@ -42,6 +42,27 @@ public sealed class DedupeTests
     }
 
     [Fact]
+    public async Task Review_L3_approving_a_duplicates_ending_after_the_kept_fact_ended_is_refused_and_rejects_it()
+    {
+        using var store = new TempStore();
+        var kept = store.Facts.Add(new FactInput("Prefers tea"));
+        store.Time.Advance(TimeSpan.FromHours(1));
+        var again = store.Facts.Add(new FactInput("prefers tea."));
+        var writer = Writer(store);
+        var staged = Assert.Single(new FactDeduplicator(store.Facts, writer, store.Log, store.Time).StageDuplicates());
+        // The kept fact ends before anyone reviews the duplicate: ending the duplicate now would lose the fact.
+        store.Facts.Invalidate(kept.FactId);
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => writer.ApproveAsync(staged.PendingId, cancellationToken: Ct));
+
+        Assert.Contains("no longer current", refused.Message, StringComparison.Ordinal);
+        Assert.True(store.Facts.Get(again.FactId)!.IsCurrent);
+        var resolved = writer.GetPending(staged.PendingId)!;
+        Assert.Equal(PendingStatus.Rejected, resolved.Status);
+        Assert.StartsWith(MemoryWriter.StaleReason, resolved.Resolution, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_rejected_ending_is_not_proposed_again_and_a_waiting_one_not_twice()
     {
         using var store = new TempStore();
