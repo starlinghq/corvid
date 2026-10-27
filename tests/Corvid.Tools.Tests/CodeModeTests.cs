@@ -42,6 +42,30 @@ public sealed class CodeModeTests
         Assert.False(CodeModeCatalog.IsIdentifier("1tool"));
     }
 
+    private sealed class Stub(string name) : ToolFunction(new ToolDescriptor(name, "A stand-in.", """{"type":"object","properties":{}}""",
+        new ToolRisk(SideEffects.None, Network: false, Destructive: false), []))
+    {
+        protected override ValueTask<object?> InvokeCoreAsync(Microsoft.Extensions.AI.AIFunctionArguments arguments, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<object?>("ran");
+    }
+
+    // A7 review (security L4): a tool that delegates, asks, runs scripts, writes memory, sends or schedules is never
+    // described to a script, even when the turn offers it and the allowlist names it.
+    [Fact]
+    public void A_denied_tool_is_never_described_whatever_the_allowlist_says()
+    {
+        var registry = Registry();
+        string[] denied = ["delegate_task", "ask_user", "execute_code", "memory_add", "send_message", "cron_create"];
+        foreach (var name in denied)
+            registry.Add(new Stub(name));
+        var offered = new HashSet<string>([.. denied, "list_notes"], StringComparer.Ordinal);
+
+        var tools = CodeModeCatalog.Describe(registry, offered, [.. denied, "list_notes"]);
+
+        Assert.Equal(["list_notes"], tools.Select(tool => tool.Name));
+        Assert.All(denied, name => Assert.Contains(name, CodeModeCatalog.Denied));
+    }
+
     [Fact]
     public void The_descriptor_json_has_its_documented_form()
     {

@@ -51,6 +51,16 @@ public sealed class ToolRecoveryTests
             return this;
         }
 
+        /// <summary>A7: a call the previous call's script made (code mode), with its result.</summary>
+        public Turn Nested(string tool, bool fails)
+        {
+            var parent = $"c{_calls}";
+            var id = $"{parent}.{_events.Count}";
+            Add(new ToolCallIssued(id, tool, Json("{}"), _round, Reads.Contains(tool), ParentCallId: parent));
+            Add(new ToolResult(id, fails ? Failure : Json("\"ok\""), fails));
+            return this;
+        }
+
         private Turn Call(string tool, string arguments, JsonElement result, bool error)
         {
             var id = $"c{++_calls}";
@@ -127,6 +137,18 @@ public sealed class ToolRecoveryTests
 
         Assert.Equal((5, 3, 2), (scan.Calls, scan.Failures, scan.Unrecovered));
         Assert.Equal(["memory_add failed, then memory_set succeeded"], scan.Recoveries.Select(step => step.ToString()));
+    }
+
+    // A7 review (M2): a code run's nested calls are its own; the procedure is the model's calls, which a skill replays.
+    [Fact]
+    public void A_scripts_nested_calls_are_neither_steps_nor_recoveries()
+    {
+        var turn = new Turn().Ok("execute_code").Nested("read_file", fails: true).Nested("search_files", fails: false).Nested("read_file", fails: false);
+
+        var scan = ToolRecovery.Scan(turn.Events);
+
+        Assert.Equal((1, 0, 0), (scan.Calls, scan.Failures, scan.Unrecovered));
+        Assert.Empty(scan.Recoveries);
     }
 
     [Fact]

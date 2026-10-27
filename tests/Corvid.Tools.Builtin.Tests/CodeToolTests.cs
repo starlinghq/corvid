@@ -185,6 +185,13 @@ public sealed class CodeToolTests : IDisposable
     [InlineData("#:sdk Microsoft.NET.Sdk.Web\nConsole.WriteLine(1);")]
     [InlineData("Console.WriteLine(1);\n  #:project ../evil/evil.csproj")]
     [InlineData("#:property PublishAot=true\nConsole.WriteLine(1);")]
+    // A7 review (security L2): Roslyn ends a line at a lone \r, U+0085, U+2028 and U+2029 too, and lets white space and a
+    // byte order mark come first.
+    [InlineData("// x\r#:project ../evil.csproj")]
+    [InlineData("Console.WriteLine(1); // x\u2028#:package Evil@1.0.0")]
+    [InlineData("Console.WriteLine(1); // x\u2029#:sdk Evil.Sdk")]
+    [InlineData("Console.WriteLine(1); // x\u0085#:property Evil=true")]
+    [InlineData("Console.WriteLine(1);\n\u000B\u00A0\uFEFF#:project ../evil.csproj")]
     public async Task CSharp_directives_are_refused_before_anything_runs(string code)
     {
         var context = await ContextAsync("csharp", code);
@@ -258,46 +265,55 @@ public sealed class CodeToolTests : IDisposable
         new SandboxPolicy { Workspace = Workspace, EnvironmentValues = values, Tools = new SandboxTools("/tmp/x/tools.sock", new string('a', 43)) }.Validate();
     }
 
-    // A7V1-4: Python takes future imports only at the top of a module, so a script's leading ones go above the client.
+    // A7 review (L4, security L1): isolated, so the workspace (the working directory) is not on sys.path and a json.py there
+    // never shadows the client's imports.
     [Fact]
-    public void A_python_scripts_leading_future_imports_go_above_its_client()
+    public void The_python_command_is_isolated_and_reads_its_program_from_standard_input()
     {
-        var client = new CodeClient("import json\n\n", "");
-        const string code = "# typed\nfrom __future__ import annotations\nfrom  __future__ import (\n    division,\n)\n\nx: int = 1\nfrom __future__ import late\n";
+        var command = CodeRunner.CommandFor(CodeLanguage.Python, "/usr/bin/python3", Workspace, "print(1)");
 
-        var source = CodeRunner.Compose(CodeLanguage.Python, client, code);
-
-        Assert.StartsWith("from __future__ import annotations\nfrom  __future__ import ( division, )\nimport json\n\n# typed\n", source, StringComparison.Ordinal);
-        // Only the leading ones move; one after the script's first statement stays, and Python reports it as it would.
-        Assert.EndsWith("x: int = 1\nfrom __future__ import late\n", source, StringComparison.Ordinal);
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(source, "annotations"));
-        // Nothing moves without one, and other languages are untouched.
-        Assert.Equal("import json\n\nprint(1)", CodeRunner.Compose(CodeLanguage.Python, client, "print(1)"));
-        Assert.Equal("P" + code + "S", CodeRunner.Compose(CodeLanguage.JavaScript, new CodeClient("P", "S"), code));
+        Assert.Equal(["-I", "-B", "-"], command.Arguments);
+        Assert.Equal("print(1)", command.StandardInput);
     }
 
+    // A7 review (L3): a connection whose tool path throws ends on its own; the run's output and exit code still come back,
+    // and the failure is reported after the script's standard error.
     [Fact]
-    public async Task A_python_script_starting_with_a_future_import_compiles_with_the_generated_client()
+    public async Task A_tool_path_that_throws_ends_its_connection_and_the_run_still_reports()
     {
-        var python = CodeRuntimes.Discover().Python;
-        Assert.SkipWhen(python is null, "python3 is not installed.");
-        var tools = CodeModeCatalog.Describe(CodeFixtures.Registry(AppContext.BaseDirectory), null, new CodeToolOptions().Tools);
-        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.Python, tools);
-        var source = CodeRunner.Compose(CodeLanguage.Python, new CodeClient(prefix, suffix), "from __future__ import annotations\nprint(corvid)\n");
-
-        var start = new System.Diagnostics.ProcessStartInfo(python!, ["-I", "-c", "import sys; compile(sys.stdin.read(), 'script', 'exec'); print('ok')"])
+        var sandbox = new SocketSandbox(async (policy, cancellationToken) =>
         {
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            await socket.ConnectAsync(new UnixDomainSocketEndPoint(policy.Tools!.SocketPath), cancellationToken);
+            await using var stream = new NetworkStream(socket);
+            using var reader = new StreamReader(stream);
+            await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes($$"""{"token":"{{policy.Tools.Token}}","v":1}""" + "\n"), cancellationToken);
+            await reader.ReadLineAsync(cancellationToken);
+            await stream.WriteAsync("""{"id":1,"tool":"read_file","args":{"path":"x"}}"""u8.ToArray().Append((byte)'\n').ToArray(), cancellationToken);
+            // The host closes the connection instead of answering.
+            var answer = await reader.ReadLineAsync(cancellationToken);
+            return new SandboxResult { ExitCode = 3, StandardOutput = "answer: " + (answer ?? "none"), StandardError = "script error" };
+        });
+        var runner = new CodeRunner(new SandboxedShell(sandbox, new ShellOptions { Workspace = Workspace }), sandbox,
+            new CodeToolOptions { Runtimes = new CodeRuntimes("/usr/bin/python3", null, null) });
+        var context = new ToolCallContext(Session, "call-1")
+        {
+            Invoker = (_, _, _) => throw new NotSupportedException("the tool path broke"),
+            OfferedTools = new HashSet<string>(["read_file"], StringComparer.Ordinal),
         };
-        using var process = System.Diagnostics.Process.Start(start)!;
-        await process.StandardInput.WriteAsync(source);
-        process.StandardInput.Close();
-        var output = await process.StandardOutput.ReadToEndAsync(Ct);
-        var error = await process.StandardError.ReadToEndAsync(Ct);
-        await process.WaitForExitAsync(Ct);
 
-        Assert.True(process.ExitCode == 0, error);
-        Assert.Equal("ok\n", output);
+        var run = await runner.RunAsync(CodeLanguage.Python, "print(1)", context, CodeFixtures.Registry(_tree.Root), Ct);
+
+        Assert.Equal(3, run.ExitCode);
+        Assert.Equal("answer: none", run.StandardOutput);
+        Assert.Equal("script error\n[corvid] the tools socket failed: NotSupportedException: the tool path broke", run.StandardError);
+    }
+
+    /// <summary>A sandbox that "runs" a script by speaking to the run's tools socket itself.</summary>
+    private sealed class SocketSandbox(Func<SandboxPolicy, CancellationToken, Task<SandboxResult>> run) : ISandbox
+    {
+        public Task<SandboxResult> RunAsync(SandboxPolicy policy, SandboxCommand command, CancellationToken cancellationToken = default) =>
+            run(policy, cancellationToken);
     }
 
     [Theory]
@@ -520,6 +536,68 @@ public sealed class CodeConfinementTests : IDisposable
         Assert.True(result.GetProperty("timed_out").GetBoolean());
         Assert.Contains("time limit of 2 s", result.GetProperty("error").GetString(), StringComparison.Ordinal);
         Assert.Equal("started\n", result.GetProperty("stdout").GetString());
+    }
+
+    // Review test gap: the time limit fires while a nested call is still waiting (on its approval): the run is stopped, the
+    // call is cancelled and has its result, and the run reports what the script printed.
+    [Fact]
+    public async Task The_time_limit_stops_a_run_whose_call_is_still_waiting()
+    {
+        Host.RequireBubblewrap();
+        RequirePython();
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var code = CodeFixtures.PythonClient + "print('asking', flush=True)\nprint(call('write_file', {'path': 'out.txt', 'content': 'x'}))\nprint('after')";
+
+        var result = await RunAsync(Tool(new CodeToolOptions { Timeout = TimeSpan.FromSeconds(2) }, timeout: TimeSpan.FromSeconds(2)), code,
+            async (_, _, token) =>
+            {
+                // Never answered: the approval waits until the run is stopped.
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, token);
+                }
+                finally
+                {
+                    cancelled.TrySetResult();
+                }
+                throw new InvalidOperationException("unreachable");
+            });
+
+        Assert.True(result.GetProperty("timed_out").GetBoolean());
+        Assert.Equal("asking\n", result.GetProperty("stdout").GetString());
+        Assert.True(cancelled.Task.IsCompleted);
+        Assert.Equal(0, result.GetProperty("tool_calls").GetInt32());
+    }
+
+    // Review test gap, and A7 review M1 and L4: the generated client under the real runner and sandbox. A json.py in the
+    // workspace does not shadow the client's import, a script that rebinds the client's names still calls tools, and an
+    // error names the script's own line.
+    [Fact]
+    public async Task The_generated_python_client_runs_isolated_from_the_workspaces_modules()
+    {
+        Host.RequireBubblewrap();
+        RequirePython();
+        _tree.Write("home/project/json.py", "raise SystemExit('SHADOWED')\n");
+        var calls = new List<string>();
+        var options = new CodeToolOptions
+        {
+            Clients = (language, tools) => new CodeClient(script => CodeModeClients.Program(CodeModeLanguage.Python, tools, script)),
+        };
+        const string code = "call = None\nprint(corvid.read_file(path='data.txt'))\nraise ValueError('line three')\n";
+
+        var result = await RunAsync(Tool(options), code, (tool, arguments, _) =>
+        {
+            calls.Add(tool + " " + arguments.GetRawText());
+            return Ok(tool, calls.Count, "\"file text\"");
+        });
+
+        var stderr = result.GetProperty("stderr").GetString()!;
+        Assert.Equal(1, result.GetProperty("exit_code").GetInt32());
+        Assert.Equal("file text\n", result.GetProperty("stdout").GetString());
+        Assert.Equal(["read_file {\"path\":\"data.txt\"}"], calls);
+        Assert.DoesNotContain("SHADOWED", stderr, StringComparison.Ordinal);
+        Assert.Contains("File \"script.py\", line 3, in <module>", stderr, StringComparison.Ordinal);
+        Assert.Contains("ValueError: line three", stderr, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -12,7 +12,7 @@ namespace Corvid.Sandbox;
 /// <item><c>$XDG_RUNTIME_DIR/corvid-runs</c> when the runtime directory is set: the launcher hides the whole runtime directory
 /// from every command (and replaces <c>/run</c>, where it usually is).</item>
 /// <item>Otherwise <c>corvid-runs-&lt;user&gt;</c> in the temporary directory. Under <c>/tmp</c> the sandbox's own empty <c>/tmp</c>
-/// covers it; anywhere else (<c>TMPDIR</c> on CI) <see cref="DeniedRoot"/> names it, and every policy this assembly launches
+/// covers it; anywhere else (<c>TMPDIR</c> on CI) <see cref="DeniedRoot(SandboxPolicy?, IReadOnlyDictionary{string, string}?)"/> names it (and under <c>/tmp</c> too when a policy binds <c>/tmp</c> itself), and every policy this assembly launches
 /// denies it.</item>
 /// </list>
 /// The root is made 0700 and set to 0700 again on each use: changing its mode fails unless this user owns it, so a root another
@@ -41,10 +41,30 @@ public static class SandboxScratch
     /// The root a policy must deny so other sandboxes cannot see into it: <see cref="Root"/> unless the sandbox replaces it
     /// anyway (under <c>/tmp</c> or <c>/run</c>, or in the runtime directory, which the launcher hides); null then.
     /// </summary>
-    public static string? DeniedRoot(IReadOnlyDictionary<string, string>? environment = null)
+    public static string? DeniedRoot(IReadOnlyDictionary<string, string>? environment = null) => DeniedRoot(null, environment);
+
+    /// <summary>
+    /// The root <paramref name="policy"/> must deny: as <see cref="DeniedRoot(IReadOnlyDictionary{string, string}?)"/>, and
+    /// also whenever the policy binds the root or a directory above it (a workspace or read-only path of <c>/tmp</c>,
+    /// <c>/run/user/…</c> or <c>/</c>), where the sandbox's own empty <c>/tmp</c> or hidden runtime directory would not cover
+    /// it (A7 review, security L6).
+    /// </summary>
+    public static string? DeniedRoot(SandboxPolicy? policy, IReadOnlyDictionary<string, string>? environment = null)
     {
         var root = Root(environment);
-        return IsUnder(root, "/tmp") || IsUnder(root, "/run") || Path.GetFileName(root) == RuntimeRootName ? null : root;
+        var covered = IsUnder(root, "/tmp") || IsUnder(root, "/run") || Path.GetFileName(root) == RuntimeRootName;
+        if (!covered)
+            return root;
+        return policy is not null && new[] { policy.Workspace }.Concat(policy.ReadOnlyPaths).Any(path => Binds(path, root)) ? root : null;
+    }
+
+    // Whether binding path shows root: path is root itself or a directory above it.
+    private static bool Binds(string path, string root)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+        var bound = Path.TrimEndingDirectorySeparator(path);
+        return bound.Length == 0 || bound == "/" || root == bound || IsUnder(root, bound);
     }
 
     /// <summary>A new directory, mode 0700, named <paramref name="prefix"/> and random hex, under <see cref="Root"/>.</summary>
@@ -86,7 +106,44 @@ public static class SandboxScratch
 
         if (File.GetUnixFileMode(root) != Private || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
             throw new SandboxRefusedException($"The sandbox's private directory {root} is not a mode-0700 directory of this user's.");
+        RemoveStale(root, DateTime.UtcNow - StaleAfter);
         return root;
+    }
+
+    /// <summary>How old a run's directory left behind (a process killed mid-run) must be before <see cref="EnsureRoot"/> removes it.</summary>
+    public static TimeSpan StaleAfter { get; } = TimeSpan.FromDays(1);
+
+    // The prefixes of the run directories made here (CreateDirectory's callers: the sandbox's status directory, code mode's socket).
+    private static readonly string[] RunPrefixes = ["code-", "corvid-code-", "corvid-sandbox-"];
+
+    /// <summary>
+    /// A7 review (L5): removes run directories under <paramref name="root"/> last written before <paramref name="before"/>,
+    /// best effort: a run killed before its cleanup leaves one (an empty socket directory, a status file). Anything else in
+    /// the root is left alone.
+    /// </summary>
+    internal static void RemoveStale(string root, DateTime before)
+    {
+        try
+        {
+            foreach (var directory in new DirectoryInfo(root).EnumerateDirectories())
+            {
+                if (!RunPrefixes.Any(prefix => directory.Name.StartsWith(prefix, StringComparison.Ordinal))
+                    || (directory.Attributes & FileAttributes.ReparsePoint) != 0 || directory.LastWriteTimeUtc >= before)
+                    continue;
+                try
+                {
+                    directory.Delete(recursive: true);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    // Another process's, or in use: the next run tries again.
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Best effort: the root is checked above; a listing that fails leaves the old directories for the next run.
+        }
     }
 
     private static bool IsUnder(string path, string directory) =>

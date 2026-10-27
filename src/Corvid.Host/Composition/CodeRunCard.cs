@@ -62,12 +62,50 @@ public static class CodeRunCard
         return shown.TrimEnd('\n').Split('\n');
     }
 
-    /// <summary>The card lines a surface's approval prompt adds: a spawn's children (<see cref="DelegationCard"/>) and a code run's.</summary>
+    /// <summary>
+    /// The card lines a surface's approval prompt adds: a spawn's children (<see cref="DelegationCard"/>), a code run's, and
+    /// for a call a code run's script made, which run asked (A7 review, security L3: the CLI's box and ACP's content say so,
+    /// as the app's card does).
+    /// </summary>
     public static async Task<IReadOnlyList<string>> WithDelegationAsync(CorvidRuntime runtime, ApprovalPrompt prompt, CancellationToken cancellationToken,
         bool whole)
     {
+        ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentNullException.ThrowIfNull(prompt);
         var lines = await DelegationCard.LinesAsync(runtime, prompt, cancellationToken, whole).ConfigureAwait(false);
+        var nested = prompt.CallId is { } callId && ParentOf(runtime.Log, prompt.SessionId, callId, cancellationToken) is { } parent
+            ? NestedLine(callId, parent, runtime.CodeLimits)
+            : null;
         var code = Lines(prompt, runtime.CodeLimits);
-        return code.Count == 0 ? lines : [.. lines, .. code];
+        return nested is null && code.Count == 0 ? lines : [.. nested is null ? [] : new[] { nested }, .. lines, .. code];
+    }
+
+    /// <summary>
+    /// A7 review (security L3): "Asked by the script in call {parent} (call n of at most max)." for a call a code run's script
+    /// made. The ids are shown with hidden characters as escapes (a model chose the parent's).
+    /// </summary>
+    public static string NestedLine(string callId, string parentCallId, Corvid.Tools.CodeMode.CodeModeLimits? limits = null)
+    {
+        ArgumentNullException.ThrowIfNull(callId);
+        ArgumentNullException.ThrowIfNull(parentCallId);
+        var max = (limits ?? Corvid.Tools.CodeMode.CodeModeLimits.Default).MaxCalls;
+        // A nested call's id is "{parent}.{n}".
+        var number = callId.StartsWith(parentCallId + ".", StringComparison.Ordinal)
+            && int.TryParse(callId.AsSpan(parentCallId.Length + 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n)
+                ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"call {n} of at most {max}")
+                : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"at most {max} calls");
+        return $"Asked by the script in call {TerminalText.Visible(parentCallId)} ({number}).";
+    }
+
+    // The run a call was made from, read from the end of the session's log: the call is logged before it asks.
+    private static string? ParentOf(Corvid.Abstractions.Events.IEventLog log, string sessionId, string callId, CancellationToken cancellationToken)
+    {
+        const int Window = 512;
+        var head = log.GetHead(sessionId, cancellationToken);
+        var events = log.Read(sessionId, Math.Max(0, head - Window), head, Window, cancellationToken);
+        for (var i = events.Count - 1; i >= 0; i--)
+            if (events[i].Payload is Corvid.Abstractions.Events.ToolCallIssued call && call.CallId == callId)
+                return call.ParentCallId;
+        return null;
     }
 }

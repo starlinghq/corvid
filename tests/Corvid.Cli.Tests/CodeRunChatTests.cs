@@ -46,4 +46,26 @@ public sealed class CodeRunChatTests
         var parent = Array.FindIndex(lines, line => line.StartsWith("  ✓ execute_code succeeded · 1 tool call ·", StringComparison.Ordinal));
         Assert.True(nested >= 0 && parent > nested, output);
     }
+
+    // A7 review (security L3): a call the script makes asks in a box that says the script asked, in which run, and its
+    // place in the run's calls, as the app's card and ACP do.
+    [Fact]
+    public async Task A_scripts_call_asks_in_a_box_that_names_the_run_it_came_from()
+    {
+        using var run = new CliRun(new FakeModels(new FakeGenerator(
+            Reply.Call("execute_code", """{"language":"python","code":"corvid.add_note(text='x')"}"""),
+            Reply.Say("The script added a note.")),
+            generatorPrivacy: Corvid.Models.PrivacyClass.LocalServer))
+        {
+            Services = services => services.AddSingleton<IToolProvider>(new Tools(new FakeCodeTool(("add_note", """{"text":"x"}""")))),
+        };
+
+        var exit = await run.RunAsync(["chat", "--set", "Approvals:Mode=Manual"], "run the weather script over my notes", "y", "y", "/exit");
+
+        Assert.Equal(ExitCodes.Success, exit);
+        var output = run.Output;
+        Assert.True(System.Text.RegularExpressions.Regex.IsMatch(output, @"Asked by the script in call c\d+ \(call 1 of at most 50\)\."), output);
+        // Only the script's call says so; the run's own box does not.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(output, "Asked by the script"));
+    }
 }

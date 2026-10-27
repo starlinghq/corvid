@@ -96,6 +96,10 @@ public sealed class CorvidOptionsValidator(ModelCatalogue catalogue) : IValidate
             errors.Add("Corvid:Tools:Code:MaxCalls must be between 1 and 1000.");
         if (code.MaxStdoutBytes is < 1024 or > 1024 * 1024 || code.MaxStderrBytes is < 1024 or > 1024 * 1024)
             errors.Add("Corvid:Tools:Code:MaxStdoutBytes and MaxStderrBytes must be between 1024 and 1048576.");
+        // A7 review (security L4): tools no script may call, whatever the allowlist says.
+        if (code.Tools?.Where(Corvid.Tools.CodeMode.CodeModeCatalog.Denied.Contains).Distinct(StringComparer.Ordinal).ToList() is { Count: > 0 } denied)
+            errors.Add($"Corvid:Tools:Code:Tools may not list {string.Join(", ", denied)}: a script never calls a tool that delegates, asks the person, "
+                + "runs another script, writes memory, sends messages or changes schedules.");
         foreach (var (setting, path) in new[] { ("Python", code.Python), ("Node", code.Node), ("Dotnet", code.Dotnet) })
             if (path is { Length: > 0 } && !Path.IsPathFullyQualified(CorvidPaths.ExpandHome(path)))
                 errors.Add($"Corvid:Tools:Code:{setting} must be an absolute path.");

@@ -17,10 +17,21 @@ public enum CodeLanguage
     JavaScript,
 }
 
-/// <summary>A7: the text Corvid adds around a script so it can call tools: a generated client (code mode's client generators).</summary>
-/// <param name="Prefix">Placed before the script (Python, JavaScript).</param>
-/// <param name="Suffix">Placed after the script (C#, whose top-level statements must come first).</param>
-public sealed record CodeClient(string Prefix, string Suffix);
+/// <summary>
+/// A7: what Corvid runs so a script can call tools: the program a generated client (code mode's client generators) makes
+/// of the script, which keeps the script's own line numbers (A7 review L4).
+/// </summary>
+/// <param name="program">The whole program given the runtime for a script.</param>
+public sealed class CodeClient(Func<string, string> program)
+{
+    private readonly Func<string, string> _program = program ?? throw new ArgumentNullException(nameof(program));
+
+    /// <summary>A client whose text goes before and after the script.</summary>
+    public static CodeClient Around(string prefix, string suffix) => new(script => prefix + script + suffix);
+
+    /// <summary>The program for <paramref name="script"/>.</summary>
+    public string Program(string script) => _program(script);
+}
 
 /// <summary>
 /// A7: produces the client a script of <paramref name="language"/> is run with, for the tools it may call (their names and
@@ -363,7 +374,7 @@ public sealed class CodeRunner
         var token = CodeModeProtocol.NewToken();
         var session = new CodeModeSession(token, tools, Record, Options.Limits);
         var client = Options.Clients?.Invoke(language, tools);
-        var source = client is null ? code : Compose(language, client, code);
+        var source = client is null ? code : client.Program(code);
 
         // A directory only this user can enter, outside the workspace, deleted after the run. A7V1-2: by default under the
         // root every sandbox hides (SandboxScratch), so no other run's command sees this socket, whatever TMPDIR is.
@@ -383,7 +394,7 @@ public sealed class CodeRunner
             // The default root is hidden from every run's command (the sandbox adds it from its own environment; it is named
             // here too, from this process's, in case the two differ). A socket root a caller chose is hidden from this run's.
             var hidden = Options.SocketRoot is null
-                ? SandboxScratch.DeniedRoot() is { } scratch ? basePolicy.DeniedPaths.Add(scratch) : basePolicy.DeniedPaths
+                ? SandboxScratch.DeniedRoot(basePolicy) is { } scratch ? basePolicy.DeniedPaths.Add(scratch) : basePolicy.DeniedPaths
                 : IsUnder(socketDirectory.FullName, "/tmp") || IsUnder(socketDirectory.FullName, "/run")
                     ? basePolicy.DeniedPaths
                     : basePolicy.DeniedPaths.Add(socketDirectory.FullName);
@@ -411,11 +422,15 @@ public sealed class CodeRunner
             finally
             {
                 // The script is gone: its connections close, and a call still running is cancelled and has its result.
+                // A7 review (L3): never throws, so the run's output and exit code survive a connection that failed.
                 await server.StopAsync().ConfigureAwait(false);
             }
 
             var (stdout, stdoutCut) = Trim(result.StandardOutput, Options.MaxStdoutBytes);
-            var (stderr, stderrCut) = Trim(result.StandardError, Options.MaxStderrBytes);
+            // A connection the host failed to serve says so after the script's own error output.
+            var failures = server.Failures;
+            var (stderr, stderrCut) = Trim(failures.Count == 0 ? result.StandardError
+                : result.StandardError + string.Concat(failures.Select(failure => $"\n[corvid] the tools socket failed: {failure}")), Options.MaxStderrBytes);
             ImmutableArray<CodeCall> made;
             lock (calls)
                 made = [.. calls];
@@ -438,9 +453,9 @@ public sealed class CodeRunner
             {
                 socketDirectory.Delete(recursive: true);
             }
-            catch (IOException)
+            catch (Exception)
             {
-                // Best effort: an empty 0700 directory in the temp directory.
+                // Best effort: an empty 0700 directory under the private root, which drops run directories a day old (A7 review L5).
             }
         }
     }
@@ -448,8 +463,10 @@ public sealed class CodeRunner
     /// <summary>The command that runs a script given on standard input, by the runtime's absolute path.</summary>
     internal static SandboxCommand CommandFor(CodeLanguage language, string runtime, string workspace, string source) => language switch
     {
-        // -E: no PYTHON* variables; -s: no user site; -B: no bytecode written into the workspace. "-" reads standard input.
-        CodeLanguage.Python => new SandboxCommand(runtime, "-E", "-s", "-B", "-") { StandardInput = source, WorkingDirectory = workspace },
+        // -I: isolated (no PYTHON* variables, no user site, and neither the working directory nor the script's on sys.path,
+        // so a workspace's json.py never shadows the client's imports; A7 review L4); -B: no bytecode written into the
+        // workspace. "-" reads standard input.
+        CodeLanguage.Python => new SandboxCommand(runtime, "-I", "-B", "-") { StandardInput = source, WorkingDirectory = workspace },
         // An ES module, so a script can await at the top level.
         CodeLanguage.JavaScript => new SandboxCommand(runtime, "--input-type=module", "-") { StandardInput = source, WorkingDirectory = workspace },
         _ => new SandboxCommand("/bin/sh", "-c", CSharpWrapper, "corvid-code", runtime, DotnetCache(workspace))
@@ -491,12 +508,17 @@ public sealed class CodeRunner
         return values.ToImmutable();
     }
 
-    /// <summary>The first <c>#:</c> directive line of a C# file-based app (a package, SDK, project or property), or null.</summary>
+    /// <summary>
+    /// The first <c>#:</c> directive line of a C# file-based app (a package, SDK, project or property), or null. Lines end
+    /// where Roslyn ends them (A7 review, security L2): at <c>\n</c>, <c>\r</c>, U+0085, U+2028 and U+2029, so a directive
+    /// after a lone carriage return or a line separator is found.
+    /// </summary>
     internal static string? Directive(string code)
     {
-        foreach (var line in code.Split('\n'))
+        foreach (var line in code.Split(['\n', '\r', '\u0085', '\u2028', '\u2029']))
         {
-            var trimmed = line.TrimStart(' ', '\t', '﻿').TrimEnd('\r');
+            // Any white space (a vertical tab, a form feed, U+00A0) and a byte order mark may come before the directive.
+            var trimmed = line.TrimStart().TrimStart('\uFEFF').TrimStart();
             if (trimmed.StartsWith("#:", StringComparison.Ordinal))
                 return trimmed.Length <= 80 ? trimmed : trimmed[..80] + "…";
         }
@@ -509,48 +531,6 @@ public sealed class CodeRunner
         CodeLanguage.JavaScript => "install node",
         _ => "install the .NET 10 SDK",
     };
-
-    /// <summary>
-    /// The script with its client around it. A7V1-4: Python allows <c>from __future__ import …</c> only at the top of a module
-    /// (after its docstring, comments and blank lines), so the script's leading future imports go above the client's prefix.
-    /// A future import after a leading docstring is not moved, and Python reports it.
-    /// </summary>
-    internal static string Compose(CodeLanguage language, CodeClient client, string code)
-    {
-        if (language != CodeLanguage.Python)
-            return client.Prefix + code + client.Suffix;
-        var lines = code.Split('\n');
-        var futures = new List<string>();
-        var i = 0;
-        for (; i < lines.Length; i++)
-        {
-            var line = lines[i].TrimEnd('\r');
-            var trimmed = line.TrimStart();
-            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
-                continue;
-            if (!FutureImport(trimmed))
-                break;
-            futures.Add(line.Trim());
-            lines[i] = "";
-            // A parenthesised list may run over several lines.
-            if (trimmed.Contains('(', StringComparison.Ordinal) && !trimmed.Contains(')', StringComparison.Ordinal))
-                for (i++; i < lines.Length; i++)
-                {
-                    futures[^1] += " " + lines[i].Trim();
-                    var closes = lines[i].Contains(')', StringComparison.Ordinal);
-                    lines[i] = "";
-                    if (closes)
-                        break;
-                }
-        }
-        if (futures.Count == 0)
-            return client.Prefix + code + client.Suffix;
-        // Blank lines stay where the imports were, so the script's own lines keep their places.
-        return string.Join("\n", futures) + "\n" + client.Prefix + string.Join("\n", lines) + client.Suffix;
-
-        static bool FutureImport(string line) =>
-            System.Text.RegularExpressions.Regex.IsMatch(line, @"^from\s+__future__\s+import\b", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-    }
 
     private static bool IsUnder(string path, string directory) =>
         path.StartsWith(directory + "/", StringComparison.Ordinal);

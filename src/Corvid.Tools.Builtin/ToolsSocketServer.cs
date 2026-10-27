@@ -96,6 +96,13 @@ internal sealed class ToolsSocketServer : IAsyncDisposable
         {
             // The run ended or the script closed its side mid-line: nothing to answer.
         }
+        catch (Exception exception)
+        {
+            // A7 review (L3): anything else (a tool path that threw) ends this connection only, never the run; the run's
+            // result reports it.
+            lock (_connections)
+                _failures.Add($"{exception.GetType().Name}: {exception.Message}");
+        }
         finally
         {
             lock (_connections)
@@ -103,18 +110,41 @@ internal sealed class ToolsSocketServer : IAsyncDisposable
         }
     }
 
-    /// <summary>Stops the server and waits for every connection it served; safe to call more than once.</summary>
+    private readonly List<string> _failures = [];
+
+    /// <summary>A7 review (L3): connections that ended on an unexpected error, each as its exception's type and message.</summary>
+    public IReadOnlyList<string> Failures
+    {
+        get
+        {
+            lock (_connections)
+                return [.. _failures];
+        }
+    }
+
+    /// <summary>
+    /// Stops the server and waits for every connection it served; safe to call more than once. Never throws (A7 review L3):
+    /// it runs in the code tool's <c>finally</c>, where an exception would lose the run's output.
+    /// </summary>
     public async Task StopAsync()
     {
         if (Interlocked.Exchange(ref _stopped, 1) == 1)
             return;
-        await _stop.CancelAsync().ConfigureAwait(false);
-        _listener.Dispose();
-        await _accepting.ConfigureAwait(false);
-        Task[] connections;
-        lock (_connections)
-            connections = [.. _connections];
-        await Task.WhenAll(connections).ConfigureAwait(false);
+        try
+        {
+            await _stop.CancelAsync().ConfigureAwait(false);
+            _listener.Dispose();
+            await _accepting.ConfigureAwait(false);
+            Task[] connections;
+            lock (_connections)
+                connections = [.. _connections];
+            await Task.WhenAll(connections).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            lock (_connections)
+                _failures.Add($"{exception.GetType().Name}: {exception.Message}");
+        }
     }
 
     public async ValueTask DisposeAsync()

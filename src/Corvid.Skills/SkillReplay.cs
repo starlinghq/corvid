@@ -83,10 +83,12 @@ public sealed class SkillReplayer(SkillReplayServices services)
         if (turn.FirstOrDefault()?.Payload is not UserMessage request)
             return new ReplayOutcome(false, [], [], "not_run", $"event {from} is not a user message");
 
-        // The source turn's successful calls, in order, with their recorded results.
+        // The source turn's successful calls, in order, with their recorded results. A7 review (M2): the model's own calls
+        // only; a nested call (a code run's script calling a tool) is part of its parent's run, which the replay's stand-in
+        // returns whole, so the replayed model never makes it.
         var results = turn.Select(item => item.Payload).OfType<ToolResult>().ToDictionary(result => result.CallId, StringComparer.Ordinal);
         var recorded = turn.Select(item => item.Payload).OfType<ToolCallIssued>()
-            .Where(call => results.TryGetValue(call.CallId, out var result) && !result.IsError)
+            .Where(call => call.ParentCallId is null && results.TryGetValue(call.CallId, out var result) && !result.IsError)
             .Select(call => (call.ToolName, Result: results[call.CallId].Result)).ToList();
         var expected = recorded.Select(call => call.ToolName).ToImmutableArray();
         var queues = recorded.GroupBy(call => call.ToolName, StringComparer.Ordinal)
@@ -141,7 +143,7 @@ public sealed class SkillReplayer(SkillReplayServices services)
                 .ConfigureAwait(false);
             var events = ReadAll(log, ReplaySession, prefix.Count, long.MaxValue, cancellationToken).Select(item => item.Payload).ToList();
             var outcomes = events.OfType<ToolResult>().ToDictionary(item => item.CallId, StringComparer.Ordinal);
-            var calls = events.OfType<ToolCallIssued>().ToList();
+            var calls = events.OfType<ToolCallIssued>().Where(call => call.ParentCallId is null).ToList();
             var actual = calls.Where(call => outcomes.TryGetValue(call.CallId, out var outcome) && !outcome.IsError).Select(call => call.ToolName).ToImmutableArray();
             var errors = calls.Count(call => !outcomes.TryGetValue(call.CallId, out var outcome) || outcome.IsError);
             var status = TurnRunner.StatusName(result.Status);

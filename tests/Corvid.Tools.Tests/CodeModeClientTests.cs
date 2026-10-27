@@ -55,7 +55,8 @@ public sealed class CodeModeClientTests
         private readonly Task _accepting;
         private readonly ConcurrentBag<Task> _connections = [];
 
-        public FakeHost(IReadOnlyList<CodeModeTool> tools)
+        /// <param name="invoke">The turn's stand-in; null answers every tool as <see cref="InvokeAsync"/> does.</param>
+        public FakeHost(IReadOnlyList<CodeModeTool> tools, ToolInvoker? invoke = null)
         {
             Directory = System.IO.Directory.CreateTempSubdirectory("corvid-cm-");
             if (!OperatingSystem.IsWindows())
@@ -66,7 +67,7 @@ public sealed class CodeModeClientTests
             var token = CodeModeProtocol.NewToken();
             File.WriteAllText(TokenFile, token);
             File.WriteAllText(WrongTokenFile, CodeModeProtocol.NewToken());
-            Session = new CodeModeSession(token, tools, InvokeAsync);
+            Session = new CodeModeSession(token, tools, invoke ?? InvokeAsync);
             _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             _listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
             _listener.Listen();
@@ -85,7 +86,7 @@ public sealed class CodeModeClientTests
 
         public ConcurrentQueue<(string Tool, string Arguments)> Calls { get; } = new();
 
-        private Task<NestedToolResult> InvokeAsync(string tool, JsonElement arguments, CancellationToken cancellationToken)
+        public Task<NestedToolResult> InvokeAsync(string tool, JsonElement arguments, CancellationToken cancellationToken)
         {
             Calls.Enqueue((tool, arguments.GetRawText()));
             var echo = Json($$"""{"tool":"{{tool}}","args":{{arguments.GetRawText()}}}""");
@@ -255,17 +256,22 @@ public sealed class CodeModeClientTests
         console.log(JSON.stringify(out));
         """;
 
+    /// <summary>How code mode's runner starts Python: isolated, no bytecode, the program on standard input.</summary>
+    private const string PythonArguments = "-I -B -";
+
+    /// <summary>How code mode's runner starts Node: the program on standard input as an ES module.</summary>
+    private const string NodeArguments = "--input-type=module -";
+
     [Fact]
     public async Task The_python_client_inline_runs_from_standard_input_as_code_mode_runs_it()
     {
         Assert.SkipWhen(Find("python3") is null, "python3 is not installed");
         await using var host = new FakeHost(Tools());
         var work = host.Directory.CreateSubdirectory("work").FullName;
-        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.Python, Tools());
 
-        // As the code tool runs a script: one file on standard input, nothing beside it; corvid_tools imports from memory.
-        var run = await host.RunAsync("python3", "-E -s -B -", work, TimeSpan.FromSeconds(60),
-            prefix + "assert corvid.get_weather is get_weather\n" + PythonScript + suffix);
+        // As the code tool runs a script: one program on standard input, nothing beside it; corvid_tools imports from memory.
+        var run = await host.RunAsync("python3", PythonArguments, work, TimeSpan.FromSeconds(60),
+            CodeModeClients.Program(CodeModeLanguage.Python, Tools(), "assert corvid.get_weather.__module__ == 'corvid_tools'\n" + PythonScript));
 
         AssertReport(host, run);
         Assert.Empty(System.IO.Directory.EnumerateFileSystemEntries(work));
@@ -277,13 +283,153 @@ public sealed class CodeModeClientTests
         Assert.SkipWhen(Find("node") is null, "node is not installed");
         await using var host = new FakeHost(Tools());
         var work = host.Directory.CreateSubdirectory("work").FullName;
-        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.JavaScript, Tools());
 
         // The script declares names the client uses inside; only corvid is the client's at the top level.
-        var run = await host.RunAsync("node", "--input-type=module -", work, TimeSpan.FromSeconds(60),
-            prefix + "const call = 1; const tools = 2; function limits() {} class CorvidToolError {}\nconst t = corvid;\n" + JavaScriptBody + suffix);
+        var run = await host.RunAsync("node", NodeArguments, work, TimeSpan.FromSeconds(60), CodeModeClients.Program(CodeModeLanguage.JavaScript, Tools(),
+            "const call = 1; const tools = 2; function limits() {} class CorvidToolError {}\nconst t = corvid;\n" + JavaScriptBody));
 
         AssertReport(host, run);
+    }
+
+    // A7 review (M1): the script's names are its own; rebinding one the client uses (call, close, limits) breaks nothing.
+    [Fact]
+    public async Task A_python_script_that_rebinds_the_clients_names_still_calls_tools()
+    {
+        Assert.SkipWhen(Find("python3") is null, "python3 is not installed");
+        await using var host = new FakeHost(Tools());
+
+        var run = await host.RunAsync("python3", PythonArguments, host.Directory.FullName, TimeSpan.FromSeconds(60),
+            CodeModeClients.Program(CodeModeLanguage.Python, Tools(), """
+                import json
+                call = 1
+                close = 2
+                limits = 3
+                tools = 4
+                _corvid_client = 5
+                print(json.dumps(corvid.get_weather("Paris")))
+                corvid.call = None
+                print(json.dumps(corvid.fetch_page("https://example.org/")))
+                print(sorted(name for name in globals() if not name.startswith("__")))
+                """));
+
+        Assert.True(run.ExitCode == 0, run.Error);
+        var lines = run.Output.Trim().Split('\n');
+        Assert.Equal("""{"tool": "get_weather", "args": {"city": "Paris"}}""", lines[0]);
+        Assert.Equal("""{"tool": "fetch_page", "args": {"url": "https://example.org/"}}""", lines[1]);
+        // The script's namespace holds the client as corvid and nothing of the bootstrap's.
+        Assert.Equal("['_corvid_client', 'call', 'close', 'corvid', 'json', 'limits', 'tools']", lines[2]);
+    }
+
+    // A7 review (L4, security L1): a module in the working directory never shadows one the client imports.
+    [Fact]
+    public async Task A_python_module_in_the_working_directory_does_not_shadow_the_clients_imports()
+    {
+        Assert.SkipWhen(Find("python3") is null, "python3 is not installed");
+        await using var host = new FakeHost(Tools());
+        var work = host.Directory.CreateSubdirectory("work").FullName;
+        foreach (var module in new[] { "json", "socket", "os", "base64", "types", "linecache" })
+            await File.WriteAllTextAsync(Path.Combine(work, module + ".py"), "raise SystemExit('SHADOWED " + module + "')\n", Ct);
+
+        var run = await host.RunAsync("python3", PythonArguments, work, TimeSpan.FromSeconds(60),
+            CodeModeClients.Program(CodeModeLanguage.Python, Tools(), "print(corvid.get_weather('Paris')['args']['city'])\n"));
+
+        Assert.True(run.ExitCode == 0, run.Output + run.Error);
+        Assert.Equal("Paris\n", run.Output);
+        Assert.DoesNotContain("SHADOWED", run.Error, StringComparison.Ordinal);
+    }
+
+    // A7 review (L4): an error names the script's own line, in Python and JavaScript; a future import stays the script's own.
+    [Fact]
+    public async Task A_python_error_names_the_scripts_own_line()
+    {
+        Assert.SkipWhen(Find("python3") is null, "python3 is not installed");
+        await using var host = new FakeHost(Tools());
+
+        var run = await host.RunAsync("python3", PythonArguments, host.Directory.FullName, TimeSpan.FromSeconds(60),
+            CodeModeClients.Program(CodeModeLanguage.Python, Tools(), "from __future__ import annotations\nx: undefined_type = 1\nprint(x)\nraise ValueError('third' + ' line')\n"));
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Equal("1\n", run.Output);
+        Assert.Contains("File \"script.py\", line 4, in <module>", run.Error, StringComparison.Ordinal);
+        // The traceback quotes the script's line itself.
+        Assert.Contains("raise ValueError('third' + ' line')", run.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_javascript_error_names_the_scripts_own_line()
+    {
+        Assert.SkipWhen(Find("node") is null, "node is not installed");
+        await using var host = new FakeHost(Tools());
+
+        var run = await host.RunAsync("node", NodeArguments, host.Directory.FullName, TimeSpan.FromSeconds(60),
+            CodeModeClients.Program(CodeModeLanguage.JavaScript, Tools(), "const a = 1;\nconsole.log(typeof corvid.get_weather);\nnull.third;\n"));
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Equal("function\n", run.Output);
+        Assert.Matches(@"\]:3:6\b", run.Error);
+    }
+
+    // A7 review (L1): a C# call given up (cancelled) leaves its answer unread; the connection is closed, so the next call
+    // gets its own answer, never the abandoned one's. The generated client is compiled here and called in this process.
+    [Fact]
+    public async Task A_cancelled_csharp_call_never_hands_its_answer_to_the_next()
+    {
+        var tools = Tools().Append(new CodeModeTool("slow_tool", "Answers when released.", Json("""{"type":"object","properties":{}}"""))).ToList();
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        FakeHost? host = null;
+        await using var started = host = new FakeHost(tools, async (tool, arguments, token) =>
+        {
+            if (tool != "slow_tool")
+                return await host!.InvokeAsync(tool, arguments, token);
+            asked.TrySetResult();
+            await release.Task;
+            return new NestedToolResult("p.8", Json("\"the slow answer\""), IsError: false, Tainted: false);
+        });
+        var context = new System.Runtime.Loader.AssemblyLoadContext("corvid-client", isCollectible: true);
+        var socket = Environment.GetEnvironmentVariable(CodeModeClients.SocketVariable);
+        var token = Environment.GetEnvironmentVariable(CodeModeClients.TokenFileVariable);
+        Environment.SetEnvironmentVariable(CodeModeClients.SocketVariable, host.SocketPath);
+        Environment.SetEnvironmentVariable(CodeModeClients.TokenFileVariable, host.TokenFile);
+        try
+        {
+            var client = context.LoadFromStream(Compile(CodeModeClients.CSharp(tools), OutputKind.DynamicallyLinkedLibrary)).GetType("CorvidTools", throwOnError: true)!;
+            var call = client.GetMethod("CallAsync")!;
+            Task<JsonElement> Call(string tool, CancellationToken cancellationToken) =>
+                (Task<JsonElement>)call.Invoke(null, [tool, null, cancellationToken])!;
+
+            using var giveUp = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            var abandoned = Call("slow_tool", giveUp.Token);
+            await asked.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+            await giveUp.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => abandoned);
+            // The host answers the abandoned call now; the next call must not read that answer as its own.
+            release.SetResult();
+            var next = await Call("get_weather", Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+            Assert.Equal("get_weather", next.GetProperty("tool").GetString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CodeModeClients.SocketVariable, socket);
+            Environment.SetEnvironmentVariable(CodeModeClients.TokenFileVariable, token);
+            context.Unload();
+        }
+    }
+
+    /// <summary>A C# source compiled against this runtime's assemblies, as an assembly image.</summary>
+    private static MemoryStream Compile(string source, OutputKind kind)
+    {
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create("client-" + Guid.NewGuid().ToString("N"),
+            [CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Preview), cancellationToken: Ct)],
+            references, new CSharpCompilationOptions(kind, nullableContextOptions: NullableContextOptions.Enable));
+        var image = new MemoryStream();
+        var emitted = compilation.Emit(image, cancellationToken: Ct);
+        Assert.True(emitted.Success, string.Join("\n", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        image.Position = 0;
+        return image;
     }
 
     [Fact]
@@ -387,13 +533,12 @@ public sealed class CodeModeClientTests
     {
         Assert.SkipWhen(Find("python3") is null, "python3 is not installed");
         await using var host = new FakeHost(Tools());
-        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.Python, Tools());
 
-        var run = await host.RunAsync("python3", "-E -s -B -", host.Directory.FullName, TimeSpan.FromSeconds(60), prefix + """
+        var run = await host.RunAsync("python3", PythonArguments, host.Directory.FullName, TimeSpan.FromSeconds(60), CodeModeClients.Program(CodeModeLanguage.Python, Tools(), """
             corvid.get_weather("Rome", 3)
             corvid.get_weather("Oslo", days=4, units="metric")
             corvid.get_weather(city="Bern")
-            """ + suffix);
+            """));
 
         AssertArguments(host, run);
     }
@@ -403,13 +548,12 @@ public sealed class CodeModeClientTests
     {
         Assert.SkipWhen(Find("node") is null, "node is not installed");
         await using var host = new FakeHost(Tools());
-        var (prefix, suffix) = CodeModeClients.Inline(CodeModeLanguage.JavaScript, Tools());
 
-        var run = await host.RunAsync("node", "--input-type=module -", host.Directory.FullName, TimeSpan.FromSeconds(60), prefix + """
+        var run = await host.RunAsync("node", NodeArguments, host.Directory.FullName, TimeSpan.FromSeconds(60), CodeModeClients.Program(CodeModeLanguage.JavaScript, Tools(), """
             await corvid.get_weather("Rome", 3);
             await corvid.get_weather("Oslo", { days: 4, units: "metric" });
             await corvid.get_weather({ city: "Bern" });
-            """ + suffix);
+            """));
 
         AssertArguments(host, run);
     }

@@ -901,13 +901,12 @@ public sealed partial class TurnRunner
 
         // Drops a tool the filter passed when the shortlist was built and withholds now; one it withheld then and the turn
         // offers anyway (a confident delegate's delegate_task) stays.
-        private ImmutableArray<Offered> Filtered(ImmutableArray<Offered> tools)
-        {
-            if (_options.ToolFilter is not { } filter)
-                return tools;
-            bool Keeps(Offered tool) => _withheldAtStart.Contains(tool.Function.Name) || filter(tool.Descriptor);
-            return tools.All(Keeps) ? tools : [.. tools.Where(Keeps)];
-        }
+        private ImmutableArray<Offered> Filtered(ImmutableArray<Offered> tools) =>
+            _options.ToolFilter is null || tools.All(FilterKeeps) ? tools : [.. tools.Where(FilterKeeps)];
+
+        // Whether the turn's tool filter lets the tool be offered now (see Filtered); a nested call is held to it too.
+        private bool FilterKeeps(Offered tool) =>
+            _options.ToolFilter is not { } filter || _withheldAtStart.Contains(tool.Function.Name) || filter(tool.Descriptor);
 
         // ---- generator ----
 
@@ -2306,7 +2305,9 @@ public sealed partial class TurnRunner
                 egress.Add(Ask("deliver"));
             // skill_opportunity acts only on procedure evidence (its required condition): three tool calls, or a failed call
             // recovered by a different one of its family (C-026). Other turns are not asked: in the degraded tier each ask is
-            // a generator call. A replay or eval turn is never distilled again.
+            // a generator call. A replay or eval turn is never distilled again. A7 review (M2): _toolCalls counts the model's
+            // own calls only, never a code run's nested ones (a skill replays the model's calls; one script with many calls
+            // is one step), and the scan leaves nested calls out the same way.
             var learnable = _services.SkillLearning is not null && status == TurnStatus.Answered && _options.PinnedSkill is null
                 && envelope.Guest is null;
             // A recovery needs a failed call and a later one, so shorter turns skip the log read.
