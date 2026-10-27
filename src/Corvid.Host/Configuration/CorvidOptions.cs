@@ -551,7 +551,7 @@ public sealed class TurnSettings
     public ReducedCheckpoints ReducedCheckpoints { get; set; } = ReducedCheckpoints.Auto;
 
     /// <summary>
-    /// A7, architect/editor turns (plan §6): when a coding turn escalates (difficulty, context or repair), the escalated model
+    /// A7, architect/editor turns (plan §6): when a coding turn escalates (difficulty or repair), the escalated model
     /// writes one plan and the session's own model (or <see cref="EditorModel"/>) makes the edits; an editor that gets stuck
     /// gets one re-plan. Default off. <c>/architect</c> asks for it for the next turn or the session, whatever this says.
     /// </summary>

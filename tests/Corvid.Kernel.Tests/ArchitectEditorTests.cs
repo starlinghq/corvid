@@ -132,15 +132,12 @@ public sealed class ArchitectEditorTests
     }
 
     [Fact]
-    public async Task An_editor_whose_context_does_not_fit_after_the_plan_stays_on_the_escalated_model_without_planning_again()
+    public async Task Review_L4_a_context_escalation_does_not_plan_and_the_escalated_model_makes_the_edit()
     {
-        // The small model's window cannot hold the history: the context trigger escalates and plans; the editor still does
-        // not fit, so the next context escalation keeps the turn on the large model, which makes the edit. No loop.
+        // The small model's window cannot hold the history: the context trigger escalates. A7 review (L4): it does not plan,
+        // since the editor (the session's own model) would not fit the history either; the large model makes the edit.
         var small = new FakeGenerator() { Name = "small" };
-        var large = new FakeGenerator(Reply.Say(Plan), Reply.Call("edit_note_file", EditArguments), Reply.Say("Edited on the large model."))
-        {
-            Name = "large",
-        };
+        var large = new FakeGenerator(Reply.Call("edit_note_file", EditArguments), Reply.Say("Edited on the large model.")) { Name = "large" };
         using var harness = Harness(small, large, decider: null, generatorContext: 3_000);
         var filler = string.Concat(Enumerable.Repeat("a long earlier answer about the shopping list, ", 200));
         harness.Seed(new UserMessage("tell me about the list"), new AssistantMessage(filler));
@@ -148,9 +145,101 @@ public sealed class ArchitectEditorTests
         var result = await harness.RunAsync("edit my note file: oat milk instead of milk");
 
         Assert.Equal("Edited on the large model.", result.Text);
-        Assert.Equal([new TurnPlan("gen-large", "gen-small", "context", 1)], result.Plans);
-        Assert.Equal(["gen-large: context", "gen-large: context"], result.Escalations);
+        Assert.Empty(result.Plans);
+        Assert.Equal(["gen-large: context"], result.Escalations);
         Assert.Equal("gen-large", harness.Payloads().OfType<ToolCallIssued>().Single().Generator);
+        Assert.DoesNotContain(large.Calls, call => call.AllText.Contains("You are the architect", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Review_M1_a_hard_turn_that_asks_the_person_a_question_makes_no_plan_and_keeps_the_architect_request()
+    {
+        var small = new FakeGenerator() { Name = "small" };
+        var large = new FakeGenerator(Reply.Say("Which note file do you mean?")) { Name = "large" };
+        using var harness = Harness(small, large, Hard(key => key == "clarify" ? [0.9, 0.1] : null));
+        var runner = harness.Runner();
+        runner.Architect = ArchitectRequest.NextTurn;
+
+        var result = await harness.RunAsync(runner, "edit my note file: oat milk instead of milk");
+
+        Assert.Equal(TurnStatus.Clarifying, result.Status);
+        Assert.Empty(result.Plans);
+        // The question came from the escalated model (the escalation stays at ingress); no plan was asked for.
+        var asked = Assert.Single(large.Calls);
+        Assert.DoesNotContain("You are the architect", asked.AllText, StringComparison.Ordinal);
+        Assert.DoesNotContain(harness.Payloads().OfType<AssistantMessage>(), message => message.Plan is not null);
+        // The person's /architect waits for the turn that goes on.
+        Assert.Equal(ArchitectRequest.NextTurn, runner.Architect);
+    }
+
+    [Fact]
+    public async Task Review_M1_the_planner_sees_the_recalled_memory()
+    {
+        using var memory = new MemoryStore();
+        memory.Facts.Add(new Corvid.Memory.FactInput("The note file to edit is notes/todo.txt; the user drinks oat milk."));
+        var small = new FakeGenerator(Reply.Call("edit_note_file", EditArguments), Reply.Say("Edited.")) { Name = "small" };
+        var large = new FakeGenerator(Reply.Say(Plan)) { Name = "large" };
+        using var harness = new TurnHarness(small, escalation: large, calibrated: Hard(), options: Architect, prompter: FakePrompter.Always(true),
+            tools: tools => tools.Add(EditFile()))
+        {
+            Retriever = new Corvid.Memory.HybridRetriever(memory.Episodes, memory.Facts),
+        };
+
+        var result = await harness.RunAsync("edit my note file: oat milk instead of milk");
+
+        Assert.Single(result.Plans);
+        var planned = Assert.Single(large.Calls);
+        Assert.Contains("You are the architect", planned.LastText, StringComparison.Ordinal);
+        Assert.Contains("notes/todo.txt; the user drinks oat milk", planned.AllText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Review_M2_a_hard_question_in_a_coding_workspace_is_answered_by_the_escalated_model()
+    {
+        // The shortlist holds a tool that changes files, but the turn is answered directly: no tool is offered, so it is not
+        // a coding turn; the escalated model answers, with no plan and no hand-back.
+        var small = new FakeGenerator() { Name = "small" };
+        var large = new FakeGenerator(Reply.Say("Oat milk is made from oats.")) { Name = "large" };
+        using var harness = Harness(small, large, Hard(key => key == "intent" ? [0.9, 0.025, 0.025, 0.025, 0.025] : null));
+
+        var result = await harness.RunAsync("explain my note file: oat milk instead of milk");
+
+        Assert.Equal("Oat milk is made from oats.", result.Text);
+        Assert.Empty(result.Plans);
+        Assert.Empty(small.Calls);
+        Assert.Equal(["gen-large: difficulty"], result.Escalations);
+        Assert.Equal(["escalation", "de_escalation"], harness.Payloads().OfType<ModelSwitched>().Select(change => change.Reason));
+    }
+
+    [Fact]
+    public async Task Review_L6_a_model_switch_while_the_planner_writes_is_honoured_by_the_hand_back()
+    {
+        var small = new FakeGenerator() { Name = "small" };
+        var large = new FakeGenerator(Reply.Say(Plan)) { Name = "large" };
+        var other = new FakeGenerator(Reply.Call("edit_note_file", EditArguments), Reply.Say("Edited by the other model.")) { Name = "other" };
+        var planning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        large.BeforeReply = async (_, cancellationToken) =>
+        {
+            planning.TrySetResult();
+            await release.Task.WaitAsync(cancellationToken);
+        };
+        using var harness = Harness(small, large, Hard());
+        var otherBinding = new ModelBinding(TurnHarness.Profile("gen-other", ToolCallSupport.Native), other);
+        var turn = harness.RunAsync("edit my note file: oat milk instead of milk");
+        await planning.Task.WaitAsync(Ct);
+
+        // While the planner writes, the person picks another model for the session (/model).
+        await harness.Slots.SetSessionDefaultAsync(ModelSlots.Generator, otherBinding, cancellationToken: Ct);
+        release.TrySetResult();
+        var result = await turn.WaitAsync(Ct);
+
+        // The plan is handed to the model the person chose, not to the one the session had when planning started.
+        Assert.Equal(new TurnPlan("gen-large", "gen-other", "difficulty", 1), Assert.Single(result.Plans));
+        Assert.Empty(small.Calls);
+        Assert.Equal("Edited by the other model.", result.Text);
+        Assert.Equal("gen-other", harness.Payloads().OfType<ToolCallIssued>().Single().Generator);
+        Assert.Same(otherBinding, harness.Slots.Current(ModelSlots.Generator));
     }
 
     [Fact]

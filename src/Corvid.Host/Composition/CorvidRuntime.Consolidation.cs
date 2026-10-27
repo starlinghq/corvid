@@ -25,5 +25,12 @@ public sealed partial class CorvidRuntime
             Memory?.Consolidator?.Nudge();
     }
 
+    /// <summary>A message was posted: a sleep-time pass that is running stops, cancelling its rewrite in flight.</summary>
+    private void InterruptConsolidation()
+    {
+        if (_consolidating is not null)
+            Memory?.Consolidator?.Interrupt();
+    }
+
     private Task ConsolidationStopped() => _consolidating ?? Task.CompletedTask;
 }

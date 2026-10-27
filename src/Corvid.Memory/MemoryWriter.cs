@@ -176,7 +176,7 @@ public sealed class MemoryWriter
 
         // §10.3: with a calibrated decider the gate can write, so a write asked for in a tainted session never reaches it.
         if (request.Tainted)
-            return Stage(request.SessionId, PendingKind.Fact, Proposal(null), null, TaintedReason, neighbours, entities);
+            return Stage(request.SessionId, PendingKind.Fact, Proposal(null) with { Tainted = true }, null, TaintedReason, neighbours, entities);
 
         // 3. The gate.
         var instructions = Instructions(writer =>
@@ -262,11 +262,16 @@ public sealed class MemoryWriter
         var current = _blocks.Get(block);
         var proposal = new MemoryProposal(MemoryOperations.Update, null, null, [], null, null, [], block, content, current.Revision);
         var tokens = _blocks.CountTokens(content);
-        // Staged with the reason; the consolidation job (plan §9.5, BlockConsolidator) proposes a rewrite that fits.
-        if (tokens > current.BudgetTokens)
-            return Stage(sessionId, PendingKind.Block, proposal, null, $"over_budget: {tokens} of {current.BudgetTokens} tokens", [], []);
+        var overBudget = tokens > current.BudgetTokens ? $"over_budget: {tokens} of {current.BudgetTokens} tokens" : null;
+        // A7 review (security M1): taint first, so a tainted edit over the budget is staged as tainted, never as a routine
+        // over-budget edit the sleep-time job would fold into a rewrite that names neither its session nor its taint. The
+        // budget is said too, so the reviewer knows approving it as it stands would fail.
         if (tainted)
-            return Stage(sessionId, PendingKind.Block, proposal, null, TaintedReason, [], []);
+            return Stage(sessionId, PendingKind.Block, proposal with { Tainted = true }, null,
+                overBudget is null ? TaintedReason : TaintedReason + "; " + overBudget, [], []);
+        // Staged with the reason; the consolidation job (plan §9.5, BlockConsolidator) proposes a rewrite that fits.
+        if (overBudget is not null)
+            return Stage(sessionId, PendingKind.Block, proposal, null, overBudget, [], []);
 
         var instructions = Instructions(writer =>
         {
@@ -299,7 +304,10 @@ public sealed class MemoryWriter
     /// </summary>
     /// <param name="revision">The block revision the rewrite was made from; approving it after the block changed fails.</param>
     /// <param name="reason">Why it was staged, for the reviewer; prefixed with <see cref="ConsolidationReason"/>.</param>
-    /// <param name="supersedes">The staged edit the rewrite folds in, resolved when the rewrite is approved.</param>
+    /// <param name="supersedes">
+    /// The staged edit the rewrite folds in, resolved when the rewrite is approved. The edit's session and taint go onto the
+    /// proposal and into its reason ("folds in edit X from tainted session Y"), so the reviewer sees whose words it carries.
+    /// </param>
     /// <exception cref="ArgumentException">The persona block, or a rewrite over the block's budget; nothing was staged.</exception>
     public MemoryWriteResult StageConsolidation(string sessionId, string block, string content, long revision, string reason,
         string? supersedes = null)
@@ -320,7 +328,51 @@ public sealed class MemoryWriter
         var proposal = new MemoryProposal(MemoryOperations.Update, null, null, [], null, null, [], block, content, revision,
             Consolidation: true, Supersedes: supersedes);
         var why = reason.StartsWith(ConsolidationReason, StringComparison.Ordinal) ? reason : ConsolidationReason + ": " + reason;
+        if (supersedes is not null)
+        {
+            var edit = _pending.Get(supersedes);
+            var taintedEdit = edit is not null && IsTainted(edit);
+            proposal = proposal with { FoldsInSession = edit?.SessionId, Tainted = taintedEdit ? true : null };
+            why += edit is null ? $", folds in edit {supersedes}"
+                : $", folds in edit {supersedes} from {(taintedEdit ? "tainted " : "")}session {edit.SessionId}";
+        }
         return Stage(sessionId, PendingKind.Block, proposal, null, why, [], []);
+    }
+
+    /// <summary>
+    /// The write was asked for while its session held content from outside the user (plan §10.3), or folds in one that was:
+    /// it is staged with <see cref="TaintedReason"/> or marked <see cref="MemoryProposal.Tainted"/>.
+    /// </summary>
+    public static bool IsTainted(PendingWrite write)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+        return write.Proposal.Tainted == true || write.Reason.StartsWith(TaintedReason, StringComparison.Ordinal);
+    }
+
+    /// <summary>What the reason of a consolidation retired because its block changed starts with (A7 review).</summary>
+    public const string StaleReason = "stale";
+
+    /// <summary>
+    /// A7 review (depth M4): the consolidation of <paramref name="block"/> waiting for review, rejected as stale when the block
+    /// changed since it was made (its revision is not the block's), so it no longer blocks a new proposal and is never shown
+    /// against content it was not made from. Returns the rejected write, or null when none waits or the waiting one is current.
+    /// </summary>
+    public PendingWrite? RetireStaleConsolidation(string block, CancellationToken cancellationToken = default)
+    {
+        CoreBlockStore.CheckName(block);
+        var current = _blocks.Get(block);
+        if (PendingConsolidation(block) is not { } waiting || waiting.Proposal.BlockRevision == current.Revision)
+            return null;
+        try
+        {
+            return Reject(waiting.PendingId, $"{StaleReason}: the {block} block changed since the rewrite was made (revision "
+                + $"{waiting.Proposal.BlockRevision}, now {current.Revision})", cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            // Resolved meanwhile by a person: nothing to retire.
+            return null;
+        }
     }
 
     /// <summary>What the reason of every staged duplicate starts with (plan §9.5).</summary>
@@ -464,6 +516,17 @@ public sealed class MemoryWriter
             if (applied is MemoryOperations.Update or MemoryOperations.Invalidate
                 && (target is null || _facts.Get(target) is not { IsCurrent: true }))
                 throw new InvalidOperationException($"'{applied}' needs a current target fact.");
+            // A7 review (depth L3): ending a duplicate is right only while the fact it duplicates still holds; once that one
+            // was ended or replaced, ending this one too would lose the fact, so the staged ending is rejected instead.
+            if (pending.Reason.StartsWith(DuplicateReason, StringComparison.Ordinal) && applied == MemoryOperations.Invalidate
+                && (proposal.NeighbourIds.IsDefaultOrEmpty || _facts.Get(proposal.NeighbourIds[0]) is not { IsCurrent: true }))
+            {
+                var kept = proposal.NeighbourIds.IsDefaultOrEmpty ? "the fact it duplicates" : proposal.NeighbourIds[0];
+                Reject(pendingId, $"{StaleReason}: {kept} is no longer current, so this fact is not a duplicate of a current one",
+                    cancellationToken);
+                throw new InvalidOperationException(
+                    $"{kept} is no longer current, so ending its duplicate would lose the fact; the duplicate's ending was rejected.");
+            }
             var entities = proposal.Entities.IsDefault ? [] : proposal.Entities.Select(entity => entity.ToEntity()).ToImmutableArray();
             // Resolve first: two reviewers approving at once must not both write. If the graph refuses the write (the target
             // was invalidated since the check above), the write is reopened, so it is never marked approved unwritten.

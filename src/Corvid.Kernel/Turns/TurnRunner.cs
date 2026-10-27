@@ -616,10 +616,10 @@ public sealed partial class TurnRunner
                 delegates ? [FabricConditions.GeneratorSupportsDelegation] : []).ConfigureAwait(false);
             await LoadSkillAsync(verdicts, cancellationToken).ConfigureAwait(false);
 
-            if (Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed)
-                await EscalateAsync("difficulty", cancellationToken).ConfigureAwait(false);
-            // A7: a turn the person asked to plan (/architect) plans now.
-            await PlanOnRequestAsync(cancellationToken).ConfigureAwait(false);
+            // A7 review (depth M1): the escalation stays here, so a clarifying question is asked on the escalated model; the plan
+            // waits until the turn knows it goes on, after recall and the clarify decision (PlanBeforeLoopAsync).
+            var hard = Acted(verdicts, "difficulty", out _) && _options.EscalationAllowed
+                && await EscalateAsync("difficulty", cancellationToken, plan: false).ConfigureAwait(false);
             if (verdicts.Verdicts.ContainsKey("needs_recall"))
                 await RecallAsync(Acted(verdicts, "needs_recall", out _), cancellationToken).ConfigureAwait(false);
 
@@ -642,6 +642,10 @@ public sealed partial class TurnRunner
             if (delegates && Acted(verdicts, "delegate", out _) && _catalogue.TryGetValue(DelegateTaskTool.ToolName, out var delegation)
                 && !(offered ?? _shortlist).Any(tool => tool.Function.Name == DelegateTaskTool.ToolName))
                 offered = (offered ?? _shortlist).Add(delegation);
+            // A7: the plan (a hard coding turn under ArchitectEditor, or one the person asked for), now that recall has run,
+            // the turn is not a question back, and the tools it is offered are known.
+            _turnTools = offered ?? _shortlist;
+            await PlanBeforeLoopAsync(hard, cancellationToken).ConfigureAwait(false);
             return await LoopAsync(offered ?? _shortlist, cancellationToken).ConfigureAwait(false);
         }
 
@@ -2259,7 +2263,11 @@ public sealed partial class TurnRunner
             }
         }
 
-        private async Task<bool> EscalateAsync(string reason, CancellationToken cancellationToken)
+        /// <param name="plan">
+        /// A7: whether an architect/editor turn may plan now (<see cref="PlansOn"/>). False at ingress, where the plan waits
+        /// for <see cref="PlanBeforeLoopAsync"/>.
+        /// </param>
+        private async Task<bool> EscalateAsync(string reason, CancellationToken cancellationToken, bool plan = true)
         {
             // The policy governs every trigger (difficulty, stuck, repair, context), not only the ones the fabric is asked about.
             if (!_options.EscalationAllowed)
@@ -2270,7 +2278,7 @@ public sealed partial class TurnRunner
             runner.NoteBudgetChange(result);
             _escalations.Add($"{result.To!.Id}: {reason}");
             // A7: a coding turn under ArchitectEditor (or one the person asked to plan) plans on the escalated model and hands back.
-            if (PlansOn(reason))
+            if (plan && PlansOn(reason))
                 await PlanAsync(reason, cancellationToken).ConfigureAwait(false);
             return true;
         }

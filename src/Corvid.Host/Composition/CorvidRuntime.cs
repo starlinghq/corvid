@@ -636,6 +636,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         var messageId = Guid.NewGuid().ToString("N");
         var waiter = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
         _waiting[messageId] = waiter;
+        // A7 review (depth L2): the session goes busy: a sleep-time pass that is running gives way to the turn.
+        InterruptConsolidation();
         try
         {
             await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell, Images = images.IsDefault ? [] : images },

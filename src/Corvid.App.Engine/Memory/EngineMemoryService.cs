@@ -399,19 +399,29 @@ public sealed class EngineMemoryService : IMemoryService, IDisposable
         var proposed = proposal.Content ?? "";
         var added = Appended(current.Content, proposed);
         var replaces = proposal.Consolidation == true;
+        // A7 review (depth M4): a rewrite made from another revision of the block is stale. The store keeps no earlier
+        // revision to diff against, and a diff against the block now would show changes the rewrite does not make, so it is
+        // shown without one, marked stale, with only Reject offered; the sleep-time job retires it and proposes again.
+        var stale = replaces && proposal.BlockRevision is { } made && made != current.Revision;
         return new StagedBlockUpdate(write.PendingId, proposal.Block!)
         {
             // A consolidation replaces the whole block: shown as its lines against the block now.
             Replaces = replaces,
-            Diff = replaces ? [.. BlockDiff.Lines(current.Content, proposed).Select(line => new BlockDiffRow(line.Kind switch
+            Stale = stale,
+            Diff = replaces && !stale ? [.. BlockDiff.Lines(current.Content, proposed).Select(line => new BlockDiffRow(line.Kind switch
             {
                 BlockDiffKind.Added => BlockLineKind.Added,
                 BlockDiffKind.Removed => BlockLineKind.Removed,
                 _ => BlockLineKind.Kept,
             }, line.Text))] : [],
             StagedAt = write.CreatedAt,
-            StagedBy = write.SessionId,
-            Why = write.Reason,
+            // A7 review (security M1): a rewrite folding in a staged edit carries that edit's words, so it names its session;
+            // the reason says whether that session was tainted.
+            StagedBy = proposal.FoldsInSession is { } folded ? $"{write.SessionId}, folding in {folded}'s edit" : write.SessionId,
+            Why = stale
+                ? $"stale: the {proposal.Block} block changed since this rewrite was made (revision {proposal.BlockRevision}, now "
+                    + $"{current.Revision}); reject it, and the next pass proposes one from the block as it is · {write.Reason}"
+                : write.Reason,
             Context = added is null || replaces ? "" : LastLine(current.Content),
             Added = replaces ? proposed : added ?? proposed,
             TokensNow = store.CountTokens(current.Content),

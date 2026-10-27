@@ -253,6 +253,28 @@ public sealed class MemoryReviewTests
     }
 
     [Fact]
+    public async Task ReviewM4AStaleConsolidationCanOnlyBeRejected()
+    {
+        var service = new ScriptedMemoryService
+        {
+            Blocks = { new CoreBlock("user", 100, 350) { Text = "Line one." } },
+            BlockUpdates =
+            {
+                new StagedBlockUpdate("b-1", "user")
+                {
+                    Added = "Line.", Replaces = true, Stale = true, Why = "stale: the user block changed", TokensNow = 100, TokensAfter = 2, Budget = 350,
+                },
+            },
+        };
+        var memory = await Open(service);
+
+        var update = Assert.Single(memory.BlockUpdates);
+        Assert.False(update.ApproveCommand.CanExecute(null));
+        Assert.True(update.RejectCommand.CanExecute(null));
+        Assert.Equal("why staged: stale: the user block changed", update.Why);
+    }
+
+    [Fact]
     public async Task AFailedRecountIsShownAndTheBudgetStays()
     {
         var service = new ScriptedMemoryService
