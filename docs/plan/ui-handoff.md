@@ -838,7 +838,7 @@ Left:
   (the SDK caches) is writable by any sandboxed script or shell command, so it has the workspace's trust, as the shell's
   does.
 - Architect/editor: choosing the planner other than by the escalation ladder, a per-session editor choice, a calibrated
-  "coding task" question (the shortlist's file tools stand in).
+  "coding task" question (the offered tools that change files stand in, decided after the tool and intent verdicts).
 - Sleep-time jobs: the other §9.5 jobs, a `/journey` view over `MemoryJobRan` (Audit shows them), a CLI verb for the
   dedupe, declined rewrites remembered across restarts. Consolidate saw, in two short-lived CLI drives, the idle pass's
   2 s delay not complete before the CLI exited (not diagnosed; a longer drive ran it).
