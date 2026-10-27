@@ -178,6 +178,60 @@ public sealed class ScratchTests
         Assert.Equal(["/secret"], BubblewrapSandbox.HidingScratch(policy, withTmp).DeniedPaths);
     }
 
+    // A7 review (security L6): the sandbox's own /tmp (or its hidden runtime directory) covers the root only while the policy
+    // binds nothing above it; a /tmp workspace or read-only path, or one of / itself, would show it, so it is denied then.
+    [Fact]
+    public void The_private_root_is_denied_when_the_policy_binds_a_directory_above_it()
+    {
+        using var runtime = new TempDirectory();
+        var withTmp = new Dictionary<string, string> { ["TMPDIR"] = "/tmp" };
+        var withRuntime = new Dictionary<string, string> { ["XDG_RUNTIME_DIR"] = runtime.Path };
+        var root = SandboxScratch.Root(withTmp);
+
+        Assert.Equal(root, SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/tmp"), withTmp));
+        Assert.Equal(root, SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/tmp/"), withTmp));
+        Assert.Equal(root, SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/"), withTmp));
+        Assert.Equal(root, SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/w") with { ReadOnlyPaths = ["/tmp"] }, withTmp));
+        Assert.Equal(SandboxScratch.Root(withRuntime), SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace(runtime.Path), withRuntime));
+        // A workspace beside the root, or inside /tmp but not above the root, leaves it to the sandbox's own /tmp.
+        Assert.Null(SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/tmp/project"), withTmp));
+        Assert.Null(SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace(root + "-other"), withTmp));
+        Assert.Null(SandboxScratch.DeniedRoot(SandboxPolicy.ForWorkspace("/w"), withRuntime));
+        Assert.Equal([root], BubblewrapSandbox.HidingScratch(SandboxPolicy.ForWorkspace("/tmp"), withTmp).DeniedPaths);
+    }
+
+    // A7 review (L5): a run killed before its cleanup leaves its directory; the root sheds run directories older than a day
+    // and nothing else.
+    [Fact]
+    public void Run_directories_left_for_more_than_a_day_are_removed_and_nothing_else_is()
+    {
+        using var runtime = new TempDirectory();
+        var environment = new Dictionary<string, string> { ["XDG_RUNTIME_DIR"] = runtime.Path };
+        var root = SandboxScratch.EnsureRoot(environment);
+        var old = DateTime.UtcNow - TimeSpan.FromDays(2);
+        string Made(string name, DateTime written)
+        {
+            var path = Path.Combine(root, name);
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "tools.token"), "x");
+            Directory.SetLastWriteTimeUtc(path, written);
+            return path;
+        }
+        var staleCode = Made("code-0123456789ab", old);
+        var staleSandbox = Made("corvid-sandbox-0123456789ab", old);
+        var staleCustom = Made("corvid-code-0123456789abcdef", old);
+        var fresh = Made("code-ba9876543210", DateTime.UtcNow);
+        var other = Made("someone-elses", old);
+
+        SandboxScratch.EnsureRoot(environment);
+
+        Assert.False(Directory.Exists(staleCode));
+        Assert.False(Directory.Exists(staleSandbox));
+        Assert.False(Directory.Exists(staleCustom));
+        Assert.True(Directory.Exists(fresh));
+        Assert.True(Directory.Exists(other));
+    }
+
     [Fact]
     public void A_runs_directory_is_private_and_under_the_root()
     {

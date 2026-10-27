@@ -26,6 +26,19 @@ public sealed class ConfigurationTests
     [Fact]
     public void ValidConfigurationPasses() => Assert.True(Validate(_ => { }).Succeeded);
 
+    // A7 review (security L4): code mode's allowlist cannot name a tool no script may call.
+    [Fact]
+    public void CodeModesAllowlistRefusesToolsNoScriptMayCall()
+    {
+        var result = Validate(options => options.Tools.Code.Tools = ["read_file", "delegate_task", "memory_add", "cron_create"]);
+
+        Assert.False(result.Succeeded);
+        var failure = Assert.Single(result.Failures!, failure => failure.Contains("Corvid:Tools:Code:Tools", StringComparison.Ordinal));
+        Assert.Contains("delegate_task, memory_add, cron_create", failure, StringComparison.Ordinal);
+        Assert.DoesNotContain("read_file", failure, StringComparison.Ordinal);
+        Assert.True(Validate(options => options.Tools.Code.Tools = ["read_file", "write_file"]).Succeeded);
+    }
+
     [Theory]
     // corvid serve (C-019): loopback by default; any other address only with a Vault token secret.
     [InlineData("http://127.0.0.1:8411", null, true)]

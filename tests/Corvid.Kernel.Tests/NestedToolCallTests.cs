@@ -319,4 +319,55 @@ public sealed class NestedToolCallTests
         Assert.Contains("not run", ((ToolResult)child.Payload).Result.GetRawText(), StringComparison.Ordinal);
         await Assert.ThrowsAsync<InvalidOperationException>(() => kept!.InvokeToolAsync("list_notes", Json("{}"), Ct));
     }
+
+    // A7 review (security L5): the step's tool filter (code mode's: never for an in-process generator) holds for a nested
+    // call too, so a tool the filter withholds now is not reached through a script.
+    [Fact]
+    public async Task A_nested_call_to_a_tool_the_filter_withholds_now_is_refused()
+    {
+        var allowed = true;
+        NestedToolResult added = null!;
+        var script = Script(async (context, token) =>
+        {
+            // The generator changed during the step: the filter now withholds add_note.
+            allowed = false;
+            added = await context.InvokeToolAsync("add_note", Json("""{"text":"filtered"}"""), token);
+            return "script done";
+        });
+        using var harness = Harness(Generator(), FakePrompter.Always(approve: true), tools => tools.Add(script),
+            new TurnOptions { ToolFilter = tool => tool.Name != "add_note" || allowed });
+
+        await harness.RunAsync("run the weather script");
+
+        Assert.True(added.IsError);
+        Assert.Contains("is not one of the tools this turn may use", added.Result.GetRawText(), StringComparison.Ordinal);
+        Assert.Empty(harness.Notes.Notes);
+    }
+
+    // A7 review (security L4): a tool that delegates, asks, writes memory, sends or schedules is never called by a script,
+    // even when the turn offers it and the code tool's allowlist names it.
+    [Fact]
+    public async Task A_nested_call_to_a_denied_tool_is_refused_and_never_runs()
+    {
+        var ran = false;
+        var memory = TestTool.Create("memory_add", "Stage a memory.", new ToolRisk(SideEffects.None, false, false),
+            """{"type":"object","properties":{}}""", (_, _) =>
+            {
+                ran = true;
+                return ValueTask.FromResult<object?>("staged");
+            });
+        NestedToolResult added = null!;
+        var script = Script(async (context, token) =>
+        {
+            added = await context.InvokeToolAsync("memory_add", Json("{}"), token);
+            return "script done";
+        });
+        using var harness = Harness(Generator(), FakePrompter.Always(approve: true), tools => { tools.Add(script); tools.Add(memory); });
+
+        await harness.RunAsync("run the weather script");
+
+        Assert.True(added.IsError);
+        Assert.Contains("cannot be called from inside another tool", added.Result.GetRawText(), StringComparison.Ordinal);
+        Assert.False(ran);
+    }
 }

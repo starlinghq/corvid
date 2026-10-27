@@ -199,6 +199,34 @@ public sealed class LearningTests
         Assert.Empty(harness.Store.Skills);
     }
 
+    // A7 review (M2): a code run's nested calls are part of its parent's run; the replay expects the model's calls only.
+    [Fact]
+    public async Task AReplayExpectsTheModelsCallsNotTheNestedCallsOfItsScripts()
+    {
+        using var harness = new LearningHarness(new FakeGenerator(), LearningHarness.ReplayScript("list_notes", "list_notes", "list_notes"));
+        static JsonElement Value(string text) => JsonDocument.Parse(text).RootElement.Clone();
+        var events = new List<SessionEvent> { new UserMessage(LearningHarness.Request) };
+        for (var i = 1; i <= 3; i++)
+        {
+            events.Add(new ToolCallIssued($"c{i}", "list_notes", Value("{}")));
+            if (i == 1)
+            {
+                events.Add(new ToolCallIssued("c1.1", "add_note", Value("""{"text":"x"}"""), ParentCallId: "c1"));
+                events.Add(new ToolResult("c1.1", Value("\"added\"")));
+            }
+            events.Add(new ToolResult($"c{i}", Value($"\"note {i}\"")));
+        }
+        events.Add(new AssistantMessage("You have three notes."));
+        var stored = harness.Turns.Log.Append(TurnHarness.Session, harness.Turns.Log.GetHead(TurnHarness.Session, Token), [.. events.Select(EventData.Create)], Token);
+        var draft = SkillDocument.Parse(SkillDocument.Compose("review-notes", "Use when asked to review the notes.", "1. Call list_notes three times."));
+
+        var outcome = await harness.Replayer.ReplayAsync(harness.Turns.Log, TurnHarness.Session, stored[0].Sequence, stored[^1].Sequence, draft, Token);
+
+        Assert.True(outcome.Passed, outcome.Detail);
+        Assert.Equal(["list_notes", "list_notes", "list_notes"], outcome.Expected);
+        Assert.Equal(outcome.Expected, outcome.Actual);
+    }
+
     [Fact]
     public async Task ADraftWhoseReplayCallsOtherToolsFailsAndIsNeverStaged()
     {

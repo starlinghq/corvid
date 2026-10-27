@@ -117,13 +117,13 @@ internal sealed class WorkspaceComposer(CorvidOptions settings, VaultLocations v
     /// </summary>
     internal static CodeClient GeneratedClient(CodeLanguage language, IReadOnlyList<Corvid.Tools.CodeMode.CodeModeTool> tools)
     {
-        var (prefix, suffix) = Corvid.Tools.CodeMode.CodeModeClients.Inline(language switch
+        var generated = language switch
         {
             CodeLanguage.Python => Corvid.Tools.CodeMode.CodeModeLanguage.Python,
             CodeLanguage.JavaScript => Corvid.Tools.CodeMode.CodeModeLanguage.JavaScript,
             _ => Corvid.Tools.CodeMode.CodeModeLanguage.CSharp,
-        }, tools);
-        return new CodeClient(prefix, suffix);
+        };
+        return new CodeClient(script => Corvid.Tools.CodeMode.CodeModeClients.Program(generated, tools, script));
     }
 
     /// <summary>A7: <c>execute_code</c> for a workspace's shell, describing tools from <paramref name="registry"/>; null when off.</summary>

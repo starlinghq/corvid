@@ -110,8 +110,11 @@ public sealed partial class TurnRunner
                 try
                 {
                     var tool = _catalogue.GetValueOrDefault(name);
-                    var refusal = tool is null ? $"'{name}' is not one of the tools this turn may use"
+                    // A7 review (security L5): the step's tool filter holds for a nested call as for the model's own.
+                    var refusal = tool is null || !FilterKeeps(tool) ? $"'{name}' is not one of the tools this turn may use"
                         : tool.Function is AskUserTool ? $"'{name}' cannot be called from inside another tool"
+                        // A7 review (security L4): tools no script may call, whatever the code tool's allowlist says.
+                        : Corvid.Tools.CodeMode.CodeModeCatalog.Denied.Contains(name) ? $"'{name}' cannot be called from inside another tool"
                         : string.Equals(name, nested.Parent.Tool.Function.Name, StringComparison.Ordinal) ? $"'{name}' cannot call itself"
                         : !objectArguments ? "the arguments must be a JSON object"
                         : null;

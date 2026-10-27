@@ -183,7 +183,7 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
         var environment = new Dictionary<string, string>(StringComparer.Ordinal);
         IReadOnlyDictionary<string, string> source = _options.Environment ?? CurrentEnvironment();
         // A long-lived command must have the root hidden from the start, before any run makes it.
-        if (SandboxScratch.DeniedRoot(source) is not null)
+        if (SandboxScratch.DeniedRoot(policy, source) is not null)
             SandboxScratch.EnsureRoot(source);
         policy = HidingScratch(policy, source);
         foreach (string name in policy.Environment.Concat(LauncherEnvironment).Distinct(StringComparer.Ordinal))
@@ -196,11 +196,11 @@ public sealed class BubblewrapSandbox(SandboxOptions? options = null) : ISandbox
     }
 
     /// <summary>
-    /// A7V1-2: the policy with <see cref="SandboxScratch.DeniedRoot"/> denied when there is one, so this command cannot see
+    /// A7V1-2: the policy with <see cref="SandboxScratch.DeniedRoot(SandboxPolicy?, IReadOnlyDictionary{string, string}?)"/> denied when there is one, so this command cannot see
     /// another run's status directory (its tools token, its proxy CA) or code mode's tools socket.
     /// </summary>
     internal static SandboxPolicy HidingScratch(SandboxPolicy policy, IReadOnlyDictionary<string, string> environment) =>
-        SandboxScratch.DeniedRoot(environment) is { } root && !policy.DeniedPaths.Contains(root, StringComparer.Ordinal)
+        SandboxScratch.DeniedRoot(policy, environment) is { } root && !policy.DeniedPaths.Contains(root, StringComparer.Ordinal)
             ? policy with { DeniedPaths = policy.DeniedPaths.Add(root) }
             : policy;
 

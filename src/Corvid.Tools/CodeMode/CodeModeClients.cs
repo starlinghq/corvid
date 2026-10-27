@@ -66,20 +66,50 @@ public static class CodeModeClients
     };
 
     /// <summary>
-    /// The client as text placed around a script that runs as one file (code mode's runner reads the script from standard
-    /// input): for Python the client's definitions before the script, with the module also importable as
-    /// <c>corvid_tools</c> and named <c>corvid</c>; for JavaScript (an ES module) one constant <c>corvid</c> before the script
-    /// holding every wrapper, so no name of the script's can collide with the client's; for C# the client's classes after
-    /// the top-level statements. Tool calls read <c>corvid.read_file(…)</c> in Python and <c>await corvid.read_file(…)</c>
-    /// in JavaScript; <c>await CorvidTools.ReadFileAsync(…)</c> in C#.
+    /// The program code mode's runner gives the runtime on standard input: <paramref name="script"/> with its client, the
+    /// script's own lines keeping their numbers, so an error names the line the model wrote. The script reaches the client
+    /// as <c>corvid</c> and cannot rebind anything the client's wrappers use (A7 review M1):
+    /// <list type="bullet">
+    /// <item>Python: the client runs as a module of its own (also importable as <c>corvid_tools</c>), then the script,
+    /// compiled as <c>script.py</c> in a namespace that holds only <c>corvid</c>. Both travel base64-encoded, so no character
+    /// of the script is read as the bootstrap's syntax, and a script's <c>from __future__</c> imports stay at its top. The
+    /// runner starts Python with <c>-I</c>, so nothing in the working directory shadows a module the client imports.</item>
+    /// <item>JavaScript (an ES module): <c>import * as corvid from "data:…"</c> on the script's first line, the client a
+    /// module of its own.</item>
+    /// <item>C#: the script, then the client's classes after the top-level statements.</item>
+    /// </list>
+    /// Tool calls read <c>corvid.read_file(…)</c> in Python and <c>await corvid.read_file(…)</c> in JavaScript;
+    /// <c>await CorvidTools.ReadFileAsync(…)</c> in C#.
     /// </summary>
-    public static (string Prefix, string Suffix) Inline(CodeModeLanguage language, IReadOnlyList<CodeModeTool> tools) => language switch
+    public static string Program(CodeModeLanguage language, IReadOnlyList<CodeModeTool> tools, string script)
     {
-        CodeModeLanguage.CSharp => ("", "\n\n" + CSharp(tools)),
-        CodeModeLanguage.Python => (Python(tools) + PythonInlineTail + "\n\n", ""),
-        CodeModeLanguage.JavaScript => (JavaScript(tools, inline: true) + "\n", ""),
-        _ => throw new ArgumentOutOfRangeException(nameof(language), language, "not a code mode language"),
-    };
+        ArgumentNullException.ThrowIfNull(tools);
+        ArgumentNullException.ThrowIfNull(script);
+        return language switch
+        {
+            CodeModeLanguage.CSharp => script + "\n\n" + CSharp(tools),
+            CodeModeLanguage.Python => string.Format(CultureInfo.InvariantCulture, PythonBootstrap, Base64(Python(tools)), Base64(script)),
+            CodeModeLanguage.JavaScript => "import * as corvid from \"data:text/javascript;base64," + Base64(JavaScript(tools)) + "\";" + script,
+            _ => throw new ArgumentOutOfRangeException(nameof(language), language, "not a code mode language"),
+        };
+    }
+
+    private static string Base64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+
+    // The client as the module corvid_tools, then the script as script.py in a namespace holding only corvid. The script's
+    // source is registered with linecache, so a traceback quotes its own lines (never a workspace file named script.py).
+    private const string PythonBootstrap = """
+        import base64 as _b, linecache as _l, sys as _s, types as _t
+        _m = _t.ModuleType("corvid_tools")
+        exec(compile(_b.b64decode("{0}").decode("utf-8"), "corvid_tools.py", "exec", dont_inherit=True), _m.__dict__)
+        _s.modules["corvid_tools"] = _m
+        _c = _b.b64decode("{1}").decode("utf-8")
+        _l.cache["script.py"] = (len(_c), None, _c.splitlines(True), "script.py")
+        _g = {{"__name__": "__main__", "__builtins__": __builtins__, "corvid": _m}}
+        del _b, _l, _s, _t, _m
+        exec(compile(_c, "script.py", "exec", dont_inherit=True), _g)
+
+        """;
 
     /// <summary>
     /// A C# script with its client: the script as written, then the client's classes (a file-based app's type declarations
@@ -300,7 +330,8 @@ public static class CodeModeClients
                 else
                     text.Append("    if ").Append(name).Append(" is not None:\n        _corvid_args[").Append(Literal(parameter.Wire)).Append("] = ")
                         .Append(name).Append('\n');
-            text.Append("    return call(").Append(Literal(tool.Name)).Append(", _corvid_args)\n");
+            // The private client, never the module's call, which a script may rebind (corvid.call = …).
+            text.Append("    return _corvid_client.call(").Append(Literal(tool.Name)).Append(", _corvid_args)\n");
         }
         text.Append("\n\ntools = {\n");
         foreach (var (wire, function) in table)
@@ -324,19 +355,6 @@ public static class CodeModeClients
         }
         return doc.ToString();
     }
-
-    // Inline (one file): the definitions above are also the module corvid_tools, and the name corvid.
-    private const string PythonInlineTail = """
-
-        import sys as _corvid_sys
-        import types as _corvid_types
-
-        corvid = _corvid_types.ModuleType("corvid_tools")
-        for _corvid_name in __all__:
-            setattr(corvid, _corvid_name, globals()[_corvid_name])
-        _corvid_sys.modules["corvid_tools"] = corvid
-        del _corvid_name
-        """;
 
     private const string PythonRuntime = """
         import json as _corvid_json
@@ -373,7 +391,11 @@ public static class CodeModeClients
                 with open(token_file, "r", encoding="utf-8") as f:
                     token = f.read().strip()
                 sock = _corvid_socket.socket(_corvid_socket.AF_UNIX, _corvid_socket.SOCK_STREAM)
-                sock.connect(path)
+                try:
+                    sock.connect(path)
+                except BaseException:
+                    sock.close()
+                    raise
                 self._sock = sock
                 self._file = sock.makefile("rb")
                 hello = self._exchange({"token": token, "v": 1})
@@ -384,12 +406,17 @@ public static class CodeModeClients
                 self.limits = hello.get("limits")
 
             def _exchange(self, message):
-                self._sock.sendall(_corvid_json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n")
-                line = self._file.readline()
-                if not line:
+                # An exchange cut short (an interrupt, a bad line) leaves its answer unread: the connection is closed, so the
+                # next call never reads it as its own.
+                try:
+                    self._sock.sendall(_corvid_json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n")
+                    line = self._file.readline()
+                    if not line:
+                        raise CorvidToolError("closed", "the host closed the tools socket")
+                    return _corvid_json.loads(line.decode("utf-8"))
+                except BaseException:
                     self._close()
-                    raise CorvidToolError("closed", "the host closed the tools socket")
-                return _corvid_json.loads(line.decode("utf-8"))
+                    raise
 
             def _close(self):
                 for item in (self._file, self._sock):
@@ -407,12 +434,16 @@ public static class CodeModeClients
                         self._connect()
                     self._next += 1
                     response = self._exchange({"id": self._next, "tool": tool, "args": args if args is not None else {}})
+                    # The answer to another request (null only for a request the host could not read).
+                    if response.get("id") is not None and response.get("id") != self._next:
+                        self._close()
+                        raise CorvidToolError("closed", "the host answered another request; the tools socket was closed")
                     self.last_tainted = bool(response.get("tainted", False))
                     if response.get("ok"):
                         return response.get("result")
                     error = response.get("error") or {}
                     code = error.get("code", "tool_error")
-                    if code == "closed":
+                    if code in ("closed", "unauthorized"):
                         self._close()
                     raise CorvidToolError(code, error.get("message", ""), error.get("detail"), self.last_tainted)
 
@@ -458,20 +489,14 @@ public static class CodeModeClients
     /// The JavaScript client: the ES module <see cref="JavaScriptFileName"/> for Node, built-ins only. Every wrapper returns
     /// a promise; required parameters are positional and the optional ones go in a last object by their descriptor names.
     /// </summary>
-    public static string JavaScript(IReadOnlyList<CodeModeTool> tools) => JavaScript(tools, inline: false);
-
-    private static string JavaScript(IReadOnlyList<CodeModeTool> tools, bool inline)
+    public static string JavaScript(IReadOnlyList<CodeModeTool> tools)
     {
         ArgumentNullException.ThrowIfNull(tools);
         var text = new StringBuilder();
         text.Append(Header("//"));
         text.Append(JavaScriptImports);
-        // Inline, everything is inside one function whose result is the constant corvid: nothing else is declared at the
-        // script's top level but the two imports' private names.
-        var export = inline ? "" : "export ";
-        if (inline)
-            text.Append("\nconst corvid = (() => {\n");
-        text.Append(inline ? JavaScriptRuntime.Replace("\nexport ", "\n", StringComparison.Ordinal) : JavaScriptRuntime);
+        const string export = "export ";
+        text.Append(JavaScriptRuntime);
         var functions = new HashSet<string>(StringComparer.Ordinal);
         var table = new List<(string Wire, string Function)>();
         foreach (var tool in tools)
@@ -495,12 +520,7 @@ public static class CodeModeClients
         foreach (var (wire, function) in table)
             text.Append("  ").Append(Literal(wire)).Append(": ").Append(function).Append(",\n");
         text.Append("});\n");
-        if (!inline)
-            return text.Append("\nexport default tools;\n").ToString();
-        text.Append("\nreturn Object.freeze({ call, limits, lastCallTainted, close, tools, CorvidToolError");
-        foreach (var (_, function) in table)
-            text.Append(", ").Append(function);
-        return text.Append(" });\n})();\n").ToString();
+        return text.Append("\nexport default tools;\n").ToString();
     }
 
     private const string JavaScriptImports = """
@@ -577,6 +597,10 @@ public static class CodeModeClients
             try {
               this.socket.write(JSON.stringify(message) + "\n");
               return JSON.parse(await this.readLine());
+            } catch (error) {
+              // An exchange cut short leaves its answer unread: the connection is closed, so the next call never reads it.
+              this.close();
+              throw error;
             } finally {
               // An idle connection must not keep the script running.
               if (this.socket !== null) this.socket.unref();
@@ -623,11 +647,17 @@ public static class CodeModeClients
             // One request at a time: the host answers each before it reads the next.
             const run = this.chain.then(async () => {
               if (this.socket === null) await this.connect();
-              const response = await this.exchange({ id: ++this.next, tool, args: args ?? {} });
+              const id = ++this.next;
+              const response = await this.exchange({ id, tool, args: args ?? {} });
+              // The answer to another request (null only for a request the host could not read).
+              if (response.id !== null && response.id !== undefined && response.id !== id) {
+                this.close();
+                throw new CorvidToolError("closed", "the host answered another request; the tools socket was closed");
+              }
               this.lastTainted = response.tainted === true;
               if (response.ok) return response.result;
               const error = response.error || {};
-              if (error.code === "closed") this.close();
+              if (error.code === "closed" || error.code === "unauthorized") this.close();
               throw new CorvidToolError(error.code || "tool_error", error.message || "", error.detail, this.lastTainted);
             });
             this.chain = run.catch(() => undefined);
@@ -837,20 +867,39 @@ public static class CodeModeClients
                     if (__stream is null)
                         await __ConnectAsync(cancellationToken).ConfigureAwait(false);
                     var id = ++__next;
-                    using var response = await __ExchangeAsync(writer =>
+                    global::System.Text.Json.JsonDocument response;
+                    try
                     {
-                        writer.WriteNumber("id", id);
-                        writer.WriteString("tool", tool);
-                        writer.WriteStartObject("args");
-                        arguments?.Invoke(writer);
-                        writer.WriteEndObject();
-                    }, cancellationToken).ConfigureAwait(false);
+                        response = await __ExchangeAsync(writer =>
+                        {
+                            writer.WriteNumber("id", id);
+                            writer.WriteString("tool", tool);
+                            writer.WriteStartObject("args");
+                            arguments?.Invoke(writer);
+                            writer.WriteEndObject();
+                        }, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // An exchange cut short (cancelled, a bad line) leaves its answer unread: the connection is closed, so
+                        // the next call never reads it as its own.
+                        __Close();
+                        throw;
+                    }
+                    using var __response = response;
                     var root = response.RootElement;
+                    // The answer to another request (null only for a request the host could not read).
+                    if (root.TryGetProperty("id", out var answered) && answered.ValueKind != global::System.Text.Json.JsonValueKind.Null
+                        && !(answered.ValueKind == global::System.Text.Json.JsonValueKind.Number && answered.TryGetInt64(out var number) && number == id))
+                    {
+                        __Close();
+                        throw new CorvidToolException("closed", "the host answered another request; the tools socket was closed");
+                    }
                     LastCallTainted = root.TryGetProperty("tainted", out var tainted) && tainted.ValueKind == global::System.Text.Json.JsonValueKind.True;
                     if (root.TryGetProperty("ok", out var ok) && ok.ValueKind == global::System.Text.Json.JsonValueKind.True)
                         return root.TryGetProperty("result", out var result) ? result.Clone() : default;
                     var (code, message, detail) = __Error(root);
-                    if (code == "closed")
+                    if (code is "closed" or "unauthorized")
                         __Close();
                     throw new CorvidToolException(code, message, detail, LastCallTainted);
                 }
@@ -899,11 +948,22 @@ public static class CodeModeClients
                 __socket = socket;
                 __stream = new global::System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
                 __start = __end = 0;
-                using var hello = await __ExchangeAsync(writer =>
+                global::System.Text.Json.JsonDocument answer;
+                try
                 {
-                    writer.WriteString("token", token);
-                    writer.WriteNumber("v", 1);
-                }, cancellationToken).ConfigureAwait(false);
+                    answer = await __ExchangeAsync(writer =>
+                    {
+                        writer.WriteString("token", token);
+                        writer.WriteNumber("v", 1);
+                    }, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // A hello cut short: never a half-open connection the next call would use.
+                    __Close();
+                    throw;
+                }
+                using var hello = answer;
                 var root = hello.RootElement;
                 if (!root.TryGetProperty("ok", out var ok) || ok.ValueKind != global::System.Text.Json.JsonValueKind.True)
                 {

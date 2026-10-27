@@ -4456,14 +4456,18 @@ Frozen at version 1; `Corvid.Tools.CodeMode` implements the host side (`CodeMode
   the turn takes a checkpoint before it, as for an unparsed shell command.
 - **The run.** The shell's policy for the workspace (its denials, its read-only paths, Vault's locations) with
   `Network = false`, `Proxy = null` whatever `Corvid:Tools:ShellNetwork` says, and `SandboxTools(socket, token)`. The
-  socket is in a fresh 0700 directory under the temp directory (listed in `DeniedPaths` when that is not `/tmp` or `/run`),
-  listening before the script starts and deleted after; the token is `CodeModeProtocol.NewToken()`, written only by the
-  sandbox. The source goes on standard input, never on a command line or into the workspace: `python3 -E -s -B -`,
+  socket is in a fresh 0700 directory under `SandboxScratch`'s private root (listed in `DeniedPaths` when the sandbox
+  would not hide it anyway, and also whenever the policy binds the root or a directory above it, such as a `/tmp`
+  workspace: A7 review), listening before the script starts and deleted after (best effort; the root drops `code-*` and
+  `corvid-sandbox-*` directories more than a day old, which a killed run leaves); the token is
+  `CodeModeProtocol.NewToken()`, written only by the sandbox. The source goes on standard input, never on a command line
+  or into the workspace: `python3 -I -B -` (isolated: neither the working directory nor the user's site is on
+  `sys.path`, so a workspace's `json.py` never shadows the client's imports),
   `node --input-type=module -` (an ES module), and for C# a fixed `/bin/sh` wrapper that writes it to the sandbox's own
   `/tmp/corvid-code/Program.cs` beside stub `Directory.Build.props` (`PublishAot=false`), `Directory.Build.targets`,
   `Directory.Packages.props` and a `nuget.config` that clears every source, builds from there (the build's output
   reaches stderr only when it fails), then runs the built `Program.dll` through the host with the workspace as its
-  working directory. Outside the workspace, so a repository's own build files and `global.json` are never read. A `#:` directive (package, SDK, project, property) is refused before anything runs. The SDK's caches (`DOTNET_CLI_HOME`,
+  working directory. Outside the workspace, so a repository's own build files and `global.json` are never read. A `#:` directive (package, SDK, project, property) is refused before anything runs, on any line as Roslyn ends lines (`\n`, a lone `\r`, U+0085, U+2028, U+2029) after any white space. A built app is not cached between runs: `.corvid/code` is writable by every sandboxed command, so a cache there could hand one script's planted build to the next run. The SDK's caches (`DOTNET_CLI_HOME`,
   `NUGET_PACKAGES`) are under `<workspace>/.corvid/code/dotnet`, written by the sandbox alone, with a `.gitignore` of `*`;
   `XDG_DATA_HOME` and `XDG_RUNTIME_DIR` point into the sandbox's `/tmp` (file-based apps' build cache; named mutexes).
   Runtimes are found once by absolute path (`python3`, `node` on PATH; `dotnet` as `$DOTNET_ROOT/dotnet`, PATH or
@@ -4471,26 +4475,34 @@ Frozen at version 1; `Corvid.Tools.CodeMode` implements the host side (`CodeMode
   refuses its language. `corvid doctor` has a `code` row per runtime.
 - **The tools socket.** One `CodeModeSession` per run over `CodeModeCatalog.Describe(registry, context.OfferedTools,
   Corvid:Tools:Code:Tools)` (default: the file tools, `shell`, `web_fetch`, memory search) and the parent call's invoker,
-  so every request takes the turn's path (approval per call, checkpoint, scrub, taint, egress, lease). At most 8
-  connections at once; when the script exits the server stops, cancels any call still running and waits for it, so each
-  nested call has its result before the parent's.
+  so every request takes the turn's path (approval per call, checkpoint, scrub, taint, egress, lease, and the step's tool
+  filter). `CodeModeCatalog.Denied` (`delegate_task`, `execute_code`, `skill_run_script`, `ask_user`, the memory writes,
+  `send_message`, the `cron_*` changes) is never callable from a script: the options validator refuses it in the
+  allowlist, `Describe` leaves it out and the turn refuses a nested call to it. At most 8 connections at once; a
+  connection whose serving throws ends alone (the run's stderr gets a `[corvid] the tools socket failed: …` line), and
+  when the script exits the server stops (never throwing, so the run's output survives), cancels any call still running
+  and waits for it, so each nested call has its result before the parent's.
 - **Limits** (`Corvid:Tools:Code`, Hermes' defaults): `TimeoutSeconds` 300 (wall clock, enforced by a sandbox of its own
   whose `SandboxOptions.Timeout` it is; the time a call waits for its approval counts, so a script whose call is still
-  awaiting a person at the limit is stopped and that prompt is cancelled), `MaxCalls` 50 (on the host, `call_limit`),
+  awaiting a person at the limit is stopped and that prompt is cancelled; the prompt's deadline is the run's end,
+  `ValidCall.NotAfter`), `MaxCalls` 50 (on the host, `call_limit`),
   `MaxStdoutBytes` 50 000 and `MaxStderrBytes` 10 000 (the middle of longer output is cut, by UTF-8 bytes).
 - **Result.** `{"language","exit_code","stdout","stderr","timed_out"?,"error"?,"output_truncated"?,"tool_calls",
   "calls":[{"call_id","tool","ok","tainted"}],"tainted"}`. `tainted` is true when any result the script received was
   outside content; the kernel then marks the parent's result tainted too (asked `injection`, taints the session).
 - **Offered** only while the session's generator is a cloud or local-server model (plan §15): `CorvidRuntime` sets
   `TurnOptions.ToolFilter` to `CodeModeFilter(slots)`, read at each turn's start, so a `/model` switch to an in-process
-  model withdraws it from the next turn, and a call to it is refused as not offered. The client the script is run with plugs
-  in as `CodeToolOptions.Clients` (`CodeClientFactory`: a prefix and a suffix around the source); the composed runtime sets
+  model withdraws it from the next turn, and a call to it is refused as not offered. A `/model` switch asked for while a
+  code run's nested call waits on its approval waits for that call like any running call: until the person answers or
+  the run's time limit denies it (`NotAfter`), at most `TimeoutSeconds`. The client the script is run with plugs
+  in as `CodeToolOptions.Clients` (`CodeClientFactory`: the program made of the source); the composed runtime sets
   it to the generated clients ([where the A7 groups meet](#code-mode-where-the-a7-groups-meet)), and an editor model that
   runs in process withholds the tool too.
 - **Tests.** `CodeToolTests` (the analysis, the refusals, the policy and command handed to the sandbox),
   `CodeConfinementTests` (Python under the real launcher, CI-pinned: tool calls through the invoker, a call waiting on
-  its approval, a tainting result, the call budget, output caps, the time limit, no network even to the host's loopback,
-  the shell's denials, a wrong token), `CodeLanguageTests` (JavaScript, and C# beside a poisoned `Directory.Build.props` and `global.json`, run twice;
+  its approval, a tainting result, the call budget, output caps, the time limit, the time limit while a call still waits,
+  the generated Python client beside a workspace `json.py`, no network even to the host's loopback, the shell's denials,
+  a wrong token), `CodeLanguageTests` (JavaScript, and C# beside a poisoned `Directory.Build.props` and `global.json`, run twice;
   each skips without its runtime), `Corvid.Host.Tests.CodeModeTests` (a turn on a local-server generator whose script's
   side effect asks under its own id and whose fetch taints the session; not offered to an in-process generator).
 
@@ -4514,12 +4526,17 @@ project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the 
   - **C#** (a file-based app): `CorvidTools.ReadFileAsync(path, …, cancellationToken)` returning the result as a
     `JsonElement`, `CorvidTools.CallAsync`, `Limits`, `LastCallTainted`, `CorvidToolException`; global namespace, every type
     fully qualified (no `using` can follow top-level statements), no reflection-based serialization.
-  - **Forms.** `Inline(language, tools)` gives the text around a script run as one file (the code tool reads the script
-    from standard input): Python's definitions before the script (the code tool moves a script's leading
-    `from __future__` imports above them, since they must come first: `CodeRunner.Compose`; one after a leading
-    docstring is not moved), JavaScript's one constant `corvid` before the script (the client's other names live inside it, so a
-    script's own `call` or `tools` cannot collide), C#'s classes after the top-level statements. `Generate` gives the
-    module forms (`corvid_tools.py`, `corvid_tools.mjs`) for a script that imports a file beside it.
+  - **Forms.** `Program(language, tools, script)` gives the program the code tool puts on standard input, the script's
+    lines keeping their numbers (A7 review): for Python a bootstrap that runs the client as the module `corvid_tools`,
+    then the script compiled as `script.py` (its source registered with `linecache`, so a traceback quotes it) in a
+    namespace of its own holding only `corvid`, both carried base64-encoded, so a script's `from __future__` imports are
+    its own and a script that rebinds `call`, `close` or `limits` breaks nothing (the wrappers call a private client);
+    for JavaScript `import * as corvid from "data:text/javascript;base64,…";` on the script's first line, the client a
+    module of its own; for C# the client's classes after the top-level statements. `Generate` gives the module forms
+    (`corvid_tools.py`, `corvid_tools.mjs`) for a script that imports a file beside it.
+  - **Exchanges.** Each client closes its connection when an exchange is cut short (cancelled, interrupted, a bad line),
+    on `closed` and `unauthorized`, and when an answer's `id` is another request's, so a call never reads an abandoned
+    call's answer as its own; the next call opens the socket again.
   - **Untrusted text.** Descriptions and parameter names come from the descriptor (an MCP server may have written them).
     They are emitted only inside double-quoted string literals escaped as JSON with every non-ASCII character as
     `\uXXXX` (valid in all three languages), never in a comment, a docstring delimiter or a template literal; identifiers
@@ -4529,7 +4546,10 @@ project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the 
   - Tests (`CodeModeClientTests`): each client, module and inline, run by `python3`, `node` and `dotnet run` against a
     real `CodeModeSession` on a Unix socket with a fake invoker (a wrong token, required and optional arguments, taint, a
     refused call, an unknown tool, keyword names, limits), a hostile description that would run code if it escaped its
-    literal, a Roslyn compile of the C# client without warnings, and the renaming rules.
+    literal, a Roslyn compile of the C# client without warnings, and the renaming rules; and (A7 review) a script that
+    rebinds the client's names, a working directory full of stdlib-named modules, errors naming the script's own line in
+    Python and JavaScript, and a cancelled C# call (the client compiled and loaded in the test) whose answer the next
+    call never reads.
 - **The run on the surfaces.** `CodeRunPresentation.Read` takes the language and source from `execute_code`'s
   arguments (`language`, `code`); `Usage` and `Outcome` read its result (`tool_calls`, `exit_code`, `timed_out`,
   `response_bytes`). A run is announced on the stream with its arguments (the reporter has read the issued call just
@@ -4547,7 +4567,9 @@ project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the 
     ACP (hidden characters, a lone CR and the line and paragraph separators as `\uXXXX`; never cut).
   - **corvid chat.** A script's call is printed indented under its run (`    ↳ ✓ list_notes succeeded`), in the live
     panel too, and the run's line counts them ("· 2 tool calls"); its approval box adds the card's lines. The box's
-    action text now shows hidden characters as escapes, for every prompt.
+    action text now shows hidden characters as escapes, for every prompt. A script's call asks in a box that says so
+    (`CodeRunCard.NestedLine`: "Asked by the script in call run-1 (call 2 of at most 50)."), read from the call the log
+    holds; ACP's permission request carries the same line as text (A7 review, security L3).
   - **ACP.** ACP has no nested calls: a script's call is a `tool_call` (and its `tool_call_update`s and permission
     request) with `_meta: {"corvid":{"parentToolCallId":"<run's id>"}}`, live and on `session/load`. The model's own calls
     carry no `_meta`, so the recorded exchanges are unchanged. The run's permission request carries the card's lines as
@@ -4556,8 +4578,8 @@ project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the 
 ### Code mode where the A7 groups meet
 
 - **Clients wired.** `WorkspaceComposer.CodeOptionsFor` sets `CodeToolOptions.Clients` to `GeneratedClient`, which writes
-  `CodeModeClients.Inline` for the run's language from `CodeModeCatalog.Describe`'s tools, so every script gets its client
-  (Python and JavaScript before the source, C# after it). `execute_code`'s description tells the model the three calling
+  `CodeModeClients.Program` for the run's language from `CodeModeCatalog.Describe`'s tools, so every script gets its client
+  (Python's bootstrap and JavaScript's import before the source, C#'s classes after it). `execute_code`'s description tells the model the three calling
   forms. The client changes nothing about the boundary: the host still checks the token, the tools, the limits and the
   turn's path.
 - **Architect/editor.** The planner is offered no tools, so it never writes a script; the editor is. `CodeModeFilter`

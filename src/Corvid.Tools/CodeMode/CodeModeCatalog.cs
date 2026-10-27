@@ -23,8 +23,23 @@ public static partial class CodeModeCatalog
     public const int Version = 1;
 
     /// <summary>
+    /// A7 review (security L4): tools a script may never call, whatever <c>Corvid:Tools:Code:Tools</c> lists: those that
+    /// start other agents or scripts (<c>delegate_task</c>, <c>execute_code</c>, <c>skill_run_script</c>), ask the person
+    /// (<c>ask_user</c>), write memory (<c>memory_add</c>, <c>memory_approve</c>, <c>memory_reject</c>), send messages
+    /// (<c>send_message</c>) or change schedules (<c>cron_create</c>, <c>cron_pause</c>, <c>cron_resume</c>,
+    /// <c>cron_remove</c>). The options validator refuses them, <see cref="Describe"/> leaves them out, and the turn refuses a
+    /// nested call to one.
+    /// </summary>
+    public static IReadOnlySet<string> Denied { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "delegate_task", "execute_code", "skill_run_script", "ask_user", "memory_add", "memory_approve", "memory_reject",
+        "send_message", "cron_create", "cron_pause", "cron_resume", "cron_remove",
+    };
+
+    /// <summary>
     /// The tools a script may call, ordered by name. <paramref name="offered"/> null (outside a turn) offers nothing. The
-    /// allowlist names tools; a name it lists that the registry or the turn lacks is simply absent.
+    /// allowlist names tools; a name it lists that the registry or the turn lacks is simply absent, and one
+    /// <see cref="Denied"/> names is never described.
     /// </summary>
     public static IReadOnlyList<CodeModeTool> Describe(ToolRegistry registry, IReadOnlySet<string>? offered, IEnumerable<string> allowlist)
     {
@@ -36,7 +51,8 @@ public static partial class CodeModeCatalog
         return
         [
             .. registry.List()
-                .Where(tool => allowed.Contains(tool.Name) && offered.Contains(tool.Name) && !tool.HasSecretParameters && IsIdentifier(tool.Name))
+                .Where(tool => allowed.Contains(tool.Name) && !Denied.Contains(tool.Name) && offered.Contains(tool.Name) && !tool.HasSecretParameters
+                    && IsIdentifier(tool.Name))
                 .Select(tool => new CodeModeTool(tool.Name, tool.Description, tool.JsonSchema)),
         ];
     }
