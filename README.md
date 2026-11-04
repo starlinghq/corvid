@@ -17,13 +17,14 @@ placeholders for real values only on the way out to the host each secret is boun
 <p align="center">
   <img src="docs/plan/tui-mockups/png/04-fabric.png" alt="Mockup of a Corvid chat turn: Kev answers the ingress questions, web_fetch taints the session, a step question escalates to claude-opus-5-5, the privacy gate redacts two values, and a memory fact is staged for review" width="820">
   <br>
-  <sub><i>Design mockup of the planned terminal UI (<a href="docs/plan/tui.md"><code>docs/plan/tui.md</code></a>). The agent behaviour shown is built: Kev's decisions, taint, escalation, the privacy gate, staged memory and cron runs. The renderer, the <code>@</code> and <code>!</code> shortcuts and the palette are the design; today's <code>corvid chat</code> uses a simpler Spectre.Console renderer.</i></sub>
+  <sub><i>Design mockup of the planned terminal UI (<a href="docs/plan/tui.md"><code>docs/plan/tui.md</code></a>). The agent behaviour shown is built: Kev's decisions, taint, escalation, the privacy gate, staged memory and cron runs. The renderer and the palette are still the design; today's <code>corvid chat</code> uses a simpler Spectre.Console renderer, and the windowed app, <code>corvid-app</code>, draws these surfaces.</i></sub>
 </p>
 
 ## Contents
 
 - [Quick start](#quick-start)
 - [What Corvid does](#what-corvid-does)
+- [The windowed app](#the-windowed-app)
 - [Ways to talk to it](#ways-to-talk-to-it)
 - [Configuration](#configuration)
 - [Status](#status)
@@ -92,11 +93,44 @@ Kev answers a checkpoint in about a quarter of a second on an RTX 3090 and in a 
 per-call `risk` question where the outcome would be "ask" anyway.
 → [Decision fabric](docs/architecture.md#decision-fabric-c-004a) · [Kev decider](docs/architecture.md#kev-decider-c-004b) · [Kev on CUDA](docs/architecture.md#kev-on-cuda-c-029)
 
+### Switches models at any time
+
+`/model`, the app's Models page and `Alt+P` switch a model mid-conversation, for any slot, the decider included. A
+running turn takes the switch at its next step, after the tool calls it has issued. The choice lasts for the session:
+escalation and fallback can still move off it, and the session comes back to it. `--default` changes the default for new
+sessions instead. Every switch is logged and shown in the transcript, and a cloud model is only ever reached through the
+privacy gate, with the session's taint.
+
+With architect/editor turns on (`Corvid:Turn:ArchitectEditor`, or `/architect` for one turn), a coding turn that
+escalates is planned by the stronger model, with no tools, and its edits are made by the session's own model. The
+transcript says "planned by X · edited by Y".
+→ [Model slots and switching](docs/architecture.md#model-slots-and-switching-c-006) · [Architect/editor turns](docs/architecture.md#architecteditor-turns-a7)
+
+### Delegates to subagents with their own model mix
+
+`delegate_task` starts child sessions, up to 10 at once and one level deep, each with a goal, an explicit toolset no wider
+than the parent's, a budget of steps, tokens and time, and an optional JSON schema its answer is checked against. The
+agent can give each child a model mix: any slot, from the catalogue, or a named mix from `Corvid:Agents:Mixes`. A child
+inherits its parent's taint and approval mode, its approvals come to you, and a cloud model in its mix passes the parent's
+privacy gate. The agent cannot choose the decider that judges a child's calls; only you or a configured mix can. A child
+cannot ask you questions, write memory, send messages, schedule jobs or delegate again. Children show as a tree on the
+Board and in `/agents`, and `/delegate` starts one yourself.
+
+### Writes scripts that call its tools
+
+With code mode on (`Corvid:Tools:Code:Enabled`, and a cloud or local-server generator), `execute_code` runs a Python,
+JavaScript or C# script in the shell's sandbox, with no network. The script gets a generated client for Corvid's tools and
+reaches them only through a socket made for that run. Each call it makes goes through the same path as the model's own:
+its own approval, checkpoint, taint and credential scrub. The script itself always asks, with "once" as the only answer,
+and only the exact source you saw runs. Time, call count and output are limited on Corvid's side, and scripts can never
+reach a tool that delegates, asks, sends, schedules or writes memory.
+→ [Code mode](docs/architecture.md#code-mode-foundation-a7)
+
 ### Asks before it acts, and explains why
 
 <img src="docs/plan/tui-mockups/png/02-approval.png" alt="Mockup of an approval card for 'rm -rf build/ && dotnet test Corvid.slnx', listing each target, the reasons it asks (destructive, tainted session) and the checkpoint taken before the call" width="820">
 
-<sub><i>Mockup of the planned approval card. In today's CLI the same prompt is answered inline: once, this session, always, or deny.</i></sub>
+<sub><i>Mockup of the terminal approval card. In today's CLI the same prompt is answered inline: once, this session, always, or deny; the windowed app draws it as a card.</i></sub>
 
 Every side effect goes through a structural approval pipeline. It parses the shell command (a bash subset, with
 wrappers such as `sudo`, `env` and `xargs` unwrapped), extracts every target, and checks the result against a hardline
@@ -118,13 +152,26 @@ the workspace, with no network, elevation or destructive tool. **Manual** mode a
 
 <img src="docs/plan/tui-mockups/png/05-rewind.png" alt="Mockup of the rewind picker listing checkpoints c-31 to c-43 with their tools, paths and diffs, and a warning that README.md was edited since c-31 and will merge three ways" width="820">
 
-<sub><i>Mockup of the planned rewind picker. Today the same restore is <code>/undo</code> and <code>/rollback N</code>.</i></sub>
+<sub><i>Mockup of the terminal rewind picker. Today the same restore is <code>/undo</code> and <code>/rollback N</code>, or the windowed app's Rewind page.</i></sub>
 
 Before any tool call that changes files, Corvid checkpoints the workspace into a shadow git store, which is never your
 own repository. `/undo` reverts the last turn. `/rollback N` goes back to before the Nth latest checkpoint and takes
 those turns out of the conversation too. If you edited a file since, the revert becomes a three-way merge, and a
 conflict stops the restore so your edit is never overwritten. Checkpoints need `git` on `PATH`.
+
+`/fork` starts a new session from this one, even while a turn runs: it copies the log through the last completed step and
+the turn goes on untouched. Each session records its own workspace, so one window can hold several, and resuming a
+session from another directory still works where it began. `/workspace new` makes a git worktree on a `corvid/<name>`
+branch, always asking first and never touching your checkout, and `delegate_task` can give a child a worktree of its own.
 → [Checkpoints](docs/architecture.md#checkpoints-c-014)
+
+### Sees images, and can be steered mid-turn
+
+Paste or drop an image in the app, use `/image <path>` or `@shot.png` in `corvid chat`, or send one over ACP. Images go to
+a model that reads them, or are described by the vision slot; metadata is stripped first, and a cloud model gets one only
+if its egress policy allows it. `Ctrl+Enter` in the app steers a running turn: the message is taken at the next step, and
+goes to the queue if the turn ends first. The agent can ask you a clarifying question with `ask_user`, and the turn waits
+for your answer.
 
 ### Remembers, and learns skills it has proven
 
@@ -134,16 +181,21 @@ conflict stops the restore so your edit is never overwritten. Checkpoints need `
 - **Skills.** Skills are [agentskills.io](https://agentskills.io) `SKILL.md` files in a git-versioned store, with
   authorship marked `user`, `agent` or `hub:<source>`. Corvid drafts a new skill from a successful task, replays it as
   a test, and saves it only if the replay passes. `~/.hermes/skills` and Hermes' `MEMORY.md`/`USER.md` import for review.
+- **Consolidation.** When you are idle, a background job proposes shorter rewrites of core blocks near their budget.
+  Nothing applies without your review, and a local-only block never reaches a cloud model. `/memory consolidate` asks now.
 - **Compaction.** Long sessions compact into a structured record with map-reduce summaries. The standing `/goal` is
   re-injected, and `/compact <focus>` keeps what you name in full.
+- **Sessions.** Conversations get generated titles (`/rename` changes one), recaps on request or after an absence, and
+  pins. `/search` searches what was said across them, leaving out gateway chats and job runs.
 
-→ [Memory store](docs/architecture.md#memory-store-c-008) · [Lessons](docs/architecture.md#lessons-and-project-scope-c-025) · [Skills](docs/architecture.md#skills-c-017) · [Compaction](docs/architecture.md#compaction-c-016)
+→ [Memory store](docs/architecture.md#memory-store-c-008) · [Sleep-time jobs](docs/architecture.md#sleep-time-memory-jobs-a7) · [Lessons](docs/architecture.md#lessons-and-project-scope-c-025) · [Skills](docs/architecture.md#skills-c-017) · [Compaction](docs/architecture.md#compaction-c-016)
 
 ### Keeps secrets out of the agent
 
 - **Vault-only keys.** Cloud model keys, MCP tokens and bot tokens are Vault secrets, each bound to its host. Corvid
   never reads keys from the environment, and without Vault cloud models are unavailable.
-- **Privacy egress gate.** Requests to cloud models are redacted by default (PII and any credential value).
+- **Privacy egress gate.** Requests to cloud models are redacted by default (PII and any credential value). The
+  egress ledger keeps each request as it was sent: `corvid egress`, or the app's Audit page, shows what left the machine.
 - **Credential scrub.** A token or password a tool returns, or one you paste into a message, is scrubbed before it
   reaches the event log, memory or any model (so the model sees a marker, not the secret: keep secrets in Vault).
   Memory and skills refuse one outright.
@@ -155,8 +207,8 @@ conflict stops the restore so your edit is never overwritten. Checkpoints need `
 ### Runs jobs on a schedule
 
 `cron_create` and its siblings put durable jobs on a schedule. The scheduler wakes on a change or when a session opens,
-and each job's run reports back where it was created, including a chat on the gateway. `/cron` lists jobs,
-`/cron runs` shows their history, and you can pause, resume or remove one.
+and each job's run reports back where it was created, including a chat on the gateway, and works in that session's
+workspace. `/cron` lists jobs, `/cron runs` shows their history, and you can pause, resume or remove one.
 → [Built-in tools and scheduler](docs/architecture.md#built-in-tools-and-scheduler-c-012)
 
 ### Leaves an audit trail
@@ -174,6 +226,8 @@ any other agent. OpenTelemetry spans cover the rest.
 | --- | --- |
 | Files, confined to the workspace | `read_file`, `write_file`, `patch_file`, `list_files`, `search_files` |
 | Shell and web | `shell` (sandboxed, approved), `web_fetch` |
+| Code mode, when enabled | `execute_code` |
+| Subagents and questions | `delegate_task`, `ask_user` |
 | Memory | `memory_search`, `memory_add`, `memory_pending`, `memory_approve`, `memory_reject` |
 | Schedule | `cron_create`, `cron_list`, `cron_pause`, `cron_resume`, `cron_remove` |
 | Skills | `skill_list` and the skill tools |
@@ -183,25 +237,60 @@ any other agent. OpenTelemetry spans cover the rest.
 | --- | --- |
 | `/help` `/status` `/tools` `/todos` | the commands, slots with device and latency, the tools with their risk, the session's todo list |
 | `/model` `/model <slot>` | the generator's (or a slot's) models, numbered, with the current one and what each needs; type a number on the next line to switch |
-| `/model [slot] <number \| name> [--pin]` | switch a slot for this session; `--pin` keeps it past escalation |
+| `/model [slot] <number \| name> [--pin \| --default]` | switch a slot for this session, also while a turn runs; `--pin` holds it at a turn's end (escalation can still move it), `--default` sets the default for new sessions |
+| `/model unpin <slot>` `/model reset <slot>` | drop a pin; forget this session's choice |
+| `/architect [on \| off \| status]` | plan the next turn (or every turn) with the stronger model, then edit with this one |
 | `/goal [text \| clear]` | the standing goal, re-injected across compaction |
+| `/agents [show \| stop <child>]` `/delegate` | this session's child sessions; start one with `--mix`, `--model <slot>=<model>`, `--tools`, `--toolset` and a budget |
+| `/sessions` `/search` `/rename` `/recap` `/pin` | recent conversations, search across them, this session's title, a recap, and keeping it at the top |
+| `/fork [<position>]` `/workspace` | fork this session, also during a turn; list, open, create or remove workspaces and worktrees |
 | `/approvals` | pending approvals and remembered approval rules |
-| `/memory` `/skills` | review staged memory, lessons and skill drafts; import from Hermes |
+| `/memory` `/skills` | review staged memory, lessons and skill drafts; `/memory consolidate`; import from Hermes |
 | `/mcp` (`diff`, `accept`, `allow`) | servers, their tools, and held tool definitions |
 | `/undo` `/rollback [N]` | revert the last turn, or go back to a checkpoint |
 | `/compact [focus]` `/cron` | compact now; scheduled jobs and their runs |
+| `/image <path>` | attach an image to the next message (`corvid chat`) |
 | `/cancel` `/exit` | cancel the running turn; leave |
+
+In the composer, `# text` stages a memory fact for review, `! command` runs a command yourself through the same sandbox and
+approvals, and `!! command` does so and keeps it out of what the model sees. `\#` and `\!` send the line as a message.
+
+## The windowed app
+
+<img src="docs/plan/ui-mockups/png/Main.png" alt="Mockup of the Corvid app: a rail of areas and sessions, a session's conversation with tool cards, a dock with changes and the status bar" width="820">
+
+<sub><i>The design mockup the Sessions page was built against.</i></sub>
+
+`corvid-app` is a desktop app on [Uno Platform](https://platform.uno) over the same engine as `corvid chat`, on the same
+Corvid home. A session can be driven by one process at a time; open elsewhere, it shows read-only and follows along.
+
+- **Sessions.** The conversation with tool cards, approval cards, diffs, the queue, steering and questions, and a dock of
+  changes.
+- **Board.** Every session and child at a glance, with an attention tray for what waits on you.
+- **Review and Rewind.** Changes since a point, with comments back to the agent; a timeline of checkpoints to restore.
+- **Memory, Skills, Models, Safety, Audit.** Review staged memory and consolidations, skill drafts, models and slots
+  with downloads, approval rules and detections, and the event log with the egress ledger.
+- **Jobs, MCP, Gateway, Secrets, Settings.** Scheduled jobs, held MCP tools, pairing, secret names (never a value), and
+  `corvid.json`. The app hosts the gateway and scheduler only if you turn that on (Settings › Hosting, or Start on those
+  pages), and the status bar says so while it does.
+- **Keys and reach.** `Ctrl+K` opens the palette, and every area works at phone width. `corvid-app --demo` opens a scripted
+  demo that needs no models.
+
+`corvid serve --attach` lets a window, or the browser client, attach to an engine running elsewhere. Attached mode covers
+Sessions and the Board.
+→ [The app's README](src/Corvid.App/README.md) · [UI design](docs/plan/ui.md)
 
 ## Ways to talk to it
 
 | Command | What it is |
 | --- | --- |
 | `corvid chat` | the terminal chat: streaming, a live tool panel, inline approvals |
+| `corvid-app` | the [windowed app](#the-windowed-app) |
 | `corvid acp` | an [Agent Client Protocol](https://agentclientprotocol.com) agent on stdio for Zed, JetBrains and VS Code, with approvals as the editor's permission prompts (diff included) |
-| `corvid serve` | an OpenAI-compatible endpoint (`/v1/chat/completions`, `/v1/models`) for Open WebUI and other front ends, loopback-only by default |
+| `corvid serve` | an OpenAI-compatible endpoint (`/v1/chat/completions`, `/v1/models`) for Open WebUI and other front ends, loopback-only by default; `--attach` also serves windows and the browser client |
 | `corvid gateway` | Telegram, Discord and Slack bots with pairing codes, an owner who answers approvals, and at-least-once delivery |
 | `corvid mcp serve` | Corvid's memory search, skills and, optionally, project lessons offered read-only to another agent over MCP |
-| `corvid mcp list` · `corvid doctor` · `corvid model` · `corvid scan` · `corvid traces export` · `corvid evals` | inspection and maintenance |
+| `corvid mcp list` · `corvid doctor` · `corvid model` · `corvid scan` · `corvid egress` · `corvid traces export` · `corvid evals` | inspection and maintenance |
 
 **Editors.** In Zed, add an `agent_servers` entry with `"command": "corvid", "args": ["acp"]`. Start it in the
 workspace, because a session for another directory is refused.
@@ -211,11 +300,18 @@ token (`corvid-vault set serve.token`, with a random value of at least 24 bytes)
 HTTP, so a call that needs approval fails the request with `approval_required`. With `Approvals: Deny`, the model
 answers without the tool instead.
 
+**Attached.** `corvid serve --attach` listens on a Unix socket, with `--listen ws://127.0.0.1:8737` adding a loopback
+port. Every connection needs a token. `corvid-app --attach <address>` connects, using the owner token over a socket of
+yours. Any other client pairs as a device: `corvid serve pair` makes a one-time code for `--pair <code>`, and
+`corvid serve devices` and `corvid serve revoke <name>` manage them. Listening past loopback needs the owner token in
+Vault, and the connection has no TLS, so put it behind one.
+
 **Gateway.** Someone the configuration does not list gets a pairing code and nothing else until you approve it on this
 machine: `corvid gateway pair` lists codes, `corvid gateway pair approve ABCD-EFGH --owner` pairs you, and `--guest`
 pairs someone else, whose messages are treated as outside content. Only the owner runs commands and answers approvals.
 Answers are recorded in a delivery ledger in the event log, so anything unsent goes out after a restart.
-`corvid gateway status` shows adapters, pairings and waiting deliveries.
+`corvid gateway status` shows adapters, pairings and waiting deliveries, and `corvid gateway pair tools` gives a guest
+their own tool allowlist. Only one process hosts the gateway at a time.
 → [ACP and HTTP](docs/architecture.md#acp-and-openai-compatible-http-c-019) · [Gateway](docs/architecture.md#gateway-c-020) · [Project memory over MCP](docs/architecture.md#project-memory-over-mcp-c-028)
 
 ## Configuration
@@ -246,6 +342,42 @@ Remote models go under `Corvid:Models:Remote` and are named in slots like any ot
 ```
 
 Kev-4B is used only when configured: `--set Models:Slots:decider:Escalation:0=kev-4b`.
+</details>
+
+<details>
+<summary><b>Subagents and model mixes</b></summary>
+
+```json
+{
+  "Corvid": {
+    "Agents": {
+      "Models": ["qwen-27b", "claude"],
+      "Mixes": { "reviewers": { "generator": { "Model": "qwen-27b" } } },
+      "Toolsets": { "reading": ["read_file", "search_files"] }
+    }
+  }
+}
+```
+
+`Models` is an optional allowlist for the slots a remote model can serve; empty means any catalogue model. The limits are
+`MaxConcurrent` (10), `MaxDepth` (1), `MaxSteps` (8), `MaxTokens` (64,000) and `MaxSeconds` (600).
+</details>
+
+<details>
+<summary><b>Code mode, architect/editor turns and memory jobs</b></summary>
+
+```json
+{
+  "Corvid": {
+    "Tools": { "Code": { "Enabled": true, "TimeoutSeconds": 300, "MaxCalls": 50 } },
+    "Turn": { "ArchitectEditor": true, "ImageTurns": 2 }
+  }
+}
+```
+
+Code mode needs a cloud or local-server generator, and `corvid doctor` lists the Python, Node and .NET runtimes it finds.
+`ImageTurns` is how many of the latest messages send their images in full. Background consolidation is on by default, under
+`Corvid:Memory:Consolidation` ([details](docs/architecture.md#sleep-time-memory-jobs-a7)).
 </details>
 
 <details>
@@ -296,6 +428,24 @@ adds `get_memory` and `get_memory_context` to `corvid mcp serve`, serving approv
 </details>
 
 <details>
+<summary><b>Hosting and the egress ledger</b></summary>
+
+```json
+{
+  "Corvid": {
+    "App": { "HostGateway": false, "HostScheduler": false },
+    "Serve": { "Attach": { "TokenSecret": "attach.owner" } },
+    "Privacy": { "Ledger": { "RetainDays": 90, "MaxMegabytes": 256 } }
+  }
+}
+```
+
+The app starts neither the gateway nor the scheduler unless these are on or you press Start on their pages. Without
+`TokenSecret`, attached mode's owner token is a 0600 file in the state directory. `corvid egress prune` applies the
+ledger's limits now.
+</details>
+
+<details>
 <summary><b>Messaging gateway</b></summary>
 
 ```json
@@ -343,14 +493,14 @@ Pre-release and Linux-first.
 **Built:** everything above, plus calibration tooling with decision export, the golden-trajectory replay harness, the
 S2 tool-calling golden set and harness, spike S4's harness comparing Kev's `tool` and `done` answers with the
 600-token state against a transcript-sized one ([S4](docs/spikes/S4-state-budget.md)), and a prompt-injection
-exfiltration canary suite. The full list is in
-[`docs/architecture.md`](docs/architecture.md), one section per work item.
+exfiltration canary suite. The full list is in [`docs/architecture.md`](docs/architecture.md), one section per work item.
+How the windowed app was built, phase by phase, and what each phase left is in
+[`docs/plan/ui-handoff.md`](docs/plan/ui-handoff.md).
 
-**Next:** the terminal UI redesign in [`docs/plan/tui.md`](docs/plan/tui.md). The mockups above and the rest in
-[`docs/plan/tui-mockups/`](docs/plan/tui-mockups/README.md) come from it. The plan has an inline renderer that never
-clears your scrollback by default, with fullscreen and screen-reader modes on one component model. A windowed app on
-Uno Platform is designed in [`docs/plan/ui.md`](docs/plan/ui.md): its feature catalogue and flows, before any mockups.
-The overall roadmap is [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md), and Vault's is
+**Next:** the rest of the agent plan's Phase 3 in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md): the two-tier
+decider, media memory, voice and more gateway adapters. The terminal UI redesign in
+[`docs/plan/tui.md`](docs/plan/tui.md) is designed, with an inline renderer that never clears your scrollback; the
+mockups above and the rest in [`docs/plan/tui-mockups/`](docs/plan/tui-mockups/README.md) come from it. Vault's roadmap is
 [`docs/plan/vault.md`](docs/plan/vault.md).
 
 ## Build and test
@@ -369,7 +519,7 @@ Evaluation harnesses (replay, calibration, tool-calling) are described in [`eval
 
 | Directory | Contents |
 | --- | --- |
-| `docs/plan/` | the agent plan (`corvid-agent.md`), Vault (`vault.md`), the TUI design (`tui.md`) with its mockups, and the windowed UI design (`ui.md`) |
+| `docs/plan/` | the agent plan (`corvid-agent.md`), Vault (`vault.md`), the TUI design (`tui.md`) with its mockups, the windowed UI design (`ui.md`) with its mockups, and how the app was built (`ui-handoff.md`) |
 | `docs/architecture.md` | how each built piece works, section by section |
 | `docs/spikes/`, `docs/research/` | measured spikes (S1 to S5) and the TUI research notes |
 | `src/Corvid.Abstractions` | dependency-free contracts: session events, `IEventLog`, `Envelope`, `IDecider`, `IExtractor`, `ITokenCounter` |
@@ -385,8 +535,10 @@ Evaluation harnesses (replay, calibration, tool-calling) are described in [`eval
 | `src/Corvid.Skills` | `SKILL.md` loader, git-backed skill store, imports, the learning loop, curator and skill tools |
 | `src/Corvid.Tools`, `.Tools.Builtin`, `.Tools.Generators` | tool attributes and registry, the built-in tools, the `[Tool]` source generator |
 | `src/Corvid.Mcp` | MCP client and server, tool-definition pins and the poisoned-description scan |
+| `src/Corvid.Sandbox` | the sandbox policy and the bubblewrap launch |
 | `src/Corvid.Host` | composition root: configuration, slots, runtime, slash commands, `doctor`, OpenTelemetry |
 | `src/Corvid.Cli` | the `corvid` command |
+| `src/Corvid.App` (+ `.App.Core`, `.App.Engine`) | the windowed app on Uno Platform: pages, view models and services with no Uno types, and the engine services over the runtime ([README](src/Corvid.App/README.md)) |
 | `src/Corvid.Acp`, `src/Corvid.Http` | the editor (ACP) and OpenAI-compatible front ends |
 | `src/Corvid.Gateway` (+ `.Telegram`, `.Discord`, `.Slack`) | the messaging gateway and its adapters |
 | `src/Corvid.Vault.Contracts`, `.Vault.Client` | the wire contract with Vault, and Corvid's side of it (`VaultClient`, `VaultHandler`, `SecretRef`) |
@@ -394,4 +546,6 @@ Evaluation harnesses (replay, calibration, tool-calling) are described in [`eval
 | `sandbox/` | `corvid-sandbox`, the launcher for shell commands and stdio MCP servers |
 | `evals/` | golden trajectories, the replay and calibration harnesses, the tool-calling golden set, spike code and results |
 | `tools/Corvid.Architecture` | resolved dependency-graph checker |
+| `tools/ui-harness.sh` | drives the app on a headless display |
+| `.claude/workflows/` | the multi-agent workflows that built the app's phases |
 | `tests/` | unit, scenario and regression suites for every project above, including Vault's S6 |
