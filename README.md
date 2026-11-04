@@ -95,26 +95,27 @@ per-call `risk` question where the outcome would be "ask" anyway.
 
 ### Switches models at any time
 
-`/model`, the app's Models page and `Alt+P` switch a model mid-conversation, for any slot, the decider included. A
-running turn takes the switch at its next step, after the tool calls it has issued. The choice lasts for the session:
+`/model` and the app's Models page switch a model mid-conversation, for any slot, the decider included; `Alt+P` in the app
+switches the generator. A running turn takes the switch at its next step, after the tool calls it has issued. The choice lasts for the session:
 escalation and fallback can still move off it, and the session comes back to it. `--default` changes the default for new
 sessions instead. Every switch is logged and shown in the transcript, and a cloud model is only ever reached through the
 privacy gate, with the session's taint.
 
-With architect/editor turns on (`Corvid:Turn:ArchitectEditor`, or `/architect` for one turn), a coding turn that
-escalates is planned by the stronger model, with no tools, and its edits are made by the session's own model. The
-transcript says "planned by X · edited by Y".
+With `Corvid:Turn:ArchitectEditor` on, a coding turn that escalates is planned by the stronger model, with no tools, and
+its edits are made by the session's own model. `/architect` asks for that on the next turn, coding or not, and needs an
+escalation ladder. The transcript says "planned by X · edited by Y".
 → [Model slots and switching](docs/architecture.md#model-slots-and-switching-c-006) · [Architect/editor turns](docs/architecture.md#architecteditor-turns-a7)
 
 ### Delegates to subagents with their own model mix
 
 `delegate_task` starts child sessions, up to 10 at once and one level deep, each with a goal, an explicit toolset no wider
 than the parent's, a budget of steps, tokens and time, and an optional JSON schema its answer is checked against. The
-agent can give each child a model mix: any slot, from the catalogue, or a named mix from `Corvid:Agents:Mixes`. A child
+agent can give each child a model mix: any slot but the decider, from the catalogue, or a named mix from
+`Corvid:Agents:Mixes`. A child
 inherits its parent's taint and approval mode, its approvals come to you, and a cloud model in its mix passes the parent's
 privacy gate. The agent cannot choose the decider that judges a child's calls; only you or a configured mix can. A child
 cannot ask you questions, write memory, send messages, schedule jobs or delegate again. Children show as a tree on the
-Board and in `/agents`, and `/delegate` starts one yourself.
+Board, `/agents` lists them, and `/delegate` starts one yourself.
 
 ### Writes scripts that call its tools
 
@@ -170,13 +171,13 @@ branch, always asking first and never touching your checkout, and `delegate_task
 Paste or drop an image in the app, use `/image <path>` or `@shot.png` in `corvid chat`, or send one over ACP. Images go to
 a model that reads them, or are described by the vision slot; metadata is stripped first, and a cloud model gets one only
 if its egress policy allows it. `Ctrl+Enter` in the app steers a running turn: the message is taken at the next step, and
-goes to the queue if the turn ends first. The agent can ask you a clarifying question with `ask_user`, and the turn waits
-for your answer.
+goes to the queue if the turn ends first. The agent can ask you a clarifying question with `ask_user`, and in the app or
+`corvid chat` the turn waits for your answer.
 
 ### Remembers, and learns skills it has proven
 
 - **Memory.** Core blocks, episodic full-text search, a vector index and a bi-temporal fact graph, searched together.
-  Writes are gated: a new fact is *staged*, and you approve it in `/memory pending`.
+  Writes are gated: a new fact is *staged* for you to approve in `/memory pending`, unless a calibrated decider allows it.
 - **Lessons.** Per-project lessons sit between facts and skills, with a quality bar and review.
 - **Skills.** Skills are [agentskills.io](https://agentskills.io) `SKILL.md` files in a git-versioned store, with
   authorship marked `user`, `agent` or `hub:<source>`. Corvid drafts a new skill from a successful task, replays it as
@@ -252,7 +253,8 @@ any other agent. OpenTelemetry spans cover the rest.
 | `/image <path>` | attach an image to the next message (`corvid chat`) |
 | `/cancel` `/exit` | cancel the running turn; leave |
 
-In the composer, `# text` stages a memory fact for review, `! command` runs a command yourself through the same sandbox and
+In the composer, `# text` sends a fact through memory's gated write path, staged for review unless Kev allows it,
+`! command` runs a command yourself through the same sandbox and
 approvals, and `!! command` does so and keeps it out of what the model sees. `\#` and `\!` send the line as a message.
 
 ## The windowed app
@@ -277,7 +279,7 @@ Corvid home. A session can be driven by one process at a time; open elsewhere, i
   demo that needs no models.
 
 `corvid serve --attach` lets a window, or the browser client, attach to an engine running elsewhere. Attached mode covers
-Sessions and the Board.
+Sessions and the Board's sessions; the Board's engine status and the other areas stay on the engine's machine.
 → [The app's README](src/Corvid.App/README.md) · [UI design](docs/plan/ui.md)
 
 ## Ways to talk to it
@@ -351,7 +353,7 @@ Kev-4B is used only when configured: `--set Models:Slots:decider:Escalation:0=ke
 {
   "Corvid": {
     "Agents": {
-      "Models": ["qwen-27b", "claude"],
+      "Models": ["qwen3.5-0.8b", "qwen-27b", "claude"],
       "Mixes": { "reviewers": { "generator": { "Model": "qwen-27b" } } },
       "Toolsets": { "reading": ["read_file", "search_files"] }
     }
@@ -359,8 +361,10 @@ Kev-4B is used only when configured: `--set Models:Slots:decider:Escalation:0=ke
 }
 ```
 
-`Models` is an optional allowlist for the slots a remote model can serve; empty means any catalogue model. The limits are
-`MaxConcurrent` (10), `MaxDepth` (1), `MaxSteps` (8), `MaxTokens` (64,000) and `MaxSeconds` (600).
+`Models` is an optional allowlist of what a child may run: every model a mix names, and any generator, summarizer or
+vision model it would inherit. A child that would inherit an unlisted model is refused, so list your local generator.
+Empty means any catalogue model. The names must exist, so this example needs the `Models:Remote` entries above. The limits
+are `MaxConcurrent` (10), `MaxDepth` (1), `MaxSteps` (8), `MaxTokens` (64,000) and `MaxSeconds` (600).
 </details>
 
 <details>
@@ -441,8 +445,8 @@ adds `get_memory` and `get_memory_context` to `corvid mcp serve`, serving approv
 ```
 
 The app starts neither the gateway nor the scheduler unless these are on or you press Start on their pages. Without
-`TokenSecret`, attached mode's owner token is a 0600 file in the state directory. `corvid egress prune` applies the
-ledger's limits now.
+`TokenSecret`, attached mode's owner token is a 0600 file in the state directory; with it, give the app the token in
+`CORVID_ATTACH_TOKEN` to attach as owner. `corvid egress prune` applies the ledger's limits now.
 </details>
 
 <details>
@@ -497,8 +501,8 @@ exfiltration canary suite. The full list is in [`docs/architecture.md`](docs/arc
 How the windowed app was built, phase by phase, and what each phase left is in
 [`docs/plan/ui-handoff.md`](docs/plan/ui-handoff.md).
 
-**Next:** the rest of the agent plan's Phase 3 in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md): the two-tier
-decider, media memory, voice and more gateway adapters. The terminal UI redesign in
+**Next:** the rest of the agent plan's Phase 3 in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md): media memory, voice
+and more gateway adapters, and calibrating the decider's floors, which are not yet fitted to measured data. The terminal UI redesign in
 [`docs/plan/tui.md`](docs/plan/tui.md) is designed, with an inline renderer that never clears your scrollback; the
 mockups above and the rest in [`docs/plan/tui-mockups/`](docs/plan/tui-mockups/README.md) come from it. Vault's roadmap is
 [`docs/plan/vault.md`](docs/plan/vault.md).
