@@ -68,11 +68,12 @@ jobs:
           dotnet publish src/Corvid.Cli/Corvid.Cli.csproj -c Release -r linux-x64 -p:UseCuda=${{ matrix.cuda }} -p:Version="$VERSION" -o "$out/cli"
           dotnet publish vault/Corvid.Vault/Corvid.Vault.csproj -c Release -r linux-x64 -p:PublishAot=true -p:Version="$VERSION" -o "$out/vault"
           dotnet publish sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj -c Release -r linux-x64 -p:PublishAot=true -p:Version="$VERSION" -o "$out/sandbox"
-          # Only the three binaries ship; the .pdb and .dbg files stay behind.
+          # The three binaries and the license files ship; the .pdb and .dbg files stay behind.
           mkdir "$out/stage"
           cp "$out/cli/corvid" "$out/vault/corvid-vault" "$out/sandbox/corvid-sandbox" "$out/stage/"
+          cp LICENSE-MIT LICENSE-APACHE README.md "$out/stage/"
           echo "$VERSION" > "$out/stage/VERSION"
-          tar -czf "${{ matrix.asset }}.tar.gz" -C "$out/stage" corvid corvid-vault corvid-sandbox VERSION
+          tar -czf "${{ matrix.asset }}.tar.gz" -C "$out/stage" corvid corvid-vault corvid-sandbox VERSION LICENSE-MIT LICENSE-APACHE README.md
           ls -l "${{ matrix.asset }}.tar.gz"
 
       # U-9: the app runs its models on the CPU, so the CPU job alone builds its tarball (the CorvidAppTarball target).

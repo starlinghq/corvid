@@ -71,6 +71,7 @@
     <Error Condition="!Exists('$(PublishDir)corvid-app')" Text="The publish has no corvid-app apphost; publish with -r linux-x64." />
     <Error Condition="!Exists('$(PublishDir)Assets/Icons/Svg/corvid.svg')" Text="The publish has no Assets/Icons/Svg/corvid.svg for the desktop entry." />
     <WriteLinesToFile File="$(PublishDir)VERSION" Lines="$(Version)" Overwrite="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../LICENSE-MIT;$(MSBuildThisFileDirectory)../../LICENSE-APACHE;$(MSBuildThisFileDirectory)../../README.md" DestinationFolder="$(PublishDir)" />
     <Exec Command="tar -czf &quot;$(CorvidAppTarball)&quot; --exclude=./corvid-sandbox --exclude=./corvid-sandbox.dll --exclude=./corvid-sandbox.runtimeconfig.json --exclude=./corvid-sandbox.deps.json --exclude=*.pdb --exclude=*.dbg -C &quot;$(PublishDir)&quot; ." />
     <Message Importance="high" Text="corvid-app tarball: $(CorvidAppTarball)" />
   </Target>
