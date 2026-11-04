@@ -553,3 +553,7 @@ Evaluation harnesses (replay, calibration, tool-calling) are described in [`eval
 | `tools/ui-harness.sh` | drives the app on a headless display |
 | `.claude/workflows/` | the multi-agent workflows that built the app's phases |
 | `tests/` | unit, scenario and regression suites for every project above, including Vault's S6 |
+
+## License
+
+Dual-licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Model weights keep their own terms.
