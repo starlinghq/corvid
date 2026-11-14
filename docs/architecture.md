@@ -4601,6 +4601,99 @@ project: the generators are in `Corvid.Tools.CodeMode` (`CodeModeClients`), the 
   `execute_code` on a local-server generator (`FakeModels(generatorPrivacy: LocalServer)`), since code mode is not
   offered in process.
 
+## Flocks: sessions working on one task together (C-042)
+
+A flock is two or three (or a few more) of the user's own top-level sessions working on one task, the way an API session, a
+client session and a docs session work on one change. It is smaller and shorter-lived than a project (C-025's lesson scope,
+which outlives any task) and wider than one conversation. Its members write to each other, the user writes to all of them at
+once, and every surface sees the same flock: `corvid chat` in two terminals, `corvid flock watch` in a third, and the app.
+Decision D-14 (plan §20) records the trust rule below as the default.
+
+**The flock's log is its record and its channel.** Each flock is a session of the event log whose id starts with `flock:`
+(`FlockSessions`, eight hex digits after it). Its events (`FlockEvents.cs`) are `flock_created` (its name), `flock_member_joined`
+and `flock_member_left` (a session id and the name the others address it by), `flock_message` (from a member's session id or
+`user`, to a list of members or everyone else, with `tainted`), `flock_delivered` (that message handed to that member, and
+whether it started a turn or was steered into a running one), `flock_paused`, `flock_resumed` and `flock_closed`. Membership
+lives only here, never in the members' own logs, so there is one truth. `FlockState` folds a log; `FlockStore` (in
+`Corvid.Kernel.Flocks`) lists, finds, creates and writes flocks, appending against the head it read and retrying on a
+concurrent append, so the chat in each terminal, the app and `corvid flock` write one flock safely. It lists flocks through a
+new `SqliteEventLog.ListHeads(prefix)`, a range of the primary key, so it never walks other sessions' events. Flock logs are
+not conversations: `/sessions`, the app's list, search and `IsSearchable` leave them out, and the Audit page names one
+"flock …".
+
+Rules the store enforces: names are one line without spaces (they become dashes, so `@name` addresses a member), at most 40
+characters, unique among open flocks (a flock) or within the flock (a member, made unique with `-2`); a session is in one open
+flock at most; only a top-level session joins (a log that starts with `child_of` is refused: a child's parent speaks for it);
+a message is at most 8,000 characters (refused, not cut) and goes only to members; a closed flock takes nothing more. A member
+gets only messages logged after it joined.
+
+**Delivery is the driving process's work, by tailing.** Nothing waits on a live hand-over, so two members writing to each
+other cannot deadlock `SessionHost`'s single ingress, and a member a terminal drives and one the app drives talk across the
+G-12 driver lock. Every runtime runs a relay (`CorvidRuntime.Flocks.cs`), started by the first session opened, inbox attached
+or flock joined, that reads the open flocks every second and hands each member this process drives (`Driver` is `HeldHere`)
+its pending messages, in order:
+
+- into a running turn as a steer (`UserSteered`, "From api in the flock auth: …"), recorded once the turn takes it at its next
+  step; the relay goes on meanwhile and holds that member's later messages;
+- otherwise as a turn of its own: through the surface's inbox (`AttachFlockInbox`) when one is attached, else posted to the
+  session (`PostFlockAsync`), one at a time per member.
+
+Only surfaces that show a turn they did not start take deliveries: the app and `corvid chat`. A member opened by an editor
+(ACP), the HTTP API or a gateway chat gets its messages once it is opened in one of those; ACP does not offer `/flock`. A
+message to a member nobody has open waits in the log and is delivered when it is opened.
+
+**Trust (plan §10.3).** A new envelope origin, `EnvelopeOrigin.Peer`, is a member's message when the member held no outside
+content as it sent it: the turn leaves the receiver's taint as it was (a user's message clears it; outside content sets it).
+`flock_send` records the sending turn's taint on the message, and a tainted member's message is delivered as
+`EnvelopeOrigin.External`, so outside content stays outside content across sessions; it is never steered into a running turn
+(a steer is read as the user's words), only queued as a turn of its own. The user's message to the flock is the user's own
+(`EnvelopeOrigin.User`) to every member, prefixed "(To everyone in the flock auth)". A peer's message is logged as a
+`UserMessage` with `From` (the peer's name) and the new `Flock` (the flock's name, omitted when null, so earlier logs keep
+their form). The prompt quotes it as a colleague session's note: not the owner's instructions, not the owner's answer to
+anything asked, "reply with flock_send" (`PromptRenderer.Quoted` with the flock; compaction, titles, the skill learner and the
+decider's recent events say the same). A peer's turn is the user's own session's turn otherwise: the whole toolset, memory
+recall and skills, unlike a guest's, but it can never run a `!` line.
+
+**`flock_send`** (`FlockSendTool`): `text` and `to` (a member's name, `@name`, or several; left out for everyone), or no text
+for the roster. It writes the flock's log and returns at once ("Sent to web. Their answers come as messages to you"). Its risk
+is `SideEffects.None`: it changes nothing outside Corvid's own log, so it asks no approval, and taint (above) is what keeps a
+tainted turn's message from passing as clean. It is registered always but offered only to members:
+`TurnOptions.AlwaysOffered` (new) names tools a session's turns get whatever the shortlist ranks and whatever a decider's pick
+narrows the turn to (also "answer directly"), even when `ToolFilter` withholds them from ranking; the host withholds
+`flock_send` from ranking for every session and offers it back to members (`AlwaysOfferedTools`). A child never has it (its
+toolset is the parent's named tools; `AlwaysOffered` is null for a child), nor a guest's turn (not in its catalogue).
+
+**The loop guard.** Members answering each other could run without end. Each delivery that started a turn on a member's
+message counts (`FlockState.PeerTurns`); a steer does not, nor does the user's message. When a member's message would start
+the ninth (`MaxPeerTurns`, 8) since the user last wrote to the flock or resumed it, the relay appends `flock_paused` once,
+raises a runtime `Notice` ("The flock auth is paused: its members started 8 turns on each other without you. /flock resume
+…"), and delivers nothing more from members until the user writes to the flock (which resets the count) or resumes it.
+Messages meanwhile wait in the log.
+
+**Surfaces.**
+
+- `/flock` (every surface but ACP; runs beside a turn): the flock with its members (who drives each), whether it is paused
+  and its latest eight messages; `list`, `new <name> [as <me>]`, `join <flock> [as <me>]`, `add <session> [as <name>]`,
+  `leave`, `say [@member] <text>`, `resume`, `close`. A name of several words is allowed before `as`.
+- `corvid chat --flock <name> [--as <name>]` joins the flock, starting it when none is open by that name, and says who else
+  is in it. The chat attaches an inbox: a message arriving while it waits at its prompt cancels the read (a line typed
+  meanwhile stays queued and is sent after), prints "✉ flock auth · api: …" and runs as the next turn through the same path
+  as a typed message (approvals, `/model` beside it); one arriving during a turn is the relay's steer.
+- `corvid flock` works on the event log alone, loading no model, so it runs beside the chats: `list [--all]`,
+  `show <flock> [--all]` (each message with how many members it still waits for), `new`, `say <flock> [@member] <text>`,
+  `add <flock> <session> [--as <name>]`, `leave`, `resume`, `close`, and `watch <flock>`: the flock's messages, members
+  joining and leaving and the pause as they happen, with each line typed sent to every member (`@name` first for one).
+- The app: `SessionSummary.Flock` (the open flock's name) reaches an attached window as it is; the rail groups a flock's
+  members under "Flock · name" after Pinned and before the workspace groups, and regroups when the relay sees members
+  change (`CorvidRuntime.FlockChanged`). While the window has a member open, the engine's channel attaches an inbox and
+  queues the flock's message as it queues the person's (`EnqueueAsync` with the delivery), so the turn draws in the window
+  with its card prompts and the peer named on the message; a member the window has not opened is posted by the relay.
+
+Not built (follow-ups in plan §18, C-042): a flock page in the app (the shared transcript, writing to the flock) and the
+attached protocol's `say`; flocks on the Board; giving a flock a shared goal or todo list; a member's answer sent back to
+the asker without a `flock_send` call; joining in-process children; ACP and HTTP members; a `send to flock` step in jobs;
+counting the user's own messages in a member session toward the loop guard; pruning closed flocks' logs.
+
 ## Running the check
 
 ```sh

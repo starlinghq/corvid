@@ -97,6 +97,29 @@ public sealed class WorkspaceRailTests
     }
 
     [Fact]
+    public async Task AFlocksMembersAreGroupedUnderItsNameAndGoBackWhenTheyLeave()
+    {
+        using var rig = await StartAsync();
+        var members = (await rig.Service.ListAsync(Ct)).Where(summary => !summary.Pinned && !summary.ReadOnly).Take(2).ToList();
+        Assert.Equal(2, members.Count);
+
+        // C-042: the engine lists a member with its flock's name; the rail puts the members together.
+        foreach (var member in members)
+            rig.Service.Raise(member with { Flock = "auth‮fix" });
+
+        var flock = Assert.Single(rig.Shell.SessionGroups, group => group.Title.StartsWith("Flock · ", StringComparison.Ordinal));
+        Assert.DoesNotContain("‮", flock.Title, StringComparison.Ordinal);
+        Assert.Equal(members.Select(member => member.Id).Order(StringComparer.Ordinal), flock.Sessions.Select(session => session.Id).Order(StringComparer.Ordinal));
+        Assert.All(rig.Shell.SessionGroups.Where(group => group != flock), group =>
+            Assert.DoesNotContain(group.Sessions, session => members.Any(member => member.Id == session.Id)));
+
+        foreach (var member in members)
+            rig.Service.Raise(member with { Flock = null });
+
+        Assert.DoesNotContain(rig.Shell.SessionGroups, group => group.Title.StartsWith("Flock · ", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task TheDemoKeepsPinnedAndRecent()
     {
         var time = ManualTimeProvider.Demo();

@@ -86,8 +86,8 @@ public sealed class CompositionTests
     {
         await using var host = TestHost.Create();
         await using var runtime = await host.StartAsync();
-        // The skill tools (C-017) come with skills, which are on by default.
-        Assert.Equal(["add_note", "list_notes", "skill_read", "skill_run_script"], runtime.Tools.List().Select(tool => tool.Name).Order(StringComparer.Ordinal));
+        // The skill tools (C-017) come with skills, which are on by default; C-042's flock_send always (offered only in a flock).
+        Assert.Equal(["add_note", "flock_send", "list_notes", "skill_read", "skill_run_script"], runtime.Tools.List().Select(tool => tool.Name).Order(StringComparer.Ordinal));
     }
 
     [Fact]

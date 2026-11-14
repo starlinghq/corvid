@@ -418,6 +418,8 @@ internal sealed partial class AcpAgent : IJsonRpcHandler, IAsyncDisposable
             // A6: /workspace opens sessions elsewhere, which an editor bound to its cwd does not drive; its list stays as recorded.
             // So does /search (G-5).
             .Where(command => command.Name is not ("workspace" or "search"))
+            // C-042: a flock's messages start turns the editor did not prompt, which ACP has no way to show; not offered.
+            .Where(command => command.Name != "flock")
             .Select(command => new AvailableCommand(command.Name, command.Summary)
             {
                 Input = command.Usage.Contains(' ', StringComparison.Ordinal) ? new AvailableCommandInput(command.Usage) : null,

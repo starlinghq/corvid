@@ -53,7 +53,7 @@ internal sealed class CliRun : IDisposable
     public Task<int> RunAsync(string[] args, params string?[] input) => RunAsync(args, new ScriptedChatInput(input));
 
     /// <summary>A5: with a scripted input built by the test (lines typed during a turn).</summary>
-    public async Task<int> RunAsync(string[] args, ScriptedChatInput input)
+    public async Task<int> RunAsync(string[] args, IChatInput input)
     {
         var context = new CliContext(Console, input)
         {
@@ -86,7 +86,8 @@ public sealed class ChatTests
 
         Assert.Equal(ExitCodes.Success, exit);
         var output = run.Output;
-        Assert.Contains("corvid · fake-gen@cpu · 4 tool(s)", output, StringComparison.Ordinal);
+        // The note tools and C-042's flock_send (registered always, offered only to a flock's members).
+        Assert.Contains("corvid · fake-gen@cpu · 5 tool(s)", output, StringComparison.Ordinal);
         // The tool panel, in line mode on a non-interactive console.
         Assert.Contains("⏺ list_notes running", output, StringComparison.Ordinal);
         Assert.Contains("✓ list_notes succeeded", output, StringComparison.Ordinal);

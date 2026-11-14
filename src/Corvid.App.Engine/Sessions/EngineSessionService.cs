@@ -210,8 +210,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// <param name="modeLines">Read a <c>!</c> or <c>#</c> line as the composer's mode (<see cref="ComposerLineAsync"/>); false
     /// for a question's answer, which is sent as given.</param>
     /// <param name="images">K-8 (A6): the images the message carries, checked by <see cref="SendAsync(string, string, IReadOnlyList{ImageAttachment}, CancellationToken)"/>.</param>
+    /// <param name="flock">C-042: a flock's message for the session, queued and run as the window's own are, with its sender.</param>
     private async Task<QueuedMessage> EnqueueAsync(string sessionId, string text, bool modeLines, CancellationToken cancellationToken,
-        ImmutableArray<ImageAttachment> images = default)
+        ImmutableArray<ImageAttachment> images = default, FlockDelivery? flock = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         images = images.IsDefault ? [] : images;
@@ -247,6 +248,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 if (shellLine && channel.View?.Question is not null)
                     throw new InvalidOperationException("A question is open: answer it first, then send the ! line. Nothing was sent.");
                 message = new QueuedMessage($"q-{++channel.QueueCounter}", text.Trim()) { Images = images };
+                if (flock is not null)
+                    channel.FlockMessages[message.Id] = flock;
                 start = !channel.Running;
                 // K-6: with a question open the session waits on this message, the person's answer: it starts now, and what
                 // was queued before (typed before the question showed) waits behind it rather than answering it.
@@ -270,7 +273,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             {
                 try
                 {
-                    await StartTurnAsync(channel, runtime, tools, message.Text, cancellationToken, verbatim: !modeLines, images: message.Images).ConfigureAwait(false);
+                    await StartTurnAsync(channel, runtime, tools, message.Text, cancellationToken, verbatim: !modeLines, images: message.Images,
+                        flock: TakeFlockMessage(channel, message)).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -470,6 +474,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             PendingApproval[] open;
             IDisposable? feed, prompter;
+            // C-042: the relay posts this window's flock messages itself from now on.
+            channel.FlockInbox?.Dispose();
             lock (channel.Gate)
             {
                 channel.Subscribers.Clear();
@@ -523,8 +529,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// A turn that cannot start lets go of what it attached and throws; the caller hands the session on (<see cref="HandOff"/>).
     /// </summary>
     /// <param name="verbatim">Send the text as a message even when it reads as a <c>!</c> line (a question's answer).</param>
+    /// <param name="flock">C-042: the turn is a flock's message: posted with its origin and sender (a peer's, or the user's to the flock).</param>
     private async Task StartTurnAsync(Channel channel, CorvidRuntime runtime, ToolPresentation tools, string text, CancellationToken cancellationToken,
-        bool verbatim = false, ImmutableArray<ImageAttachment> images = default)
+        bool verbatim = false, ImmutableArray<ImageAttachment> images = default, FlockDelivery? flock = null)
     {
         var sessionId = channel.SessionId;
         IDisposable? feed = null, prompter = null;
@@ -567,7 +574,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             await PauseAt("post").ConfigureAwait(false);
             // Returns once the session's actor has the message (or the ! line's command); the turn runs on, and its end is
             // tracked below.
-            var delivery = await PostLineAsync(session, text, verbatim, cancellationToken, images).ConfigureAwait(false);
+            var delivery = flock is not null
+                ? await runtime.PostFlockAsync(session, flock, cancellationToken).ConfigureAwait(false)
+                : await PostLineAsync(session, text, verbatim, cancellationToken, images).ConfigureAwait(false);
             Track(FinishTurnAsync(channel, reporter, delivery, feed, prompter, started));
             feed = prompter = null;
         }
@@ -702,7 +711,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
             var tools = await _engine.ToolsAsync().ConfigureAwait(false);
-            await StartTurnAsync(channel, runtime, tools, message.Text, CancellationToken.None, images: message.Images).ConfigureAwait(false);
+            await StartTurnAsync(channel, runtime, tools, message.Text, CancellationToken.None, images: message.Images,
+                flock: TakeFlockMessage(channel, message)).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -795,6 +805,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 if (channel.Closed)
                     continue;
                 loading = channel.Loading ??= Task.Run(() => ReplayAsync(runtime, tools, channel), CancellationToken.None);
+                // C-042: while the window has the session, a flock's messages for it queue here like the person's, so the
+                // window shows their turns; with no channel the runtime's relay posts them itself.
+                channel.FlockInbox ??= runtime.AttachFlockInbox(sessionId, delivery => TakeFlock(channel, delivery));
             }
             try
             {
@@ -1024,6 +1037,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 return;
             channel.Closed = true;
         }
+        channel.FlockInbox?.Dispose();
         StopTail(channel);
         _channels.TryRemove(new KeyValuePair<string, Channel>(channel.SessionId, channel));
         // M2 (A4 review): a session this window drove is let go of once nothing of it is open here, so a terminal's
@@ -1376,8 +1390,42 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     private SlashCommandRegistry Registry => _engine.Services.GetRequiredService<SlashCommandRegistry>();
 
     /// <summary>One session's updates so far, the state they fold to, its queue and open prompts, and who hears the next updates.</summary>
+    // C-042: a flock's message for an open channel, queued as the window's own (the relay records it handed over).
+    private bool TakeFlock(Channel channel, FlockDelivery delivery)
+    {
+        lock (channel.Gate)
+            if (channel.Closed || _disposed)
+                return false;
+        Track(QueueFlockAsync(channel.SessionId, delivery));
+        return true;
+    }
+
+    private async Task QueueFlockAsync(string sessionId, FlockDelivery delivery)
+    {
+        try
+        {
+            await EnqueueAsync(sessionId, delivery.Text, modeLines: false, CancellationToken.None, flock: delivery).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Log($"corvid app: a message from the flock {delivery.FlockName} did not start: {exception.Message}");
+        }
+    }
+
+    private static FlockDelivery? TakeFlockMessage(Channel channel, QueuedMessage message)
+    {
+        lock (channel.Gate)
+            return channel.FlockMessages.Remove(message.Id, out var flock) ? flock : null;
+    }
+
     private sealed class Channel(string sessionId, SessionUpdateTranslator translator)
     {
+        /// <summary>C-042: queued messages that came from a flock, by queue id, with who they are from.</summary>
+        public Dictionary<string, FlockDelivery> FlockMessages { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>C-042: this channel's flock inbox, attached once loaded and let go of with the channel.</summary>
+        public IDisposable? FlockInbox { get; set; }
+
         public Lock Gate { get; } = new();
 
         public string SessionId { get; } = sessionId;

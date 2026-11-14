@@ -138,7 +138,7 @@ public sealed partial class CorvidRuntime
             foreach (var member in flock.Members)
             {
                 if (!TryGetSession(member.SessionId, out var session) || session.Child is not null
-                    || Driver(member.SessionId).State != LockState.HeldHere)
+                    || Driver(member.SessionId).State != LockState.HeldHere || !TakesFlockTurns(session))
                     continue;
                 foreach (var entry in flock.Pending(member.SessionId))
                 {
@@ -157,6 +157,12 @@ public sealed partial class CorvidRuntime
             }
         }
     }
+
+    // Surfaces that show a turn they did not start: the app and the chat (which attaches an inbox). An editor's ACP session,
+    // an HTTP client's and a gateway chat answer only what they asked, so a member opened there gets its messages once it is
+    // opened in one of these.
+    private bool TakesFlockTurns(CorvidSession session) =>
+        session.Surface is "app" or "cli" || _flockInboxes.ContainsKey(session.Id);
 
     // Hands one message to a member: a steer into its running turn when it can take one, else a turn of its own (through the
     // surface's inbox when one is attached). The loop guard holds members' messages that would start a turn once they have
