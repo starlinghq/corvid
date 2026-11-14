@@ -4607,7 +4607,7 @@ A flock is two or three (or a few more) of the user's own top-level sessions wor
 client session and a docs session work on one change. It is smaller and shorter-lived than a project (C-025's lesson scope,
 which outlives any task) and wider than one conversation. Its members write to each other, the user writes to all of them at
 once, and every surface sees the same flock: `corvid chat` in two terminals, `corvid flock watch` in a third, and the app.
-Decision D-14 (plan §20) records the trust rule below as the default.
+Decision D-14 (plan §20, decided 2026-11-14) is the trust rule below.
 
 **The flock's log is its record and its channel.** Each flock is a session of the event log whose id starts with `flock:`
 (`FlockSessions`, eight hex digits after it). Its events (`FlockEvents.cs`) are `flock_created` (its name), `flock_member_joined`
