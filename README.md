@@ -15,10 +15,12 @@ Secrets never enter the agent. They live in **Corvid Vault**, a separate process
 placeholders for real values only on the way out to the host each secret is bound to.
 
 <p align="center">
-  <img src="docs/plan/tui-mockups/png/04-fabric.png" alt="Mockup of a Corvid chat turn: Kev answers the ingress questions, web_fetch taints the session, a step question escalates to claude-opus-5-5, the privacy gate redacts two values, and a memory fact is staged for review" width="820">
+  <img src="docs/media/corvid-app-demo.gif" alt="The Corvid desktop app: a steer is sent mid-turn and the turn finishes, the next turn asks approval for 'rm -rf build/ && dotnet test' with each target and Kev's reasons, it is allowed once and the tests pass, a patch to the production launcher is denied, then the command palette opens the Board and Rewind" width="900">
   <br>
-  <sub><i>Design mockup of the planned terminal UI (<a href="docs/plan/tui.md"><code>docs/plan/tui.md</code></a>). The agent behaviour shown is built: Kev's decisions, taint, escalation, the privacy gate, staged memory and cron runs. The renderer and the palette are still the design; today's <code>corvid chat</code> uses a simpler Spectre.Console renderer, and the windowed app, <code>corvid-app</code>, draws these surfaces.</i></sub>
+  <sub><i>The windowed app, <code>corvid-app --demo</code>: a steer taken mid-turn, an approval card with every target and the reasons Kev asks, a patch to the launcher denied, then the palette, the Board and Rewind. The demo is a scripted scenario and needs no models (<a href="#try-the-app-without-models">try it</a>).</i></sub>
 </p>
+
+Website: [corvid.starling.rocks](https://corvid.starling.rocks)
 
 ## Contents
 
@@ -32,6 +34,11 @@ placeholders for real values only on the way out to the host each secret is boun
 - [Repository layout](#repository-layout)
 
 ## Quick start
+
+> **Release status.** The latest release, `v0.1.0` (2026-10-23), has the command line only. The windowed app and most of
+> what this README describes since (switching models mid-turn, subagents with a model mix, code mode, workspaces,
+> images, attached mode) are on `main` and come with the next release. Until then, `install.sh --app` stops because the
+> release has no `corvid-app-linux-x64.tar.gz`, and those features need a [source build](#from-source).
 
 Install the latest release (Linux x86_64; no .NET SDK needed):
 
@@ -66,8 +73,21 @@ It goes beside `corvid` in `~/.local/lib/corvid/<version>/app/` with its own cop
 as its icon, so it shows as Corvid in the applications menu. It runs on the same Corvid home as `corvid chat`, and opens
 on First run while models are missing. `corvid doctor` says whether it is installed.
 
-From a source checkout, use `dotnet run --project src/Corvid.Cli -- <command>` in place of `corvid`, or build the
-binaries yourself:
+### Try the app without models
+
+`corvid-app --demo` runs the app on a scripted scenario with demo services and a frozen clock: no models, no Corvid home,
+nothing written. Send a message to start it moving, as in the recording above. From a source checkout:
+
+```sh
+dotnet restore Corvid.slnx                                   # once: the app builds corvid-sandbox, which only the solution restores
+dotnet run --project src/Corvid.App -c Release -- --demo     # add --theme dark, --page board, or --scene approval
+```
+
+### From source
+
+Requires the .NET 10 SDK ([build and test](#build-and-test)). Use `dotnet run --project src/Corvid.Cli -- <command>` in
+place of `corvid` and `dotnet run --project src/Corvid.App -c Release` in place of `corvid-app` (after
+`dotnet restore Corvid.slnx` once), or build the binaries yourself:
 
 ```sh
 dotnet publish src/Corvid.Cli -c Release -r linux-x64        # a single-file `corvid`
@@ -129,9 +149,9 @@ reach a tool that delegates, asks, sends, schedules or writes memory.
 
 ### Asks before it acts, and explains why
 
-<img src="docs/plan/tui-mockups/png/02-approval.png" alt="Mockup of an approval card for 'rm -rf build/ && dotnet test Corvid.slnx', listing each target, the reasons it asks (destructive, tainted session) and the checkpoint taken before the call" width="820">
+<img src="docs/media/app-approval.png" alt="The Corvid app's approval card for 'rm -rf build/ && dotnet test Corvid.slnx': each part's verb, targets, undo and network, the reasons it asks (risk 3 from Kev-0.8B, a tainted session, reversible), five answers, and the Decisions panel listing Kev's answers with their confidences" width="820">
 
-<sub><i>Mockup of the terminal approval card. In today's CLI the same prompt is answered inline: once, this session, always, or deny; the windowed app draws it as a card.</i></sub>
+<sub><i>The app's approval card, with the Decisions panel listing each of Kev's answers and its confidence (<code>corvid-app --scene approval</code>). In <code>corvid chat</code> the same prompt is answered inline: once, this session, always, or deny.</i></sub>
 
 Every side effect goes through a structural approval pipeline. It parses the shell command (a bash subset, with
 wrappers such as `sudo`, `env` and `xargs` unwrapped), extracts every target, and checks the result against a hardline
@@ -151,9 +171,9 @@ the workspace, with no network, elevation or destructive tool. **Manual** mode a
 
 ### Undoes its own work, not yours
 
-<img src="docs/plan/tui-mockups/png/05-rewind.png" alt="Mockup of the rewind picker listing checkpoints c-31 to c-43 with their tools, paths and diffs, and a warning that README.md was edited since c-31 and will merge three ways" width="820">
+<img src="docs/media/app-rewind.png" alt="The Corvid app's Rewind page: the checkpoint ledger with each call, its paths and changes, and a restore to before c-38 that lists the files put back, warns that SeccompTests.cs was edited since and will merge three ways, and offers files and conversation, conversation only, or files only" width="820">
 
-<sub><i>Mockup of the terminal rewind picker. Today the same restore is <code>/undo</code> and <code>/rollback N</code>, or the windowed app's Rewind page.</i></sub>
+<sub><i>The app's Rewind page (demo). In <code>corvid chat</code> the same restore is <code>/undo</code> and <code>/rollback N</code>.</i></sub>
 
 Before any tool call that changes files, Corvid checkpoints the workspace into a shadow git store, which is never your
 own repository. `/undo` reverts the last turn. `/rollback N` goes back to before the Nth latest checkpoint and takes
@@ -259,9 +279,9 @@ approvals, and `!! command` does so and keeps it out of what the model sees. `\#
 
 ## The windowed app
 
-<img src="docs/plan/ui-mockups/png/Main.png" alt="Mockup of the Corvid app: a rail of areas and sessions, a session's conversation with tool cards, a dock with changes and the status bar" width="820">
+<img src="docs/media/app-board.png" alt="The Corvid app's Board: five sessions and a job run as cards, local, cloud, tainted or read-only, and an attention tray with a question, a held MCP tool, a pairing request, staged memory and a finished job" width="820">
 
-<sub><i>The design mockup the Sessions page was built against.</i></sub>
+<sub><i>The Board (demo): every session and job run, and the attention tray of what waits on you. The Sessions page is in the recording at the top.</i></sub>
 
 `corvid-app` is a desktop app on [Uno Platform](https://platform.uno) over the same engine as `corvid chat`, on the same
 Corvid home. A session can be driven by one process at a time; open elsewhere, it shows read-only and follows along.
@@ -503,8 +523,9 @@ How the windowed app was built, phase by phase, and what each phase left is in
 
 **Next:** the rest of the agent plan's Phase 3 in [`docs/plan/corvid-agent.md`](docs/plan/corvid-agent.md): media memory, voice
 and more gateway adapters, and calibrating the decider's floors, which are not yet fitted to measured data. The terminal UI redesign in
-[`docs/plan/tui.md`](docs/plan/tui.md) is designed, with an inline renderer that never clears your scrollback; the
-mockups above and the rest in [`docs/plan/tui-mockups/`](docs/plan/tui-mockups/README.md) come from it. Vault's roadmap is
+[`docs/plan/tui.md`](docs/plan/tui.md) is designed, with an inline renderer that never clears your scrollback; its
+mockups are in [`docs/plan/tui-mockups/`](docs/plan/tui-mockups/README.md). Today's `corvid chat` uses a simpler
+Spectre.Console renderer. Vault's roadmap is
 [`docs/plan/vault.md`](docs/plan/vault.md).
 
 ## Build and test
@@ -526,6 +547,7 @@ Evaluation harnesses (replay, calibration, tool-calling) are described in [`eval
 | `docs/plan/` | the agent plan (`corvid-agent.md`), Vault (`vault.md`), the TUI design (`tui.md`) with its mockups, the windowed UI design (`ui.md`) with its mockups, and how the app was built (`ui-handoff.md`) |
 | `docs/architecture.md` | how each built piece works, section by section |
 | `docs/spikes/`, `docs/research/` | measured spikes (S1 to S5) and the TUI research notes |
+| `docs/media/` | the README's recording and screenshots of the app, and how they were made |
 | `src/Corvid.Abstractions` | dependency-free contracts: session events, `IEventLog`, `Envelope`, `IDecider`, `IExtractor`, `ITokenCounter` |
 | `src/Corvid.Kernel` | event log and projections, session actors and the turn loop, compaction, durable jobs and the scheduler, checkpoints |
 | `src/Corvid.Fabric` | decision fabric: question catalogue, versioned floors, policy, the degraded decider, the tool shortlist, Kev-4B escalation |
