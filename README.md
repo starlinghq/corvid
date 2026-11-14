@@ -36,9 +36,9 @@ Website: [corvid.starling.rocks](https://corvid.starling.rocks)
 ## Quick start
 
 > **Release status.** The latest release, `v0.1.0` (2026-10-23), has the command line only. The windowed app and most of
-> what this README describes since (model switching, subagents with a model mix, code mode, workspaces, images, attached
-> mode) are on `main` and come with the next release. Until then, `install.sh --app` stops with "could not download
-> corvid-app-linux-x64.tar.gz", and those features need a [source build](#from-source).
+> what this README describes since (switching models mid-turn, subagents with a model mix, code mode, workspaces,
+> images, attached mode) are on `main` and come with the next release. Until then, `install.sh --app` stops because the
+> release has no `corvid-app-linux-x64.tar.gz`, and those features need a [source build](#from-source).
 
 Install the latest release (Linux x86_64; no .NET SDK needed):
 
