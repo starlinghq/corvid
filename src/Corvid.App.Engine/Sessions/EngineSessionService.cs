@@ -274,7 +274,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 try
                 {
                     await StartTurnAsync(channel, runtime, tools, message.Text, cancellationToken, verbatim: !modeLines, images: message.Images,
-                        flock: TakeFlockMessage(channel, message)).ConfigureAwait(false);
+                        flock: FlockMessageOf(channel, message)).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -577,6 +577,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             var delivery = flock is not null
                 ? await runtime.PostFlockAsync(session, flock, cancellationToken).ConfigureAwait(false)
                 : await PostLineAsync(session, text, verbatim, cancellationToken, images).ConfigureAwait(false);
+            if (flock is not null)
+                lock (channel.Gate)
+                    foreach (var id in channel.FlockMessages.Where(pair => ReferenceEquals(pair.Value, flock)).Select(pair => pair.Key).ToList())
+                        channel.FlockMessages.Remove(id);
             Track(FinishTurnAsync(channel, reporter, delivery, feed, prompter, started));
             feed = prompter = null;
         }
@@ -712,7 +716,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
             var tools = await _engine.ToolsAsync().ConfigureAwait(false);
             await StartTurnAsync(channel, runtime, tools, message.Text, CancellationToken.None, images: message.Images,
-                flock: TakeFlockMessage(channel, message)).ConfigureAwait(false);
+                flock: FlockMessageOf(channel, message)).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -1389,14 +1393,18 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
     private SlashCommandRegistry Registry => _engine.Services.GetRequiredService<SlashCommandRegistry>();
 
-    /// <summary>One session's updates so far, the state they fold to, its queue and open prompts, and who hears the next updates.</summary>
-    // C-042: a flock's message for an open channel, queued as the window's own (the relay records it handed over).
+    // C-042: a flock's message for an open channel, queued as the window's own, in the order the relay hands them over
+    // (each waits for the one before it to be queued). The relay records it delivered once StartTurnAsync posts it.
     private bool TakeFlock(Channel channel, FlockDelivery delivery)
     {
         lock (channel.Gate)
+        {
             if (channel.Closed || _disposed)
                 return false;
-        Track(QueueFlockAsync(channel.SessionId, delivery));
+            channel.FlockChain = channel.FlockChain.ContinueWith(_ => QueueFlockAsync(channel.SessionId, delivery), CancellationToken.None,
+                TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+            Track(channel.FlockChain);
+        }
         return true;
     }
 
@@ -1408,18 +1416,31 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
+            // Not queued, or its turn did not start: the relay offers it again rather than losing it.
+            if (_channels.TryGetValue(sessionId, out var channel))
+                lock (channel.Gate)
+                    foreach (var id in channel.FlockMessages.Where(pair => ReferenceEquals(pair.Value, delivery)).Select(pair => pair.Key).ToList())
+                        channel.FlockMessages.Remove(id);
+            if (_engine.Runtime is { IsCompletedSuccessfully: true } started)
+                started.Result.ReleaseFlock(sessionId, delivery);
             Log($"corvid app: a message from the flock {delivery.FlockName} did not start: {exception.Message}");
         }
     }
 
-    private static FlockDelivery? TakeFlockMessage(Channel channel, QueuedMessage message)
+    // The flock a queued message came from, kept with it until its turn is posted (StartTurnAsync lets go of it then), so a
+    // start that fails and is retried posts it with its origin and sender again, never as the person's own line.
+    private static FlockDelivery? FlockMessageOf(Channel channel, QueuedMessage message)
     {
         lock (channel.Gate)
-            return channel.FlockMessages.Remove(message.Id, out var flock) ? flock : null;
+            return channel.FlockMessages.GetValueOrDefault(message.Id);
     }
 
+    /// <summary>One session's updates so far, the state they fold to, its queue and open prompts, and who hears the next updates.</summary>
     private sealed class Channel(string sessionId, SessionUpdateTranslator translator)
     {
+        /// <summary>C-042: the flock's messages taken and still being queued, one after another.</summary>
+        public Task FlockChain { get; set; } = Task.CompletedTask;
+
         /// <summary>C-042: queued messages that came from a flock, by queue id, with who they are from.</summary>
         public Dictionary<string, FlockDelivery> FlockMessages { get; } = new(StringComparer.Ordinal);
 

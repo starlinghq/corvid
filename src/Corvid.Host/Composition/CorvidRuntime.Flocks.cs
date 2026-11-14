@@ -25,9 +25,10 @@ public sealed record FlockDelivery(string FlockId, string FlockName, long Sequen
 }
 
 /// <summary>
-/// C-042: a surface that runs a member session's turns itself (<c>corvid chat</c>, which reads the next line and runs it)
-/// takes the flock's messages for it here instead of the relay posting them. Return true once the surface has the message
-/// (it will run it as the next turn); false leaves it for the next pass.
+/// C-042: a surface that runs a member session's turns itself (<c>corvid chat</c>, the app's window) takes the flock's
+/// messages for it here instead of the relay posting them. Return true once the surface has the message: it then posts it
+/// with <see cref="CorvidRuntime.PostFlockAsync"/>, which records it delivered, or gives it back with
+/// <see cref="CorvidRuntime.ReleaseFlock"/>; until then the relay holds it. False leaves it for the next pass.
 /// </summary>
 public delegate bool FlockInbox(FlockDelivery delivery);
 
@@ -38,28 +39,31 @@ public sealed partial class CorvidRuntime
 
     private FlockStore? _flocks;
     private readonly ConcurrentDictionary<string, FlockInbox> _flockInboxes = new(StringComparer.Ordinal);
-    // A member's turn the relay posted and that has not ended: the next message waits for it (a steer meanwhile).
+    // A member's turn the relay posted and that has not ended: the next message waits for it.
     private readonly ConcurrentDictionary<string, Task> _flockTurns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _flockHeads = new(StringComparer.Ordinal);
-    // Steers handed to a running turn and not yet taken, by flock, message and member.
-    private readonly ConcurrentDictionary<(string, long, string), bool> _flockSteers = new();
+    // The user's messages steered into a running turn and not yet taken, by flock, message and member.
+    private readonly ConcurrentDictionary<(string Flock, long Sequence, string Session), bool> _flockSteers = new();
+    // Messages a surface's inbox took and has neither posted (PostFlockAsync) nor given back (ReleaseFlock): not offered
+    // again meanwhile. Held in memory only: a process that exits before posting one leaves it undelivered in the log.
+    private readonly ConcurrentDictionary<(string Flock, long Sequence, string Session), bool> _flockOffered = new();
     private int _relayStarted;
 
     /// <summary>C-042: flocks in this runtime's event log.</summary>
     public FlockStore Flocks => LazyInitializer.EnsureInitialized(ref _flocks, () => new FlockStore(Log));
 
-    /// <summary>Turns members may start on each other before a flock pauses for the user (<c>Corvid:Flocks:MaxPeerTurns</c>).</summary>
+    /// <summary>Turns members may start on each other before a flock pauses for the user.</summary>
     public int MaxPeerTurns { get; internal set; } = FlockStore.DefaultMaxPeerTurns;
 
     /// <summary>
-    /// C-042: a flock's log moved (a message, a member, a delivery, a pause), seen by this process's relay: for a surface
-    /// that shows the flock. Raised on the relay's thread.
+    /// C-042: a flock this process's relay sees appeared, moved (a message, a member, a delivery, a pause) or closed: for a
+    /// surface that shows flocks. Raised on the relay's thread.
     /// </summary>
     public event Action<FlockState>? FlockChanged;
 
     /// <summary>
-    /// C-042: <paramref name="inbox"/> takes the flock's messages for the session while attached (disposed: the relay posts
-    /// them again). Steers into a running turn still go straight to the turn.
+    /// C-042: <paramref name="inbox"/> takes the flock's messages for the session while attached. Disposing it gives back
+    /// every message it took and did not post, and the relay posts them itself from then on.
     /// </summary>
     public IDisposable AttachFlockInbox(string sessionId, FlockInbox inbox)
     {
@@ -67,7 +71,12 @@ public sealed partial class CorvidRuntime
         ArgumentNullException.ThrowIfNull(inbox);
         _flockInboxes[sessionId] = inbox;
         StartFlockRelay();
-        return new Detach(() => _flockInboxes.TryRemove(new KeyValuePair<string, FlockInbox>(sessionId, inbox)));
+        return new Detach(() =>
+        {
+            _flockInboxes.TryRemove(new KeyValuePair<string, FlockInbox>(sessionId, inbox));
+            foreach (var key in _flockOffered.Keys.Where(key => key.Session == sessionId))
+                _flockOffered.TryRemove(key, out _);
+        });
     }
 
     // The hard filter withholds flock_send from ranking for every session; AlwaysOfferedTools adds it back for members.
@@ -129,10 +138,11 @@ public sealed partial class CorvidRuntime
     /// <summary>One pass of the relay: every open flock's pending messages for the members this process drives.</summary>
     internal async Task RelayOnceAsync(CancellationToken cancellationToken = default)
     {
-        foreach (var listed in Flocks.List())
+        var open = Flocks.List();
+        foreach (var listed in open)
         {
             var flock = listed;
-            if (_flockHeads.TryGetValue(flock.Id, out var seen) && seen != flock.Head)
+            if (!_flockHeads.TryGetValue(flock.Id, out var seen) || seen != flock.Head)
                 FlockChanged?.Invoke(flock);
             _flockHeads[flock.Id] = flock.Head;
             foreach (var member in flock.Members)
@@ -156,6 +166,13 @@ public sealed partial class CorvidRuntime
                 FlockChanged?.Invoke(flock);
             }
         }
+        // A flock closed since the last pass is said once more, closed, so a surface lets go of it.
+        foreach (var id in _flockHeads.Keys.Where(id => !open.Any(flock => flock.Id == id)).ToList())
+        {
+            _flockHeads.TryRemove(id, out _);
+            if (Flocks.Get(id) is { } gone)
+                FlockChanged?.Invoke(gone);
+        }
     }
 
     // Surfaces that show a turn they did not start: the app and the chat (which attaches an inbox). An editor's ACP session,
@@ -164,32 +181,37 @@ public sealed partial class CorvidRuntime
     private bool TakesFlockTurns(CorvidSession session) =>
         session.Surface is "app" or "cli" || _flockInboxes.ContainsKey(session.Id);
 
-    // Hands one message to a member: a steer into its running turn when it can take one, else a turn of its own (through the
-    // surface's inbox when one is attached). The loop guard holds members' messages that would start a turn once they have
-    // started MaxPeerTurns since the user last took part.
+    // Hands one message to a member, true when it is handed (or with the surface already). The user's message steers a
+    // running turn; anything else, and a steer that would pass an earlier message still on its way, is a turn of its own,
+    // through the surface's inbox when one is attached. A delivery is recorded once the message is posted, never on the
+    // inbox's word alone. The loop guard holds members' messages that would start a turn once they have started
+    // MaxPeerTurns since the user last took part.
     private async Task<(bool Handed, FlockState Flock)> DeliverAsync(FlockState flock, CorvidSession session, FlockEntry entry)
     {
         var message = entry.Message;
         var fromUser = message.From == FlockSessions.User;
         if (flock.Paused && !fromUser)
             return (false, flock);
+        var key = (flock.Id, entry.Sequence, session.Id);
+        // The surface has it and runs its messages in order: the next may go to it too.
+        if (_flockOffered.ContainsKey(key))
+            return (true, flock);
+        if (_flockSteers.ContainsKey(key))
+            return (false, flock);
         var peer = fromUser ? null : new PeerSender(flock.SenderName(message), flock.Name);
         var origin = fromUser ? EnvelopeOrigin.User : message.Tainted ? EnvelopeOrigin.External : EnvelopeOrigin.Peer;
         var text = !fromUser ? message.Text
             : message.To.IsDefaultOrEmpty ? $"(To everyone in the flock {flock.Name}) {message.Text}"
             : $"(To you in the flock {flock.Name}) {message.Text}";
-        // A steer joins the running turn as the person's words, so only the user's message or an untainted peer's is one; a
-        // tainted peer's waits for its own turn, which reads it as outside content.
-        // The steer is taken at the turn's next step, which may be minutes off: the relay goes on meanwhile, holding this
-        // member's later messages, and records the delivery once it is taken (else hands it over on a later pass).
-        var key = (flock.Id, entry.Sequence, session.Id);
-        if (_flockSteers.ContainsKey(key))
-            return (false, flock);
-        if (session.Actor.TurnRunning && origin != EnvelopeOrigin.External)
+        var earlier = _flockTurns.TryGetValue(session.Id, out var running) && !running.IsCompleted
+            || _flockOffered.Keys.Any(other => other.Session == session.Id);
+        // A steer is read as the user's own words in the running turn, so only the user's message is one: a member's, even an
+        // untainted one, keeps its colleague's quoting in a turn of its own. Taken at the turn's next step, which may be
+        // minutes off: the relay goes on meanwhile, holding this member's later messages, and records it once taken.
+        if (fromUser && session.Actor.TurnRunning && !earlier)
         {
-            var steer = peer is null ? text : $"(From {peer.Name} in the flock {flock.Name}) {text}";
             _flockSteers[key] = true;
-            _ = session.SteerAsync(steer).ContinueWith(taken =>
+            _ = session.SteerAsync(text).ContinueWith(taken =>
             {
                 try
                 {
@@ -207,38 +229,57 @@ public sealed partial class CorvidRuntime
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
             return (false, flock);
         }
-        if (_flockTurns.TryGetValue(session.Id, out var running) && !running.IsCompleted)
+        if (_flockTurns.TryGetValue(session.Id, out running) && !running.IsCompleted)
             return (false, flock);
         if (!fromUser && flock.PeerTurns >= MaxPeerTurns)
         {
-            var paused = Flocks.Pause(flock.Id);
-            Announce($"The flock {TerminalText.Visible(flock.Name)} is paused: its members started {flock.PeerTurns} turns on each other "
-                + "without you. /flock resume lets them go on; a message to the flock does too.");
+            var paused = Flocks.Pause(flock.Id, MaxPeerTurns);
+            if (paused.Paused && !flock.Paused)
+                Announce($"The flock {TerminalText.Visible(flock.Name)} is paused: its members started {paused.PeerTurns} turns on each other "
+                    + "without you. /flock resume lets them go on; a message to the flock does too.");
             return (false, paused);
         }
         var delivery = new FlockDelivery(flock.Id, flock.Name, entry.Sequence, text, origin, peer);
         if (_flockInboxes.TryGetValue(session.Id, out var inbox))
         {
-            if (!inbox(delivery))
-                return (false, flock);
+            _flockOffered[key] = true;
+            if (inbox(delivery))
+                return (true, flock);
+            _flockOffered.TryRemove(key, out _);
+            return (false, flock);
         }
-        else
-        {
-            var turn = await PostAsync(session, text, origin, null, _lifetime.Token, peer: peer).ConfigureAwait(false);
-            _flockTurns[session.Id] = turn;
-        }
+        var turn = await PostAsync(session, text, origin, null, _lifetime.Token, peer: peer).ConfigureAwait(false);
+        _flockTurns[session.Id] = turn;
         return (true, Flocks.Delivered(flock.Id, entry.Sequence, session.Id, started: true));
     }
 
     /// <summary>
-    /// C-042: posts a flock's message into a member session this process drives (a surface's inbox runs it this way), as
-    /// <see cref="CorvidSession.PostAsync(string, EnvelopeOrigin, CancellationToken)"/> does with the sender attached.
+    /// C-042: posts a flock's message an inbox took into the member session (as
+    /// <see cref="CorvidSession.PostAsync(string, EnvelopeOrigin, CancellationToken)"/> does, with its sender), then records it
+    /// delivered. A post that fails leaves it undelivered; give it back with <see cref="ReleaseFlock"/>.
     /// </summary>
-    public Task<Task<Delivery>> PostFlockAsync(CorvidSession session, FlockDelivery delivery, CancellationToken cancellationToken = default)
+    public async Task<Task<Delivery>> PostFlockAsync(CorvidSession session, FlockDelivery delivery, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(delivery);
-        return PostAsync(session, delivery.Text, delivery.Origin, null, cancellationToken, peer: delivery.Peer);
+        var turn = await PostAsync(session, delivery.Text, delivery.Origin, null, cancellationToken, peer: delivery.Peer).ConfigureAwait(false);
+        try
+        {
+            Flocks.Delivered(delivery.FlockId, delivery.Sequence, session.Id, started: true);
+        }
+        catch (FlockException)
+        {
+            // Closed meanwhile: the turn runs, and there is nothing left to record it in.
+        }
+        _flockOffered.TryRemove((delivery.FlockId, delivery.Sequence, session.Id), out _);
+        return turn;
+    }
+
+    /// <summary>C-042: an inbox gives back a message it took and will not post; the relay offers it again.</summary>
+    public void ReleaseFlock(string sessionId, FlockDelivery delivery)
+    {
+        ArgumentNullException.ThrowIfNull(delivery);
+        _flockOffered.TryRemove((delivery.FlockId, delivery.Sequence, sessionId), out _);
     }
 
     private sealed class Detach(Action detach) : IDisposable

@@ -60,6 +60,9 @@ public sealed class FlockSendTool(Func<FlockStore> store) : ToolFunction(new Too
             _ => throw new ToolArgumentException("'to' must be a member's name or a list of names", "to"),
         } : ImmutableArray<string>.Empty;
         var recipients = new List<FlockMember>();
+        // Names given that come to nothing ("@", blanks) are a mistake, never "everyone".
+        if (!names.IsEmpty && names.All(name => name.Trim().TrimStart('@').Length == 0))
+            throw new ToolArgumentException($"'to' names nobody. {Roster(flock, self)} Leave 'to' out to write to everyone.", "to");
         foreach (var name in names.Select(name => name.Trim().TrimStart('@')).Where(name => name.Length > 0))
         {
             if (flock.Find(name) is not { } member || member.SessionId == self.SessionId)

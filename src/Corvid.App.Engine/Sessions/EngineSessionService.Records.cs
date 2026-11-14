@@ -343,6 +343,16 @@ public sealed partial class EngineSessionService
         // C-042: a flock's members changed (seen by the runtime's relay): the sessions that joined or left it are listed again,
         // so the rail regroups them. Messages and deliveries change no summary.
         var flockMembers = new System.Collections.Concurrent.ConcurrentDictionary<string, string[]>(StringComparer.Ordinal);
+        // Seeded with the open flocks, so a member's leaving refreshes it even when it is the first change heard.
+        try
+        {
+            foreach (var open in runtime.Flocks.List())
+                flockMembers[open.Id] = [.. open.Members.Select(member => member.SessionId).Order(StringComparer.Ordinal)];
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Log("corvid app: flocks could not be read: " + exception.Message);
+        }
         void OnFlock(Corvid.Kernel.Flocks.FlockState flock)
         {
             if (_disposed)

@@ -481,7 +481,7 @@ internal static class ChatCommand
         var flock = runtime.Flocks.FlockOf(sessionId);
         if (flockName is { Length: > 0 })
         {
-            var wanted = runtime.Flocks.Find(flockName) ?? runtime.Flocks.Create(flockName);
+            var wanted = runtime.Flocks.FindOrCreate(flockName);
             flock = runtime.JoinFlock(wanted.Id, sessionId, me);
         }
         if (flock is null)

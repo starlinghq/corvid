@@ -61,7 +61,9 @@ internal static class FlockCommand
                     return ExitCodes.Success;
                 case ["say", var name, ..]:
                     var flock = Find(store, name);
-                    var words = string.Join(' ', arguments.Positional("--as").Skip(2));
+                    // The words as given after the flock's name, "--" ones too: a message is not options.
+                    var given = arguments.Arguments.ToList();
+                    var words = string.Join(' ', given.Skip(given.IndexOf("say") + 2));
                     Say(console, store, flock, words);
                     return ExitCodes.Success;
                 case ["add", var name, var session]:

@@ -119,18 +119,55 @@ public sealed class FlockTests : IDisposable
         _store.Delivered(flock.Id, steered, "cli-b", started: false);
 
         Assert.Equal(3, _store.Get(flock.Id)!.PeerTurns);
-        flock = _store.Pause(flock.Id);
+        Assert.False(_store.Pause(flock.Id, maxPeerTurns: 4).Paused);
+        flock = _store.Pause(flock.Id, maxPeerTurns: 3);
         Assert.True(flock.Paused);
-        Assert.Same(flock, _store.Pause(flock.Id));
+        Assert.Same(flock, _store.Pause(flock.Id, 3));
 
         _store.Say(flock.Id, FlockSessions.User, "carry on", [], false);
         flock = _store.Get(flock.Id)!;
         Assert.False(flock.Paused);
         Assert.Equal(0, flock.PeerTurns);
+        // A pause decided on the count before the user wrote is not written after it.
+        Assert.False(_store.Pause(flock.Id, 3).Paused);
 
-        _store.Pause(flock.Id);
+        _store.Pause(flock.Id, 0);
         flock = _store.Resume(flock.Id);
         Assert.False(flock.Paused);
+    }
+
+    [Fact]
+    public void One_name_is_one_flock_for_every_process_and_a_closed_name_starts_afresh()
+    {
+        var first = _store.FindOrCreate("Auth");
+        // Another process's store, on the same log, asking for the same new name.
+        var other = new FlockStore(_store.Log);
+
+        Assert.Equal(first.Id, other.FindOrCreate("auth").Id);
+        Assert.Equal(FlockStore.IdFor("auth", 1), first.Id);
+        Assert.Throws<FlockException>(() => other.Create("AUTH"));
+
+        _store.Close(first.Id);
+        var again = other.FindOrCreate("auth");
+
+        Assert.NotEqual(first.Id, again.Id);
+        Assert.Equal(FlockStore.IdFor("auth", 2), again.Id);
+        Assert.Contains("reserved", Assert.Throws<FlockException>(() => _store.Join(again.Id, FlockSessions.User, "me")).Message);
+    }
+
+    [Fact]
+    public void A_flock_message_is_scrubbed_before_the_log_keeps_it()
+    {
+        const string token = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+        var flock = _store.Create("keys");
+        _store.Join(flock.Id, "cli-a", "api");
+        _store.Join(flock.Id, "cli-b", "web");
+
+        _store.Say(flock.Id, "cli-a", $"use {token} for now", [], false);
+
+        var text = Assert.Single(_store.Get(flock.Id)!.Messages).Message.Text;
+        Assert.DoesNotContain(token, text, StringComparison.Ordinal);
+        Assert.Contains("ghp_[REDACTED:github-token:", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -231,6 +268,10 @@ public sealed class FlockTests : IDisposable
         Assert.Equal(("cli-a", true), (message.From, message.Tainted));
         Assert.Equal(["cli-b"], message.To);
         await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(tool, "cli-a", false, """{"text":"x","to":"nobody"}"""));
+        // A name that comes to nothing is a mistake, never everyone.
+        await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(tool, "cli-a", false, """{"text":"x","to":"@"}"""));
+        await Assert.ThrowsAsync<ToolArgumentException>(() => Invoke(tool, "cli-a", false, """{"text":"x","to":["  "]}"""));
+        Assert.Single(_store.Get(flock.Id)!.Messages);
         Assert.Equal(SideEffects.None, tool.Descriptor.Risk.SideEffects);
     }
 
