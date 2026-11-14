@@ -123,7 +123,7 @@ public sealed class FlockRelayTests
 
         runtime.Flocks.Say(flock.Id, FlockSessions.User, "go on", [web.Id], false);
         var events = await WaitForAsync(runtime, web.Id, events => events.OfType<AssistantMessage>().Count() == 3);
-        Assert.Equal(["first", "second", "(To everyone in the flock loop) go on"], events.OfType<UserMessage>().Select(message => message.Text));
+        Assert.Equal(["first", "second", "(To you in the flock loop) go on"], events.OfType<UserMessage>().Select(message => message.Text));
         Assert.Null(events.OfType<UserMessage>().Last().From);
     }
 

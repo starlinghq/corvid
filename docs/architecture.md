@@ -4661,7 +4661,8 @@ tainted turn's message from passing as clean. It is registered always but offere
 `TurnOptions.AlwaysOffered` (new) names tools a session's turns get whatever the shortlist ranks and whatever a decider's pick
 narrows the turn to (also "answer directly"), even when `ToolFilter` withholds them from ranking; the host withholds
 `flock_send` from ranking for every session and offers it back to members (`AlwaysOfferedTools`). A child never has it (its
-toolset is the parent's named tools; `AlwaysOffered` is null for a child), nor a guest's turn (not in its catalogue).
+toolset is the parent's named tools; `AlwaysOffered` is null for a child), nor a guest's turn (not in its catalogue), nor a
+code-mode script (`CodeModeCatalog.Denied`).
 
 **The loop guard.** Members answering each other could run without end. Each delivery that started a turn on a member's
 message counts (`FlockState.PeerTurns`); a steer does not, nor does the user's message. When a member's message would start
@@ -4672,7 +4673,8 @@ Messages meanwhile wait in the log.
 
 **Surfaces.**
 
-- `/flock` (every surface but ACP; runs beside a turn): the flock with its members (who drives each), whether it is paused
+- `/flock` (every surface but ACP; in a gateway chat the owner's alone, as every command is, and only in a direct message,
+  as `/sessions` and `/workspace` are; runs beside a turn): the flock with its members (who drives each), whether it is paused
   and its latest eight messages; `list`, `new <name> [as <me>]`, `join <flock> [as <me>]`, `add <session> [as <name>]`,
   `leave`, `say [@member] <text>`, `resume`, `close`. A name of several words is allowed before `as`.
 - `corvid chat --flock <name> [--as <name>]` joins the flock, starting it when none is open by that name, and says who else
@@ -4692,7 +4694,8 @@ Messages meanwhile wait in the log.
 Not built (follow-ups in plan §18, C-042): a flock page in the app (the shared transcript, writing to the flock) and the
 attached protocol's `say`; flocks on the Board; giving a flock a shared goal or todo list; a member's answer sent back to
 the asker without a `flock_send` call; joining in-process children; ACP and HTTP members; a `send to flock` step in jobs;
-counting the user's own messages in a member session toward the loop guard; pruning closed flocks' logs.
+counting the user's own messages in a member session toward the loop guard; pruning closed flocks' logs; listing the
+rail reads the open flocks once per session summary (cached by head, but one query each) rather than once per listing.
 
 ## Running the check
 

@@ -65,6 +65,8 @@ internal static class FlockCommand
                     Say(console, store, flock, words);
                     return ExitCodes.Success;
                 case ["add", var name, var session]:
+                    if (store.Log.GetHead(session) == 0)
+                        throw new FlockException($"There is no session {session}. corvid chat --session <id> resumes one; /sessions lists them.");
                     var joined = store.Join(Find(store, name).Id, session, arguments.Option("--as") ?? CorvidRuntime.MemberName(store.Log, session));
                     console.MarkupLine($"[green]Added {Markup.Escape(session)} as {Markup.Escape(TerminalText.Visible(joined.Member(session)!.Name))}.[/]"
                         + (Driver(session) == LockState.Free ? " [grey]Nobody has it open, so its messages wait until it is.[/]" : ""));

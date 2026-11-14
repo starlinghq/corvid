@@ -175,7 +175,9 @@ public sealed partial class CorvidRuntime
             return (false, flock);
         var peer = fromUser ? null : new PeerSender(flock.SenderName(message), flock.Name);
         var origin = fromUser ? EnvelopeOrigin.User : message.Tainted ? EnvelopeOrigin.External : EnvelopeOrigin.Peer;
-        var text = fromUser ? $"(To everyone in the flock {flock.Name}) {message.Text}" : message.Text;
+        var text = !fromUser ? message.Text
+            : message.To.IsDefaultOrEmpty ? $"(To everyone in the flock {flock.Name}) {message.Text}"
+            : $"(To you in the flock {flock.Name}) {message.Text}";
         // A steer joins the running turn as the person's words, so only the user's message or an untainted peer's is one; a
         // tainted peer's waits for its own turn, which reads it as outside content.
         // The steer is taken at the turn's next step, which may be minutes off: the relay goes on meanwhile, holding this
