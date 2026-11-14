@@ -390,9 +390,11 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
 
     private readonly Queue<string> _notices = new();
 
-    private void Report(string reason)
+    private void Report(string reason) => Announce("egress ledger: " + reason);
+
+    // A background notice (Notice), kept among the latest few; a trace line when nobody listens.
+    private void Announce(string line)
     {
-        var line = "egress ledger: " + reason;
         lock (_notices)
         {
             _notices.Enqueue(line);
@@ -469,6 +471,8 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         var session = _sessions[id];
         session.Surface = surface;
         WakeScheduler();
+        // C-042: a member opened here gets its flock's messages from now on.
+        StartFlockRelay();
         return session;
     }
 
@@ -631,7 +635,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     /// turns finish (the gateway) keeps each chat's order without waiting for answers.
     /// </summary>
     internal async Task<Task<Delivery>> PostAsync(CorvidSession session, string text, EnvelopeOrigin origin, GuestScope? guest,
-        CancellationToken cancellationToken, ShellLine? shell = null, ImmutableArray<ImageInput> images = default)
+        CancellationToken cancellationToken, ShellLine? shell = null, ImmutableArray<ImageInput> images = default, PeerSender? peer = null)
     {
         var messageId = Guid.NewGuid().ToString("N");
         var waiter = new TaskCompletionSource<Delivery>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -640,7 +644,7 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
         InterruptConsolidation();
         try
         {
-            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell, Images = images.IsDefault ? [] : images },
+            await Sessions.PostAsync(new Envelope(session.Id, session.Surface, text, origin, messageId) { Guest = guest, Shell = shell, Images = images.IsDefault ? [] : images, Peer = peer },
                 cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -786,7 +790,9 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
                 ToolExamples = ToolExamples,
                 // A7 (plan §15): code mode only for a generator that runs outside this process (a cloud or local-server
                 // model), read at each turn's start, so a /model switch changes it from the next turn.
-                ToolFilter = CodeModeFilter(slots, turn.EditorModel),
+                // C-042: flock_send is never ranked; a flock's members are always offered it (AlwaysOffered), and nobody else.
+                ToolFilter = WithoutFlockSend(CodeModeFilter(slots, turn.EditorModel)),
+                AlwaysOffered = child is null ? AlwaysOfferedTools : null,
                 // A7: architect/editor turns, and the model that applies a plan.
                 ArchitectEditor = turn.ArchitectEditor,
                 EditorModel = turn.EditorModel,

@@ -13,6 +13,9 @@ public sealed record SessionSummary(string Id, string Title)
 
     public string Branch { get; init; } = "";
 
+    /// <summary>C-042: the open flock the session is a member of (its name), or null; the rail groups a flock's members.</summary>
+    public string? Flock { get; init; }
+
     /// <summary>
     /// A6V2-05: <see cref="Workspace"/> is no longer a directory on the engine's machine (a removed worktree), so nothing new
     /// can start there; the session is still listed.

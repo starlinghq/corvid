@@ -346,7 +346,7 @@ public sealed class ContextCompactor
             // A gateway guest's message stays outside content in the summary, quoted as theirs (A4 verification).
             // K-8 (A6 review): a message's images are named in the summary ("[image: shot.png]"), so it can say one was shown.
             case UserMessage { From: { } guest } user:
-                return at + PromptRenderer.Quoted(guest, user.Text) + ImageNames(user);
+                return at + PromptRenderer.Quoted(guest, user.Text, user.Flock) + ImageNames(user);
             case UserMessage user:
                 return at + "user: " + user.Text + ImageNames(user);
             case UserSteered steer:

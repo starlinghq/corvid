@@ -65,6 +65,14 @@ public static class CorvidCli
 
         commands:
           chat                       talk to Corvid (the default)      [--session <id>] [--workspace <dir>] [--verbose]
+                                     [--flock <name> [--as <name>]]: join the flock (started when none is open by that name)
+          flock [list]               open flocks: sessions working on one task together, and their members
+          flock show <flock> [--all] a flock's members and messages
+          flock watch <flock>        follow a flock's messages live; each line you type goes to every member (@name: one)
+          flock new <name>           start a flock (sessions join with corvid chat --flock <name>, or /flock join)
+          flock say <flock> [@member] <text>   write to a flock's members
+          flock add <flock> <session> [--as <name>]   add a session;   flock leave <flock> <session>   remove one
+          flock resume <flock>       let a paused flock's members go on;   flock close <flock>   close it
           model [list]               models, their slots and whether they are in the cache
           model switch <slot> <model>  bind a slot by default (written to the user config file)
           model download <model>...  fetch models explicitly (--all for every model); the only command that downloads
@@ -157,6 +165,7 @@ public static class CorvidCli
                 "scan" => ScanCommand.Run(host, parsed, context, cancellationToken),
                 "egress" => EgressCommand.Run(host, parsed, context, cancellationToken),
                 "traces" => await TracesCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
+                "flock" or "flocks" => await FlockCommand.RunAsync(host, parsed, context, cancellationToken).ConfigureAwait(false),
                 _ => UnknownCommand(console, parsed.Command),
             };
         }
@@ -227,8 +236,8 @@ public sealed record CliArguments(string Command, IReadOnlyList<string> Argument
                     rest.Add(arg);
                     rest.Add(Value(args, ref i, arg));
                     break;
-                // A6 (G-4): the directory a new chat session works in.
-                case "--workspace" when command is null or "chat":
+                // A6 (G-4): the directory a new chat session works in. C-042: the flock it joins, and its name there.
+                case "--workspace" or "--flock" or "--as" when command is null or "chat":
                     rest.Add(arg);
                     rest.Add(Value(args, ref i, arg));
                     break;

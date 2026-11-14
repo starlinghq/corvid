@@ -34,6 +34,8 @@ public static partial class CodeModeCatalog
     {
         "delegate_task", "execute_code", "skill_run_script", "ask_user", "memory_add", "memory_approve", "memory_reject",
         "send_message", "cron_create", "cron_pause", "cron_resume", "cron_remove",
+        // C-042: a flock's members write to each other from their own turns, never from a script's loop.
+        "flock_send",
     };
 
     /// <summary>

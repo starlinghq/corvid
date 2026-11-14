@@ -209,6 +209,26 @@ public sealed class SqliteEventLog : IEventLog
     }
 
     /// <summary>
+    /// C-042: the sessions whose id starts with <paramref name="prefix"/> (<c>flock:</c>) and their heads, read as a range of
+    /// the primary key, so listing a few flock logs never walks every session's events.
+    /// </summary>
+    public IReadOnlyDictionary<string, long> ListHeads(string prefix, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(prefix);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT session_id, MAX(sequence) FROM events WHERE session_id >= $low AND session_id < $high GROUP BY session_id;";
+        command.Parameters.AddWithValue("$low", prefix);
+        command.Parameters.AddWithValue("$high", prefix[..^1] + (char)(prefix[^1] + 1));
+        using var reader = command.ExecuteReader();
+        var heads = new Dictionary<string, long>(StringComparer.Ordinal);
+        while (reader.Read())
+            heads[reader.GetString(0)] = reader.GetInt64(1);
+        return heads;
+    }
+
+    /// <summary>
     /// The <paramref name="limit"/> sessions most recently appended to, the latest first: for a surface that reads recent
     /// activity without walking every session's log.
     /// </summary>

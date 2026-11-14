@@ -39,6 +39,8 @@ public static class EventScrubber
             ToolCallIssued call when Json(call.Arguments) is { } arguments => call with { Arguments = arguments },
             ToolResult result when Json(result.Result) is { } value => result with { Result = value },
             AssistantMessage message when Text(message.Text) is { } text => message with { Text = text },
+            // C-042: a flock message is a member's model output (or the user's words) relayed to the others: scrubbed alike.
+            FlockMessage flock when Text(flock.Text) is { } text => flock with { Text = text },
             // A6V2-06: what the person typed or steered with, as the egress gate would see it.
             UserMessage user when Text(user.Text) is { } text => user with { Text = text },
             UserSteered steer when Text(steer.Text) is { } text => steer with { Text = text },

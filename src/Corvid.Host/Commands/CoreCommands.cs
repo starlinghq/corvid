@@ -61,6 +61,9 @@ public static class CoreCommands
                 ForkCommand.RunAsync) { DuringTurn = true })
             .Add(new SlashCommand("workspace", "Where this session works; start a session in another directory or a new git worktree, or remove one Corvid made.",
                 WorkspaceCommands.Usage, WorkspaceCommands.RunAsync))
+            // C-042: a few sessions on one task; /flock say writes to them during a turn too.
+            .Add(new SlashCommand("flock", "Sessions working on one task together: start or join a flock, add sessions, write to all of them.",
+                FlockCommands.Usage, FlockCommands.Run) { DuringTurn = true })
             .Add(new SlashCommand("exit", "Leave the session.", "", Exit) { Aliases = ["quit"] });
     }
 

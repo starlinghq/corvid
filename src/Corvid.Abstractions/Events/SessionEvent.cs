@@ -42,6 +42,14 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(ChildOf), "child_of")]
 [JsonDerivedType(typeof(WorkspaceBound), "workspace_bound")]
 [JsonDerivedType(typeof(MemoryJobRan), "memory_job_ran")]
+[JsonDerivedType(typeof(FlockCreated), "flock_created")]
+[JsonDerivedType(typeof(FlockMemberJoined), "flock_member_joined")]
+[JsonDerivedType(typeof(FlockMemberLeft), "flock_member_left")]
+[JsonDerivedType(typeof(FlockMessage), "flock_message")]
+[JsonDerivedType(typeof(FlockDelivered), "flock_delivered")]
+[JsonDerivedType(typeof(FlockPaused), "flock_paused")]
+[JsonDerivedType(typeof(FlockResumed), "flock_resumed")]
+[JsonDerivedType(typeof(FlockClosed), "flock_closed")]
 public abstract record SessionEvent;
 
 // Text is the initial message surface. Provider-specific message objects are never stored here.
@@ -54,10 +62,14 @@ public abstract record SessionEvent;
 // Images (K-8, A6): the images the message carries, as references into the media store (digest, type, size, dimensions and
 // the file name); never the bytes. Omitted when null, so a message without images keeps its form, and a binary older than A6
 // reads a message with images as its text alone (unknown properties are skipped).
+// Flock (C-042): the flock a peer's message came through, From naming the peer session ("api"); null for every other message
+// and in every log written before flocks. The prompt quotes such a message as a colleague session's note, not the owner's
+// words; one from a tainted peer arrives as outside content as well (plan §10.3).
 public sealed record UserMessage(string Text,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? LocalOnly = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? From = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<Media.ImageRef>? Images = null) : SessionEvent;
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ImmutableArray<Media.ImageRef>? Images = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Flock = null) : SessionEvent;
 // Usage (A5) is the generator calls' tokens since the previous call's record, on the answer that ended them; omitted when
 // null (no call reported any, or a message from elsewhere), so events written before it keep their persisted form.
 // Plan (A7, architect/editor turns, plan §6): set on a plan an escalated model wrote for the session's own (or the editor)

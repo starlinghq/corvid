@@ -104,6 +104,17 @@ internal static class ChatCommand
                     (runtime.WorkspaceOf(session.Id).Branch is { } branch ? $" (worktree, branch {Markup.Escape(TerminalText.Visible(branch))})" : "") + "[/]");
             foreach (var notice in runtime.DeciderNotices)
                 renderer.Notice($"[yellow]{Markup.Escape(notice)}[/]");
+            // C-042: --flock joins the flock (started when none is open by that name); a session in one already says so.
+            try
+            {
+                if (JoinedFlock(runtime, session.Id, arguments.Option("--flock"), arguments.Option("--as")) is { } joined)
+                    renderer.Notice($"[cyan]{Markup.Escape(joined)}[/]");
+            }
+            catch (Corvid.Kernel.Flocks.FlockException exception)
+            {
+                console.MarkupLine($"[red]{Markup.Escape(TerminalText.Visible(exception.Message))}[/]");
+                return ExitCodes.Failure;
+            }
             // A6: a new session's first event may be where it works (WorkspaceBound); only more than that is resumed.
             if (session.Snapshot().Head > (runtime.WorkspaceOf(session.Id).IsDefault ? 0 : 1))
                 await ResumeAsync(runtime, session, renderer, console, cancellationToken).ConfigureAwait(false);
@@ -125,6 +136,18 @@ internal static class ChatCommand
 
             using var leave = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             Task<Delivery>? running = null;
+            // C-042: a flock's message for this session, taken at the prompt (one at a time, never during a turn: the relay
+            // steers into a running turn itself) and run as the next turn, as if typed.
+            FlockDelivery? arrived = null;
+            using var flockSignal = new SemaphoreSlim(0);
+            bool TakeFlock(FlockDelivery delivery)
+            {
+                if (Volatile.Read(ref running) is { IsCompleted: false } || Interlocked.CompareExchange(ref arrived, delivery, null) is not null)
+                    return false;
+                flockSignal.Release();
+                return true;
+            }
+            using var flockInbox = runtime.AttachFlockInbox(session.Id, TakeFlock);
             void OnInterrupt()
             {
                 // Ctrl-C during a turn cancels the turn; at the prompt it leaves.
@@ -153,6 +176,76 @@ internal static class ChatCommand
                 if (line is not null && !context.Input.Echoes)
                     renderer.Echo(line);
                 return line;
+            }
+            // C-042: the next line, or a flock's message when one comes first (the read is then cancelled; a line typed meanwhile
+            // stays queued for the next read). (null, null) at the end of input or when Ctrl-C leaves.
+            async Task<(string? Line, FlockDelivery? Flock)> ReadOrFlockAsync()
+            {
+                while (true)
+                {
+                    if (Interlocked.Exchange(ref arrived, null) is { } waiting)
+                        return (null, waiting);
+                    using var stop = CancellationTokenSource.CreateLinkedTokenSource(leave.Token);
+                    var read = context.Input.ReadLineAsync(cancellationToken: stop.Token).AsTask();
+                    var signal = flockSignal.WaitAsync(stop.Token);
+                    var first = await Task.WhenAny(read, signal).ConfigureAwait(false);
+                    if (first == read)
+                    {
+                        await stop.CancelAsync().ConfigureAwait(false);
+                        string? line;
+                        try
+                        {
+                            line = await read.ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (leave.IsCancellationRequested)
+                        {
+                            return (null, null);
+                        }
+                        if (line is not null && !context.Input.Echoes)
+                            renderer.Echo(line);
+                        return (line, null);
+                    }
+                    await stop.CancelAsync().ConfigureAwait(false);
+                    try
+                    {
+                        await read.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                    if (leave.IsCancellationRequested)
+                        return (null, null);
+                    // A line that won the race against the cancellation is not lost: it is sent after the flock's message.
+                    if (read.IsCompletedSuccessfully && read.Result is { } typed)
+                    {
+                        if (!context.Input.Echoes)
+                            renderer.Echo(typed);
+                        if (Interlocked.Exchange(ref arrived, null) is { } both)
+                            return (typed, both);
+                        return (typed, null);
+                    }
+                }
+            }
+            // A turn posted: /model and the other commands that run beside it are read meanwhile. Null when leaving cut it short.
+            async Task<Delivery?> AwaitTurnAsync(Task<Delivery> turn)
+            {
+                Volatile.Write(ref running, turn);
+                // A5: /model typed while the turn runs switches this session; the turn takes it at its next step.
+                using var turnInput = CancellationTokenSource.CreateLinkedTokenSource(leave.Token);
+                var watching = WatchTurnAsync(turnInput.Token);
+                try
+                {
+                    return await turn.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return null;
+                }
+                finally
+                {
+                    await turnInput.CancelAsync().ConfigureAwait(false);
+                    await watching.ConfigureAwait(false);
+                }
             }
             // A5: while a turn runs, the commands that run beside it (SlashCommand.DuringTurn: /model, which the turn takes at its
             // next step, and /fork, G-15) are read and run at once; anything else typed then waits for the turn's end as before,
@@ -198,7 +291,20 @@ internal static class ChatCommand
                     else
                     {
                         renderer.Prompt();
-                        line = await ReadAsync().ConfigureAwait(false);
+                        (line, var fromFlock) = await ReadOrFlockAsync().ConfigureAwait(false);
+                        if (fromFlock is not null)
+                        {
+                            // C-042: the flock's message runs as this session's next turn; a line typed meanwhile waits for it.
+                            next = line;
+                            renderer.Notice($"[cyan]✉ {Markup.Escape(TerminalText.Visible(fromFlock.Notice))}[/]");
+                            renderer.BeginTurn();
+                            var flockTurn = await runtime.PostFlockAsync(session, fromFlock, cancellationToken).ConfigureAwait(false);
+                            if (await AwaitTurnAsync(flockTurn).ConfigureAwait(false) is not { } answered)
+                                break;
+                            renderer.EndTurn(answered, null);
+                            question = answered.Result?.Question;
+                            continue;
+                        }
                         if (line is null)
                             break;
                     }
@@ -299,24 +405,8 @@ internal static class ChatCommand
                     var turn = mode is ComposerLine.Shell shell
                         ? await session.PostShellAsync(line.Trim(), new ShellLine(shell.Command, shell.LocalOnly), cancellationToken).ConfigureAwait(false)
                         : images.Count > 0 ? session.SendAsync(line, images, cancellationToken) : session.SendAsync(line, cancellationToken);
-                    Volatile.Write(ref running, turn);
-                    Delivery delivery;
-                    // A5: /model typed while the turn runs switches this session; the turn takes it at its next step.
-                    using var turnInput = CancellationTokenSource.CreateLinkedTokenSource(leave.Token);
-                    var watching = WatchTurnAsync(turnInput.Token);
-                    try
-                    {
-                        delivery = await turn.ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                    {
+                    if (await AwaitTurnAsync(turn).ConfigureAwait(false) is not { } delivery)
                         break;
-                    }
-                    finally
-                    {
-                        await turnInput.CancelAsync().ConfigureAwait(false);
-                        await watching.ConfigureAwait(false);
-                    }
                     string? shellStatus = null;
                     // Only a turn that issued the call has a result to report (a refused line, say the shell tool is off, issued none).
                     if (mode is ComposerLine.Shell ran && delivery is { Error: null, Result.ToolCalls: > 0 })
@@ -379,6 +469,27 @@ internal static class ChatCommand
         {
             renderer.Notice($"[grey]No recap: {Markup.Escape(exception.Message)}[/]");
         }
+    }
+
+    /// <summary>
+    /// C-042: joins <paramref name="flockName"/> (an open flock by name or id, else a new one by that name) as
+    /// <paramref name="me"/>, and says so; without <c>--flock</c>, says which flock the session is in, if any.
+    /// </summary>
+    /// <exception cref="Corvid.Kernel.Flocks.FlockException">Refused (a closed flock, another flock the session is in).</exception>
+    private static string? JoinedFlock(CorvidRuntime runtime, string sessionId, string? flockName, string? me)
+    {
+        var flock = runtime.Flocks.FlockOf(sessionId);
+        if (flockName is { Length: > 0 })
+        {
+            var wanted = runtime.Flocks.FindOrCreate(flockName);
+            flock = runtime.JoinFlock(wanted.Id, sessionId, me);
+        }
+        if (flock is null)
+            return null;
+        var others = flock.Members.Where(member => member.SessionId != sessionId).Select(member => member.Name).ToList();
+        return $"Flock {TerminalText.Visible(flock.Name)}: this session is {TerminalText.Visible(flock.Member(sessionId)!.Name)}; "
+            + (others.Count == 0 ? "nobody else has joined yet." : "with " + TerminalText.Visible(string.Join(", ", others)) + ".")
+            + " /flock shows it, /flock say writes to everyone, and the agent writes with flock_send.";
     }
 
     /// <summary>A <c>#</c> line through memory's gated write path, as command output.</summary>

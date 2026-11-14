@@ -590,6 +590,7 @@ public sealed class EngineAuditService : IAuditService
         McpSessions.Pins => "MCP tool pins",
         MemoryJobs.Session => "memory jobs",
         Corvid.Gateway.GatewaySessions.Ledger => "gateway delivery ledger",
+        _ when FlockSessions.IsFlock(id) => "flock " + id[FlockSessions.Prefix.Length..],
         _ => "no messages",
     };
 

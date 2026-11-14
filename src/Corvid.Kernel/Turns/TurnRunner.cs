@@ -572,9 +572,15 @@ public sealed partial class TurnRunner
                     return Result(TurnStatus.Failed, refused.Message);
                 images = _images;
             }
-            // §10.3: only the user's own message clears taint; anyone else's text is outside content.
-            runner.Tainted = envelope.Origin != EnvelopeOrigin.User;
-            var message = new UserMessage(envelope.Text, From: envelope.From, Images: images);
+            // §10.3: only the user's own message clears taint; anyone else's text is outside content. C-042: an untainted peer
+            // session's message (in a flock) leaves the taint as it was.
+            runner.Tainted = envelope.Origin switch
+            {
+                EnvelopeOrigin.User => false,
+                EnvelopeOrigin.Peer => runner.Tainted,
+                _ => true,
+            };
+            var message = new UserMessage(envelope.Text, From: envelope.From, Images: images, Flock: envelope.Peer?.Flock);
             // C-025: the session records its project before the message, when it has none yet or another one.
             if (_services.Project is { } project && runner._boundProject != project.Id)
             {
@@ -638,6 +644,7 @@ public sealed partial class TurnRunner
             var offered = OfferFrom(verdicts, "tool");
             if (offered is null && Acted(verdicts, "intent", out var route) && route == "answer_directly")
                 offered = [];
+            offered = WithAlwaysOffered(offered);
             // A5: a confident delegate offers delegate_task beside whatever else the turn is offered.
             if (delegates && Acted(verdicts, "delegate", out _) && _catalogue.TryGetValue(DelegateTaskTool.ToolName, out var delegation)
                 && !(offered ?? _shortlist).Any(tool => tool.Function.Name == DelegateTaskTool.ToolName))
@@ -895,8 +902,20 @@ public sealed partial class TurnRunner
                 }
                 if (!steered && Acted(step, "done", out _))
                     finishing = true;
-                offered = OfferFrom(step, "tool") ?? _shortlist;
+                offered = WithAlwaysOffered(OfferFrom(step, "tool")) ?? _shortlist;
             }
+        }
+
+        // C-042: a decider's pick narrows the turn's tools, never below the session's always-offered ones (flock_send), so a
+        // turn a peer's message started can always answer it. Null (the whole shortlist) stays null: it holds them already.
+        private ImmutableArray<Offered>? WithAlwaysOffered(ImmutableArray<Offered>? offered)
+        {
+            if (offered is not { } narrowed || _options.AlwaysOffered?.Invoke(runner.SessionId) is not { Count: > 0 } names)
+                return offered;
+            foreach (var name in names)
+                if (_shortlist.FirstOrDefault(tool => tool.Function.Name == name) is { } tool && !narrowed.Any(chosen => chosen.Function.Name == name))
+                    narrowed = narrowed.Add(tool);
+            return narrowed;
         }
 
         // Drops a tool the filter passed when the shortlist was built and withholds now; one it withheld then and the turn
@@ -2083,6 +2102,11 @@ public sealed partial class TurnRunner
                     // A4: a `!!` line is the user's alone, as in the prompt.
                     case UserMessage { LocalOnly: true } or ToolCallIssued { LocalOnly: true } or ToolResult { LocalOnly: true }: break;
                     // A gateway guest's message is named as theirs, on one line with hidden characters shown (A4 verification).
+                    // C-042: a peer session's message, named as theirs.
+                    case UserMessage { From: { } peer, Flock: { } flock } user:
+                        current = lines.Count;
+                        lines.Add("peer " + PromptRenderer.SenderName(peer) + " (flock " + PromptRenderer.SenderName(flock) + "): " + Short(PromptRenderer.OneLine(user.Text)));
+                        break;
                     case UserMessage { From: { } guest } user:
                         current = lines.Count;
                         lines.Add("guest " + PromptRenderer.SenderName(guest) + " (outside content): " + Short(PromptRenderer.OneLine(user.Text)));
@@ -2152,6 +2176,7 @@ public sealed partial class TurnRunner
                 // Without an embedder there is no ranking; the hard filters still apply and the list is capped.
                 _shortlist = [.. _catalogue.Values.Where(tool => _options.ToolFilter?.Invoke(tool.Descriptor) ?? true)
                     .OrderBy(tool => tool.Function.Name, StringComparer.Ordinal).Take(_services.Shortlist.Options.Size)];
+                AddAlwaysOffered();
                 return;
             }
 
@@ -2164,6 +2189,18 @@ public sealed partial class TurnRunner
             var ranked = await _services.Shortlist.RankAsync(envelope.Text, items, embedder,
                 item => _options.ToolFilter?.Invoke(_catalogue[item.Name].Descriptor) ?? true, usesAgo, cancellationToken).ConfigureAwait(false);
             _shortlist = [.. ranked.Items.Select(item => _catalogue[item.Name])];
+            AddAlwaysOffered();
+        }
+
+        // C-042: the session's always-offered tools (flock_send in a flock) join the shortlist when it left them out, also when
+        // the hard filter withholds them from ranking (the host withholds flock_send from every session not in a flock that way).
+        private void AddAlwaysOffered()
+        {
+            if (_options.AlwaysOffered?.Invoke(runner.SessionId) is not { Count: > 0 } names)
+                return;
+            foreach (var name in names)
+                if (_catalogue.TryGetValue(name, out var tool) && !_shortlist.Any(offered => offered.Function.Name == name))
+                    _shortlist = _shortlist.Add(tool);
         }
 
         // ---- skills (plan §11) ----

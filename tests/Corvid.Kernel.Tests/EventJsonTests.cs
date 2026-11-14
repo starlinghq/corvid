@@ -48,6 +48,14 @@ public sealed class EventJsonTests
         [typeof(ChildOf)] = "child_of",
         [typeof(WorkspaceBound)] = "workspace_bound",
         [typeof(MemoryJobRan)] = "memory_job_ran",
+        [typeof(FlockCreated)] = "flock_created",
+        [typeof(FlockMemberJoined)] = "flock_member_joined",
+        [typeof(FlockMemberLeft)] = "flock_member_left",
+        [typeof(FlockMessage)] = "flock_message",
+        [typeof(FlockDelivered)] = "flock_delivered",
+        [typeof(FlockPaused)] = "flock_paused",
+        [typeof(FlockResumed)] = "flock_resumed",
+        [typeof(FlockClosed)] = "flock_closed",
     };
 
     [Fact]

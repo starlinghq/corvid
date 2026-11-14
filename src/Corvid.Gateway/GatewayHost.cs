@@ -252,6 +252,12 @@ public sealed class GatewayHost : IAsyncDisposable
                 Queue(message, "/search quotes what was said in every conversation, so it answers only in a direct message with this bot.", "notice");
                 return;
             }
+            // C-042: /flock names the owner's sessions and writes to them; likewise only in a direct message.
+            if (!message.Direct && IsCommandNamed(text, "flock"))
+            {
+                Queue(message, "/flock names and writes to this agent's other sessions, so it answers only in a direct message with this bot.", "notice");
+                return;
+            }
             // Off the receive loop: /undo waits for a running turn, which may itself wait for an /approve still to come.
             Track(RunCommandAsync(message, sessionId, text));
             return;
