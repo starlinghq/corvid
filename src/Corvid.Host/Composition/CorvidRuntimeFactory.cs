@@ -225,6 +225,8 @@ public sealed class CorvidRuntimeFactory(
             CorvidRuntime? created = null;
             if (settings.Tools.Delegate && settings.Agents.MaxDepth > 0)
                 toolRegistry.Add(CorvidRuntime.CreateDelegateTool(() => created ?? throw new InvalidOperationException("The runtime has not started yet.")));
+            // C-042: a flock's members write to each other; offered only to them (CorvidRuntime.AlwaysOfferedTools).
+            toolRegistry.Add(new Corvid.Kernel.Flocks.FlockSendTool(() => (created ?? throw new InvalidOperationException("The runtime has not started yet.")).Flocks));
             var skills = skillsGuard.Refusal is { } refusal ? new SkillServices(null, null, null, null, refusal)
                 : StartupStep.Run(progress, "Opening skills", () => OpenSkills(settings, log));
             if (skills.Store is { } store)

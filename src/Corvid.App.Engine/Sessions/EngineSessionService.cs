@@ -1199,6 +1199,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             Workspace = runtime.WorkspaceOf(id).Path,
             WorkspaceGone = !Directory.Exists(runtime.WorkspaceOf(id).Path),
             Branch = runtime.WorkspaceOf(id).Branch ?? "",
+            Flock = FlockName(runtime, id),
             Surface = SurfaceOf(id),
             State = IsJobRun(id) ? SessionState.Job : question is not null ? SessionState.Waiting : SessionState.Idle,
             PendingQuestions = question is null || IsJobRun(id) ? 0 : 1,
@@ -1242,12 +1243,26 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         Workspace = runtime.WorkspaceOf(id).Path,
         WorkspaceGone = !Directory.Exists(runtime.WorkspaceOf(id).Path),
         Branch = runtime.WorkspaceOf(id).Branch ?? "",
+        Flock = FlockName(runtime, id),
         Surface = SurfaceOf(id),
         State = SessionState.Idle,
         LastActivity = created,
         ForkOf = _forks.TryGetValue(id, out var fork) ? fork.From : null,
         ForkTurn = _forks.TryGetValue(id, out var at) ? at.AtTurn : null,
     };
+
+    // C-042: the open flock a session is in, by name; null when none, or when the flocks cannot be read now.
+    private static string? FlockName(CorvidRuntime runtime, string id)
+    {
+        try
+        {
+            return runtime.Flocks.FlockOf(id)?.Name;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return null;
+        }
+    }
 
     private static string? Line(string? text)
     {
@@ -1266,9 +1281,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
     /// <summary>
     /// The conversations a person had, not the stores' own sessions (MCP pins, the gateway's delivery ledger, the session
-    /// Memory's Hermes import stages its facts from).
+    /// Memory's Hermes import stages its facts from, C-042's flock logs).
     /// </summary>
-    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger or Corvid.Abstractions.Events.MemoryJobs.Session or Memory.EngineMemoryService.ImportSession);
+    private static bool IsConversation(string id) => id is not (McpSessions.Pins or GatewaySessions.Ledger or Corvid.Abstractions.Events.MemoryJobs.Session or Memory.EngineMemoryService.ImportSession)
+        && !Corvid.Abstractions.Events.FlockSessions.IsFlock(id);
 
     // ---- Helpers ----
 

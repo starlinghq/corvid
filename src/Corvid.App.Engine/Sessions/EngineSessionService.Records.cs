@@ -340,6 +340,23 @@ public sealed partial class EngineSessionService
         // A5: a child of a session started or ended (an agent's delegate_task, a person's /delegate).
         void OnChild(string parentId, SessionStreamUpdate update) => OnChildChanged(runtime, parentId, update);
 
+        // C-042: a flock's members changed (seen by the runtime's relay): the sessions that joined or left it are listed again,
+        // so the rail regroups them. Messages and deliveries change no summary.
+        var flockMembers = new System.Collections.Concurrent.ConcurrentDictionary<string, string[]>(StringComparer.Ordinal);
+        void OnFlock(Corvid.Kernel.Flocks.FlockState flock)
+        {
+            if (_disposed)
+                return;
+            var now = flock.Closed ? [] : flock.Members.Select(member => member.SessionId).Order(StringComparer.Ordinal).ToArray();
+            var before = flockMembers.GetValueOrDefault(flock.Id) ?? [];
+            if (before.SequenceEqual(now))
+                return;
+            flockMembers[flock.Id] = now;
+            foreach (var id in before.Union(now))
+                Refresh(runtime, id);
+        }
+
+        runtime.FlockChanged += OnFlock;
         runtime.TitleChanged += OnTitle;
         runtime.Recapped += OnRecap;
         // (A5: OnModel above, through ModelUpdates below.)
@@ -348,6 +365,7 @@ public sealed partial class EngineSessionService
         runtime.ChildChanged += OnChild;
         _unwatchRecords = () =>
         {
+            runtime.FlockChanged -= OnFlock;
             runtime.TitleChanged -= OnTitle;
             runtime.Recapped -= OnRecap;
             runtime.Notice -= OnNotice;

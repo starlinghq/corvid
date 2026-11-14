@@ -9,6 +9,11 @@ public enum EnvelopeOrigin
     User,
     /// <summary>Someone else: another gateway user, a forwarded message, a webhook. Its text taints the session.</summary>
     External,
+    /// <summary>
+    /// C-042: another of the user's own sessions in the same flock, which held no outside content when it sent the message.
+    /// It neither taints the session nor clears its taint; a tainted peer's message is <see cref="External"/>.
+    /// </summary>
+    Peer,
 }
 
 /// <summary>
@@ -32,8 +37,14 @@ public sealed record Envelope(string SessionId, string Surface, string Text, Env
     /// </summary>
     public GuestScope? Guest { get; init; }
 
-    /// <summary>Who wrote the text when it is not the session's own user (a guest): logged on its message (security M2).</summary>
-    public string? From => Guest is { } guest ? guest.Sender ?? "a guest" : null;
+    /// <summary>
+    /// C-042: set for a message from a peer session in a flock (with <see cref="EnvelopeOrigin.Peer"/>, or
+    /// <see cref="EnvelopeOrigin.External"/> when the peer was tainted). The turn gets the whole toolset, as the user's does.
+    /// </summary>
+    public PeerSender? Peer { get; init; }
+
+    /// <summary>Who wrote the text when it is not the session's own user (a guest, a peer): logged on its message (security M2).</summary>
+    public string? From => Guest is { } guest ? guest.Sender ?? "a guest" : Peer?.Name;
 
     /// <summary>
     /// Set for the composer's <c>!</c> line (A4, docs/plan/tui.md §4.1): the turn runs this command through the shell tool,
@@ -48,6 +59,14 @@ public sealed record Envelope(string SessionId, string Surface, string Text, Env
     /// message. On an <see cref="EnvelopeOrigin.External"/> envelope they are outside content like its text.
     /// </summary>
     public ImmutableArray<Media.ImageInput> Images { get; init; } = [];
+}
+
+/// <summary>C-042: the peer session a message came from: its name in the flock ("api") and the flock's name.</summary>
+public sealed record PeerSender(string Name, string Flock)
+{
+    public string Name { get; } = !string.IsNullOrWhiteSpace(Name) ? Name : throw new ArgumentException("A peer needs a name.", nameof(Name));
+
+    public string Flock { get; } = !string.IsNullOrWhiteSpace(Flock) ? Flock : throw new ArgumentException("A peer needs a flock.", nameof(Flock));
 }
 
 /// <summary>A shell command the user typed after <c>!</c> (or <c>!!</c>, <see cref="LocalOnly"/>).</summary>

@@ -437,7 +437,7 @@ public sealed class SessionTitler
                     break;
                 // A guest's message is outside content, quoted as theirs as the prompt quotes it (A4 verification).
                 case UserMessage { From: { } guest } user:
-                    lines.Add(Corvid.Kernel.Turns.PromptRenderer.Quoted(guest, Cut(user.Text, LineChars)));
+                    lines.Add(Corvid.Kernel.Turns.PromptRenderer.Quoted(guest, Cut(user.Text, LineChars), user.Flock));
                     break;
                 case UserMessage user:
                     lines.Add("user: " + Cut(user.Text, LineChars));

@@ -95,6 +95,13 @@ public sealed record TurnOptions
     /// <summary>Hard filters before the shortlist: toolset enabled, platform allowed, availability.</summary>
     public Func<ToolDescriptor, bool>? ToolFilter { get; init; }
 
+    /// <summary>
+    /// C-042: tools a session's turns are offered whatever the shortlist ranks (<c>flock_send</c> while it is in a flock), by
+    /// session id, read at each turn's start, also when <see cref="ToolFilter"/> withholds them from ranking. Only tools the
+    /// turn may have at all: a guest's turn and a name the catalogue lacks are left out as before.
+    /// </summary>
+    public Func<string, IReadOnlyCollection<string>>? AlwaysOffered { get; init; }
+
     /// <summary>The Vault catalogue's secret names; tools with secret parameters are offered only with one (§10.5).</summary>
     public IReadOnlyCollection<string>? SecretNames { get; init; }
 

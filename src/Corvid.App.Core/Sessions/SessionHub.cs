@@ -395,7 +395,7 @@ public sealed class SessionHub : IDisposable
         if (_open.TryGetValue(summary.Id, out var open))
             open.SetPinned(summary.Pinned);
         if (!known || previous!.Pinned != summary.Pinned || previous.ReadOnly != summary.ReadOnly || InRail(previous) != InRail(summary)
-            || previous.Workspace != summary.Workspace || previous.Branch != summary.Branch)
+            || previous.Workspace != summary.Workspace || previous.Branch != summary.Branch || previous.Flock != summary.Flock)
             RebuildRail();
         else if (_shell.FindSession(summary.Id) is { } item)
             Refresh(item, summary);
@@ -419,8 +419,13 @@ public sealed class SessionHub : IDisposable
         var groups = new List<SessionGroup>();
         if (pinned.Count > 0)
             groups.Add(new SessionGroup("Pinned", pinned));
+        // C-042: a flock's members together, under its name (the most recently active flock first); a pinned member stays pinned.
+        var flocks = listed.Where(summary => !summary.Pinned && summary.Flock is { Length: > 0 })
+            .GroupBy(summary => summary.Flock!, StringComparer.Ordinal).ToList();
+        groups.AddRange(flocks.Select(flock => new SessionGroup("Flock · " + SafeText.Clean(flock.Key), [.. flock.Select(Item)])));
+        recent = [.. listed.Where(summary => !summary.Pinned && summary.Flock is not { Length: > 0 }).Select(Item)];
         // A6 (G-4): with sessions in several workspaces, the rest group by workspace (the most recently active first).
-        var workspaces = WorkspaceGroups(listed.Where(summary => !summary.Pinned).ToList());
+        var workspaces = WorkspaceGroups(listed.Where(summary => !summary.Pinned && summary.Flock is not { Length: > 0 }).ToList());
         if (workspaces is not null)
             groups.AddRange(workspaces);
         else if (recent.Count > 0)

@@ -41,7 +41,9 @@ public sealed partial class CorvidRuntime
     public static bool IsSearchable(string sessionId) =>
         sessionId is not (McpSessions.Pins or GatewaySessions.Ledger or MemoryJobs.Session)
         && !sessionId.StartsWith(GatewaySessions.Prefix, StringComparison.Ordinal)
-        && !sessionId.StartsWith("job:", StringComparison.Ordinal);
+        && !sessionId.StartsWith("job:", StringComparison.Ordinal)
+        // C-042: a flock's log holds its members' messages, each also in the member's own log.
+        && !FlockSessions.IsFlock(sessionId);
 
     // On the maintenance chain, as QueueCatchUp's embedding is: best effort, and a failure never reaches the search.
     private void QueueEmbed(MemoryServices memory, IReadOnlyList<Episode> added)
