@@ -5,15 +5,17 @@ project. It builds the Skia desktop head (`net10.0-desktop`: X11 and the framebu
 and the WebAssembly head only on request. Its view models live in [`Corvid.App.Core`](../Corvid.App.Core), which has no
 Uno types and is tested headless in [`tests/Corvid.App.Core.Tests`](../../tests/Corvid.App.Core.Tests).
 
-So far: the A0 scaffold (the shell as the Main mockup draws it, the theme, the fonts, the icons, navigation to every
-area, a placeholder page per area), the session core in `Corvid.App.Core/Sessions`, and the Sessions page on it (A0.3:
-the transcript, the approval card, the turn strip, the composer and the dock's panels). Where the build stands and what
-comes next: [`docs/plan/ui-handoff.md`](../../docs/plan/ui-handoff.md); the rules every builder follows:
-[`docs/plan/ui-build.md`](../../docs/plan/ui-build.md).
+Built through phase A7: every area of the rail on `Corvid.App.Engine` by default (the demo services with `--demo`),
+the palette and keys, the phone layout and accessibility, attached mode and the browser head, and the release tarball
+`install.sh --app` installs. What each phase built and left is in
+[`docs/plan/ui-handoff.md`](../../docs/plan/ui-handoff.md); the rules every builder follows are in
+[`docs/plan/ui-build.md`](../../docs/plan/ui-build.md). The README's recording and screenshots are in
+[`docs/media/`](../../docs/media/README.md).
 
 ## Build and run
 
 ```sh
+dotnet restore Corvid.slnx       # once: the build below also builds corvid-sandbox, which only the solution restores
 dotnet build src/Corvid.App/Corvid.App.csproj -c Release
 # The engine (the default) over this machine's Corvid home; set HOME, CORVID_CONFIG and the XDG directories to try a
 # temporary one:
