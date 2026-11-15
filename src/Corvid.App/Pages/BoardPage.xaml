@@ -11,8 +11,8 @@
       Foreground="{ThemeResource CorvidText}"
       FontSize="13.5">
   <!--
-    The Board (Board.png, Board-narrow.png; docs/plan/ui.md §4.13, F18): the page head with the counts, the filter and
-    the buttons that start work; the session cards two to a row (one on a phone), each row as tall as its tallest card;
+    The Board (Board.png, Board-narrow.png; docs/plan/ui.md §4.13, F18): the page head with the counts, the filter, the
+    filter box (C-044) and the buttons that start work; the session cards two to a row (one on a phone), each row as tall as its tallest card;
     and a peek that shows a session's latest exchange read-only. The attention tray is BoardDock, in the shell's dock.
     Sizes and colours are corvid.css's: .page-head, .page-body, .cards, .scard, .state, .foot, .tag, .btn.sm, .seg.
   -->
@@ -183,6 +183,15 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </Border>
+          <!-- C-044: the filter box narrows the cards as you type (Ctrl+F or /; Esc clears it); the note says how it matched. -->
+          <TextBox x:Name="FilterBox" Width="240" Height="28" MinHeight="28" Padding="8,3,8,3" FontSize="13.5" CornerRadius="6"
+                   VerticalAlignment="Center" PlaceholderText="Filter sessions…" PlaceholderForeground="{ThemeResource CorvidText2}"
+                   Text="{x:Bind ViewModel.FilterText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                   BorderBrush="{ThemeResource CorvidLine}" PreviewKeyDown="OnFilterKeyDown" AutomationProperties.Name="Filter sessions"
+                   ToolTipService.ToolTip="Narrows the cards by title, preview, id, workspace and branch; from three letters, also by what sessions are about (Ctrl+F or /)" />
+          <TextBlock Text="{x:Bind ViewModel.FilterNote, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" TextWrapping="NoWrap"
+                     VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIfText(ViewModel.FilterNote), Mode=OneWay}"
+                     AutomationProperties.LiveSetting="Polite" />
         </controls:WrapRowPanel>
         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
           <controls:CorvidButton Content="Open a workspace…" Command="{x:Bind ViewModel.OpenWorkspaceCommand}"
