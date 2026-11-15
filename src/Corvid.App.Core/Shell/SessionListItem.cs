@@ -19,6 +19,7 @@ public sealed class SessionListItem : ObservableObject
     private SessionState _state;
     private string _when;
     private bool _isSelected;
+    private bool _yourTurn;
 
     internal SessionListItem(string id, string title, SessionState state, string when, ICommand open)
     {
@@ -68,6 +69,23 @@ public sealed class SessionListItem : ObservableObject
         }
     }
 
+    /// <summary>
+    /// C-043: idle, and the latest answer asks the person for something (the Board's Needs you): the rail says "your turn"
+    /// so it matches the Board.
+    /// </summary>
+    public bool YourTurn
+    {
+        get => _yourTurn;
+        set
+        {
+            if (SetProperty(ref _yourTurn, value))
+            {
+                OnPropertyChanged(nameof(StateLabel));
+                OnPropertyChanged(nameof(AutomationName));
+            }
+        }
+    }
+
     public bool IsSelected
     {
         get => _isSelected;
@@ -80,6 +98,7 @@ public sealed class SessionListItem : ObservableObject
         SessionState.Running => "running",
         SessionState.Waiting => "waiting on you",
         SessionState.Job => "job run",
+        _ when _yourTurn => "your turn",
         _ => "idle",
     };
 

@@ -30,6 +30,11 @@ public sealed class NewSessionTile(IReadOnlyList<MarkdownRun> text, RelayCommand
 /// the state with a coloured dot and what it waits on or runs; the step, model and time; tags for taint and where the
 /// generator runs; and Open, Peek, Take over, or a job run's Open run and Jobs. It follows the session's summary and,
 /// while watched, its folded state; the clock moves its times.
+/// <para>
+/// C-043: the card's kanban column, its one line on where the session is at (<see cref="StatusLine"/>), and the person's
+/// moves: Mark done on an idle card (disabled with why on a running one or one with an open approval or question), Not
+/// now on a your-turn, "Looks finished · Mark done" on a parked card whose answer reads finished, and Reopen in Done.
+/// </para>
 /// </summary>
 public sealed class SessionCardViewModel : BoardTile
 {
@@ -45,6 +50,8 @@ public sealed class SessionCardViewModel : BoardTile
     private string _detail = "";
     private IReadOnlyList<StatusTag> _tags = [];
     private string _automationName = "";
+    private BoardColumn _column;
+    private string _statusLine = "";
 
     public SessionCardViewModel(SessionSummary summary, DateTimeOffset now, TimeZoneInfo zone, Action<SessionCardViewModel> open,
         Action<SessionCardViewModel> peek, Action openJobs)
@@ -63,6 +70,9 @@ public sealed class SessionCardViewModel : BoardTile
         // Taking over a session another process drives needs it to let go (G-12); the engine will offer it then.
         TakeOverCommand = new RelayCommand(() => { }, () => false);
         OpenJobsCommand = new RelayCommand(openJobs);
+        MarkDoneCommand = new RelayCommand(() => Mark(BoardMark.Done), () => CanMarkDone);
+        NotNowCommand = new RelayCommand(() => Mark(BoardMark.Parked), () => Marker is not null && ShowsNotNow);
+        ReopenCommand = new RelayCommand(() => Mark(null), () => Marker is not null && ShowsReopen);
         Refresh();
     }
 
@@ -91,8 +101,8 @@ public sealed class SessionCardViewModel : BoardTile
     /// <summary>The card's whole text in one line, for a screen reader.</summary>
     public string AutomationName { get => _automationName; private set => SetProperty(ref _automationName, value); }
 
-    /// <summary>Something waits on the user here: the card has the amber border.</summary>
-    public bool IsWaiting => _summary.State == SessionState.Waiting;
+    /// <summary>Something waits on the user here (C-043: a your-turn too): the card has the amber border.</summary>
+    public bool IsWaiting => _summary.State == SessionState.Waiting || BoardText.YourTurn(_summary);
 
     public bool IsJob => _summary.Job is not null;
 
@@ -114,6 +124,68 @@ public sealed class SessionCardViewModel : BoardTile
     public RelayCommand OpenRunCommand { get; }
 
     public RelayCommand OpenJobsCommand { get; }
+
+    /// <summary>
+    /// C-043: what writes the card's Board mark (the Board's, through the session service); null where marks are not kept
+    /// (attached mode: <c>ui.db</c> is not served), so the buttons are disabled and say why.
+    /// </summary>
+    public Func<SessionCardViewModel, BoardMark?, Task>? Marker { get; init; }
+
+    /// <summary>C-043: the kanban column the card is in.</summary>
+    public BoardColumn Column { get => _column; private set => SetProperty(ref _column, value); }
+
+    /// <summary>C-043: the one line on where the session is at (<see cref="BoardText.StatusLine"/>).</summary>
+    public string StatusLine { get => _statusLine; private set => SetProperty(ref _statusLine, value); }
+
+    /// <summary>
+    /// C-043: the status line is drawn under the state when it says something the state line does not: an idle card's (a
+    /// running or waiting card's state already names the call, the approval or the question).
+    /// </summary>
+    public bool ShowsStatusLine => _statusLine.Length > 0 && !IsJob
+        && !(_summary.State is SessionState.Running or SessionState.Waiting || _summary.WorkingElsewhere);
+
+    /// <summary>C-043: an idle session whose latest answer asks the person for something: "your turn".</summary>
+    public bool IsYourTurn => BoardText.YourTurn(_summary);
+
+    /// <summary>
+    /// C-043: Mark done shows on every session card outside Done, except where the done suggestion shows instead; it is
+    /// enabled only on an idle one with nothing open (<see cref="MarkDoneHelp"/> says why not).
+    /// </summary>
+    public bool ShowsMarkDone => !IsJob && _summary.Child is null && _column != BoardColumn.Done && !SuggestsDone;
+
+    public bool CanMarkDone => Marker is not null && !IsJob && _summary.Child is null && _column != BoardColumn.Done
+        && _summary.State != SessionState.Running && !_summary.WorkingElsewhere && _summary.PendingApprovals == 0 && _summary.PendingQuestions == 0;
+
+    /// <summary>C-043: what Mark done does, or why it is disabled.</summary>
+    public string MarkDoneHelp =>
+        Marker is null ? "The Board's Done is kept in ui.db, which the engine on this machine keeps"
+        : _summary.PendingApprovals > 0 || _summary.PendingQuestions > 0 ? "Answer it first: an approval or question is open"
+        : _summary.State == SessionState.Running || _summary.WorkingElsewhere ? "A turn is running: mark it done once it ends"
+        : "Move it to Done until something new happens in it";
+
+    /// <summary>C-043: Not now, on a your-turn: Parked until something new happens (a false "your turn" is put aside so).</summary>
+    public bool ShowsNotNow => !IsJob && _summary.Child is null && _column == BoardColumn.NeedsYou && _summary is { Ending: TurnEnding.AsksYou, PendingApprovals: 0, PendingQuestions: 0 };
+
+    /// <summary>
+    /// C-043: the done suggestion: a parked card whose latest answer reads as a finished handoff shows "Looks finished ·
+    /// Mark done". Nothing moves to Done by itself.
+    /// </summary>
+    public bool SuggestsDone => !IsJob && _summary.Child is null && _column == BoardColumn.Parked && _summary is { Ending: TurnEnding.Finished, Mark: null };
+
+    /// <summary>C-043: Reopen, on a card the person marked done: back where it would be otherwise.</summary>
+    public bool ShowsReopen => !IsJob && _column == BoardColumn.Done && _summary.Mark == BoardMark.Done;
+
+    public RelayCommand MarkDoneCommand { get; }
+
+    public RelayCommand NotNowCommand { get; }
+
+    public RelayCommand ReopenCommand { get; }
+
+    private void Mark(BoardMark? mark)
+    {
+        if (Marker is { } marker)
+            _ = marker(this, mark);
+    }
 
     /// <summary>A5: this session's children, as a tree under the card (docs/plan/ui.md §4.13): oldest first.</summary>
     public ObservableCollection<ChildRowViewModel> Children { get; } = [];
@@ -213,15 +285,29 @@ public sealed class SessionCardViewModel : BoardTile
         StateLabel = BoardText.StateLabel(_summary, _view);
         StateDetail = BoardText.StateDetail(_summary, _view, _now, _zone);
         Detail = BoardText.Detail(_summary, _view, _now);
+        Column = BoardText.Column(_summary);
+        StatusLine = BoardText.StatusLine(_summary);
         var tags = BoardText.Tags(_summary);
         if (!tags.SequenceEqual(Tags))
             Tags = tags;
-        AutomationName = BoardText.Join(Title, Text(Meta), $"{StateLabel}, {Text(StateDetail)}", Detail, string.Join(", ", Tags.Select(tag => tag.Text)));
+        AutomationName = BoardText.Join(Title, Text(Meta), $"{StateLabel}, {Text(StateDetail)}", ShowsStatusLine ? StatusLine : null, Detail,
+            string.Join(", ", Tags.Select(tag => tag.Text)));
         OnPropertyChanged(nameof(IsWaiting));
         OnPropertyChanged(nameof(IsJob));
         OnPropertyChanged(nameof(IsReadOnly));
         OnPropertyChanged(nameof(CanOpen));
         OnPropertyChanged(nameof(CanPeek));
+        OnPropertyChanged(nameof(ShowsStatusLine));
+        OnPropertyChanged(nameof(IsYourTurn));
+        OnPropertyChanged(nameof(ShowsMarkDone));
+        OnPropertyChanged(nameof(CanMarkDone));
+        OnPropertyChanged(nameof(MarkDoneHelp));
+        OnPropertyChanged(nameof(ShowsNotNow));
+        OnPropertyChanged(nameof(SuggestsDone));
+        OnPropertyChanged(nameof(ShowsReopen));
+        MarkDoneCommand.NotifyCanExecuteChanged();
+        NotNowCommand.NotifyCanExecuteChanged();
+        ReopenCommand.NotifyCanExecuteChanged();
         OpenCommand.NotifyCanExecuteChanged();
         PeekCommand.NotifyCanExecuteChanged();
         OpenRunCommand.NotifyCanExecuteChanged();

@@ -9,6 +9,8 @@ using Corvid.Gateway;
 using Corvid.Host.Commands;
 using Corvid.Host.Composition;
 using Corvid.Host.Sessions;
+using Corvid.Host.State;
+using Corvid.Kernel.Jobs;
 using Corvid.Kernel.Sessions;
 using Corvid.Kernel.Turns;
 using Corvid.Models;
@@ -20,6 +22,7 @@ using McpSessions = Corvid.Abstractions.Events.McpSessions;
 using TitleSources = Corvid.Abstractions.Events.TitleSources;
 using PipelineMode = Corvid.Approvals.ApprovalMode;
 using SessionState = Corvid.App.Core.Shell.SessionState;
+using TurnEnding = Corvid.App.Core.Sessions.TurnEnding;
 
 namespace Corvid.App.Engine.Sessions;
 
@@ -153,6 +156,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             var summaries = new List<SessionSummary>();
             var pinned = Pins();
+            var marks = BoardMarks();
             var heads = new Dictionary<string, long>(StringComparer.Ordinal);
             // Read before the heads, so a write between the two is seen as a change at the next look.
             var marker = runtime.Log.ChangeMarker(cancellationToken);
@@ -162,7 +166,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
                 if (!IsConversation(id))
                     continue;
                 heads[id] = head;
-                if (Summarize(runtime, id, pinned) is { } summary)
+                if (Summarize(runtime, id, pinned, marks) is { } summary)
                     summaries.Add(Live(id, summary));
             }
             // G-12: what other processes write from here on reaches the list at the log's next look.
@@ -1174,6 +1178,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             Activity = waiting ? "waiting on you" : tool is { } call ? $"{call.Tool} {call.Target}".Trim() : null,
             Model = running && view.Model is { Length: > 0 } model ? model : logged.Model,
             Tainted = logged.Tainted || view.Tainted,
+            // C-043: activity this window saw after the mark is news the log summary has not been read for yet (a turn that
+            // just ended, before its refresh): the card leaves Done or Parked now rather than after that read.
+            Mark = logged.MarkedAt is { } marked && view.LastActivity > marked ? null : logged.Mark,
+            MarkedAt = logged.MarkedAt is { } at && view.LastActivity > at ? null : logged.MarkedAt,
             ForkOf = view.ForkOf ?? logged.ForkOf,
             ForkTurn = view.ForkTurn ?? logged.ForkTurn,
             PendingApprovals = view.Approvals.Count,
@@ -1183,7 +1191,8 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         };
     }
 
-    private SessionSummary? Summarize(CorvidRuntime runtime, string id, IReadOnlySet<string>? pinned = null)
+    private SessionSummary? Summarize(CorvidRuntime runtime, string id, IReadOnlySet<string>? pinned = null,
+        IReadOnlyDictionary<string, UiBoardMark>? marks = null)
     {
         // G-6: the title every surface shows (a rename, the generated title, else the first message), from the host.
         if (SessionCatalogue.Describe(runtime.Log, id) is not { } described)
@@ -1200,9 +1209,22 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             WatchHeld(runtime, id);
         // A5: a child is its parent's record: read-only here, shown under its parent.
         var child = ChildFacts(runtime, id);
+        // C-043: the Board's mark holds while nothing newer than it happened in the session (G-7: ui.db, not the log).
+        var mark = (marks ?? BoardMarks()).GetValueOrDefault(id) is { } kept && kept.HoldsAt(described.LastNews) ? kept : null;
+        var line = BoardLine(described);
         // A session this window made holding no message yet (a fork before the first one) is new, not its id.
         return new SessionSummary(id, title ?? (_created.ContainsKey(id) || _forks.ContainsKey(id) ? "New session" : id))
         {
+            Ending = job.Name is not null ? TurnEnding.None : Ending(described.Ending),
+            Mark = mark?.Mark switch { UiBoardMarks.Done => BoardMark.Done, UiBoardMarks.Parked => BoardMark.Parked, _ => null },
+            MarkedAt = mark?.At,
+            StatusLine = line.Text,
+            StatusGenerated = line.Generated,
+            // C-043 (G-12): another process's turn is under way by the log, and it wrote something lately; a terminal that
+            // crashed mid-turn leaves the same log, so the bound keeps it from looking busy forever.
+            WorkingElsewhere = drivenElsewhere && described.InTurn && last > _time.GetUtcNow() - WorkingElsewhereFor,
+            JobRunning = job.Running,
+            JobFailed = job.Failed,
             Child = child?.Child,
             ParentId = child?.ParentId,
             // G-7: pinned in ui.db, by this window or the CLI's /pin.
@@ -1236,7 +1258,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// The job a run's session belongs to (<c>job:&lt;job id&gt;:&lt;run id&gt;</c>, as the job store names it): its name and
     /// schedule, and when the run started; the job's id when the store no longer has it.
     /// </summary>
-    private static (string? Name, string? Schedule, DateTimeOffset? RunAt) JobOf(CorvidRuntime runtime, string id)
+    private static (string? Name, string? Schedule, DateTimeOffset? RunAt, bool Running, bool Failed) JobOf(CorvidRuntime runtime, string id)
     {
         var parts = id.Split(':', 3);
         var jobId = parts.Length > 1 && parts[1].Length > 0 ? parts[1] : id;
@@ -1245,12 +1267,14 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             var store = runtime.Builtin.Jobs;
             var job = store.Get(jobId);
             var run = parts.Length > 2 ? store.GetRun(parts[2]) : null;
-            return (job?.Name ?? jobId, job?.Schedule, run?.StartedAt);
+            // C-043: a run the store has not finished runs (the Board's Running); one that failed or was cut off says so.
+            return (job?.Name ?? jobId, job?.Schedule, run?.StartedAt, run is { FinishedAt: null, Status: JobRunStatus.Running },
+                run?.Status is JobRunStatus.Failed or JobRunStatus.Interrupted or JobRunStatus.ScriptRefused);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             // The store unreadable: still the scheduler's run, read-only.
-            return (jobId, null, null);
+            return (jobId, null, null, false, false);
         }
     }
 

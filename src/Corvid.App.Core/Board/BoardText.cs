@@ -64,6 +64,10 @@ public static partial class BoardText
     public static Tone StateTone(SessionSummary summary)
     {
         ArgumentNullException.ThrowIfNull(summary);
+        if (YourTurn(summary))
+            return Tone.Amber;
+        if (summary.WorkingElsewhere)
+            return Tone.Blue;
         return summary.State switch
         {
             SessionState.Waiting => Tone.Amber,
@@ -78,9 +82,15 @@ public static partial class BoardText
     {
         ArgumentNullException.ThrowIfNull(summary);
         if (summary.State == SessionState.Job)
-            return view is { Running: true } ? "running" : "finished";
+            return view is { Running: true } || summary.JobRunning ? "running" : summary.JobFailed ? "failed" : "finished";
+        if (summary.WorkingElsewhere)
+            return "running elsewhere";
         if (summary.ReadOnly)
             return "held by another process";
+        if (YourTurn(summary))
+            return "your turn";
+        if (summary.State == SessionState.Idle && summary.Mark == BoardMark.Done)
+            return "done";
         return summary.State switch
         {
             SessionState.Waiting => "waiting on you",
@@ -163,10 +173,13 @@ public static partial class BoardText
     {
         ArgumentNullException.ThrowIfNull(summary);
         if (summary.Job is not null)
-            return [new StatusTag("job", Tone.Violet, "A scheduled job's run, kept as it ran")];
+            return summary.JobFailed
+                ? [new StatusTag("job", Tone.Violet, "A scheduled job's run, kept as it ran"), new StatusTag("failed", Tone.Red, "The run failed or was interrupted")]
+                : [new StatusTag("job", Tone.Violet, "A scheduled job's run, kept as it ran")];
         var tags = new List<StatusTag>();
         if (summary.Tainted)
             tags.Add(new StatusTag("tainted", Tone.Amber, "Outside content is in context: network reads ask, egress offers only \"once\""));
+        // C-043: kept in every column, so a card another process drives that fell back to Parked after a long call is not misread.
         if (summary.ReadOnly)
             tags.Add(new StatusTag("read-only", Tone.Grey, "Another process drives this session; this window can only watch"));
         else if (summary.Cloud)
@@ -217,6 +230,109 @@ public static partial class BoardText
             SessionState.Waiting => 0,
             SessionState.Running => 1,
             _ => 2,
+        };
+    }
+
+    /// <summary>
+    /// C-043: the kanban column a session's card is in (docs/plan/ui.md §4.13), top rule first: a turn running here or
+    /// elsewhere (or a job's unfinished run) is Running unless an approval waits on the person; an approval is Needs you; a
+    /// Done mark is Done (and a job's ended run); a clarifying question or an answer that asks is Needs you unless the person
+    /// parked it; everything else is Parked. Children are not cards, so their column is never asked.
+    /// </summary>
+    public static BoardColumn Column(SessionSummary summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        if (summary.Job is not null)
+            return summary.JobRunning ? BoardColumn.Running : BoardColumn.Done;
+        if (summary.PendingApprovals == 0 && (summary.State == SessionState.Running || summary.WorkingElsewhere))
+            return BoardColumn.Running;
+        if (summary.PendingApprovals > 0)
+            return BoardColumn.NeedsYou;
+        if (summary.Mark == BoardMark.Done)
+            return BoardColumn.Done;
+        if (summary.PendingQuestions > 0 || summary.Ending == TurnEnding.AsksYou && summary.Mark != BoardMark.Parked)
+            return BoardColumn.NeedsYou;
+        return BoardColumn.Parked;
+    }
+
+    /// <summary>
+    /// C-043: an idle session whose latest answer asks the person for something and that they have not parked or marked
+    /// done: "your turn" on the card and the rail. A formal question or approval is "waiting on you" instead.
+    /// </summary>
+    public static bool YourTurn(SessionSummary summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        return summary is { State: SessionState.Idle, Ending: TurnEnding.AsksYou, Mark: null, Job: null, PendingApprovals: 0, PendingQuestions: 0, WorkingElsewhere: false };
+    }
+
+    /// <summary>
+    /// C-043: the card's one line on where the session is at, the first that applies: the running call ("write_file
+    /// docs/…", step x of y); the open approval or question; then the engine's <see cref="SessionSummary.StatusLine"/> (the
+    /// generated line when current, the question the answer ends on, or its first line); then the latest exchange's line.
+    /// Data, cleaned and on one line.
+    /// </summary>
+    public static string StatusLine(SessionSummary summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        string? line;
+        if (summary.Job is null && summary.PendingApprovals == 0 && (summary.State == SessionState.Running || summary.WorkingElsewhere))
+        {
+            var step = summary.Step is { } number ? summary.MaxSteps is { } max ? $"step {number} of {max}" : $"step {number}" : null;
+            line = Join(summary.Activity is { Length: > 0 } activity && activity != "waiting on you" ? activity
+                : summary.WorkingElsewhere ? "working in another process" : "working", step);
+        }
+        else if (summary.PendingApprovals > 0)
+            line = Join("approval", summary.Approval);
+        else if (summary.PendingQuestions > 0)
+            line = Join("question", summary.Question);
+        else
+            line = summary.StatusLine ?? summary.Preview;
+        return OneLine(SafeText.Clean(line ?? ""));
+    }
+
+    /// <summary>C-043: a column's head with its count: "Needs you · 3".</summary>
+    public static string ColumnHead(BoardColumn column, int count) => $"{ColumnName(column)} · {count}";
+
+    /// <summary>C-043: a column's name as its head says it.</summary>
+    public static string ColumnName(BoardColumn column) => column switch
+    {
+        BoardColumn.Running => "Running",
+        BoardColumn.NeedsYou => "Needs you",
+        BoardColumn.Done => "Done",
+        _ => "Parked",
+    };
+
+    /// <summary>C-043: what an empty column says.</summary>
+    public static string ColumnEmpty(BoardColumn column) => column switch
+    {
+        BoardColumn.Running => "Nothing is running.",
+        BoardColumn.NeedsYou => "Nothing needs you.",
+        BoardColumn.Done => "Nothing marked done. Mark done takes a card here until something new happens in it.",
+        _ => "Nothing parked.",
+    };
+
+    /// <summary>
+    /// C-043: the order within a column. Needs you: approvals by deadline, then questions, then your-turns, each newest
+    /// first. Running: by when the step started (a job's run by its start). Parked: newest activity first. Done: newest
+    /// mark first (a job's ended run by its end).
+    /// </summary>
+    public static IEnumerable<SessionSummary> Order(BoardColumn column, IEnumerable<SessionSummary> summaries)
+    {
+        ArgumentNullException.ThrowIfNull(summaries);
+        return column switch
+        {
+            BoardColumn.NeedsYou => summaries
+                .OrderBy(summary => summary.PendingApprovals > 0 ? 0 : summary.PendingQuestions > 0 ? 1 : 2)
+                .ThenBy(summary => summary.PendingApprovals > 0 ? summary.Deadline ?? DateTimeOffset.MaxValue : DateTimeOffset.MaxValue)
+                .ThenByDescending(summary => summary.LastActivity)
+                .ThenBy(summary => summary.Id, StringComparer.Ordinal),
+            BoardColumn.Running => summaries
+                .OrderBy(summary => summary.StepStarted ?? summary.RunAt ?? summary.LastActivity)
+                .ThenBy(summary => summary.Id, StringComparer.Ordinal),
+            BoardColumn.Done => summaries
+                .OrderByDescending(summary => summary.MarkedAt ?? summary.LastActivity)
+                .ThenBy(summary => summary.Id, StringComparer.Ordinal),
+            _ => summaries.OrderByDescending(summary => summary.LastActivity).ThenBy(summary => summary.Id, StringComparer.Ordinal),
         };
     }
 
@@ -292,6 +408,13 @@ public static partial class BoardText
         }
 
         return merged;
+    }
+
+    // The first line, for the card's one-line status; the view trims what does not fit.
+    private static string OneLine(string text)
+    {
+        var line = string.Join(' ', text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return line.Length > 200 ? line[..199] + "…" : line;
     }
 
     private static DateTimeOffset Later(DateTimeOffset now, DateTimeOffset then) => then > now ? then : now;

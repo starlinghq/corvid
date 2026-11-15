@@ -88,3 +88,20 @@ public sealed record AttentionItem(string Id, AttentionKind Kind, string What, s
 /// decider, the scheduler and the gateway's adapters. The Board adds the workspace count and how many sessions run and wait.
 /// </summary>
 public sealed record BoardStatus(string Engine, string Decider, string Scheduler, string Gateway);
+
+/// <summary>
+/// C-043: the Board's kanban columns (docs/plan/ui.md §4.13), left to right. A card's column is
+/// <see cref="BoardText.Column"/> of its summary; the person moves a card only to Done or Parked, and anything new in the
+/// session brings it back out.
+/// </summary>
+public enum BoardColumn
+{
+    /// <summary>A turn runs here or elsewhere, or a job's run has not ended.</summary>
+    Running,
+    /// <summary>An approval, a clarifying question, or an answer that asks the person for something ("your turn").</summary>
+    NeedsYou,
+    /// <summary>Idle with nothing asked, or a your-turn put aside with "Not now".</summary>
+    Parked,
+    /// <summary>Marked done and nothing new since, or a job's run that ended.</summary>
+    Done,
+}

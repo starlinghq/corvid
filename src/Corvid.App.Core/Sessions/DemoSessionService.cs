@@ -252,6 +252,25 @@ public sealed partial class DemoSessionService : ISessionService, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// C-043: the demo keeps the Board's Done and Parked marks in memory, through the session's history so far: anything new
+    /// in the session (a message, an answer, a call, an approval, a question) brings the card back, as the engine's do.
+    /// </summary>
+    public bool CanMarkBoard => true;
+
+    public Task SetBoardMarkAsync(string sessionId, BoardMark? mark, CancellationToken cancellationToken = default)
+    {
+        var session = Get(sessionId);
+        var summary = session.LastSummary ?? Summary(session);
+        if (mark == BoardMark.Done && (summary.PendingApprovals > 0 || summary.PendingQuestions > 0))
+            return Task.FromException(new InvalidOperationException("Answer it first: an approval or question is open."));
+        session.Mark = mark is { } kept ? (kept, session.History.Count, _clock) : null;
+        summary = Summary(session);
+        session.LastSummary = summary;
+        SessionChanged?.Invoke(this, summary);
+        return Task.CompletedTask;
+    }
+
     /// <summary>Tests: tells the views of a summary the demo's sessions do not hold (a child session, A5).</summary>
     internal void Announce(SessionSummary summary) => SessionChanged?.Invoke(this, summary);
 
@@ -293,6 +312,9 @@ public sealed partial class DemoSessionService : ISessionService, IDisposable
     {
         if (update.At == default)
             update = update with { At = _clock };
+        // C-043: a new message starts a new exchange: the scripted ending and status line were about the one before.
+        if (update is UserMessage)
+            (session.Ending, session.Status) = (TurnEnding.None, null);
         Seed(session, update);
         var delivered = session.History[^1];
         foreach (var subscriber in session.Subscribers.ToArray())
@@ -345,8 +367,20 @@ public sealed partial class DemoSessionService : ISessionService, IDisposable
             PendingQuestions = state.Question is null ? 0 : 1,
             Question = state.Question is { } question ? question.Title ?? question.Text : null,
             Preview = lastUser?.Text,
+            Ending = session.Ending,
+            Mark = session.Mark is { } mark && !session.History.Skip(mark.Through).Any(IsNews) ? mark.Mark : null,
+            MarkedAt = session.Mark is { } at && !session.History.Skip(at.Through).Any(IsNews) ? at.At : null,
+            // As the engine falls back: the latest answer's first line once one is given after the latest message.
+            StatusLine = session.Status ?? (state.Transcript.LastOrDefault(entry => entry is AnswerEntry or UserEntry) is AnswerEntry answer
+                ? answer.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault()
+                : null),
+            StatusGenerated = session.Status is not null,
         };
     }
+
+    /// <summary>C-043: an update a person would call something that happened in the session; it ends a Board mark.</summary>
+    private static bool IsNews(SessionUpdate update) =>
+        update is UserMessage or AgentMessageChunk or ToolCall or ApprovalRequested or QuestionAsked or TurnStarted;
 
     // ---- Turns, the queue and interruption ----
 
@@ -469,6 +503,15 @@ public sealed partial class DemoSessionService : ISessionService, IDisposable
         public bool ApprovalTurnNext { get; set; }
 
         public SessionSummary? LastSummary { get; set; }
+
+        /// <summary>C-043: how the scenario's latest answer ends (the engine reads it with its rule); None after a new message.</summary>
+        public TurnEnding Ending { get; set; }
+
+        /// <summary>C-043: the scenario's status line for the latest answer, as the local generator would write it.</summary>
+        public string? Status { get; set; }
+
+        /// <summary>C-043: the Board mark, the history's length when it was set, and when.</summary>
+        public (BoardMark Mark, int Through, DateTimeOffset At)? Mark { get; set; }
 
         public int Calls { get; set; }
     }

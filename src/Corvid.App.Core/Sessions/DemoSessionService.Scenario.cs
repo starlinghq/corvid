@@ -16,6 +16,9 @@ public sealed partial class DemoSessionService
 
     public const string JobSessionId = "job:nightly-tidy:2026-10-24";
 
+    /// <summary>C-043: an idle session whose answer asks the person to merge: the Board's "your turn".</summary>
+    public const string BumpSessionId = "cli-5e81";
+
     private const string Kev = "Kev-0.8B";
     private const string Qwen = "qwen3.5-0.8b";
     private const string Claude = "claude";
@@ -52,6 +55,7 @@ public sealed partial class DemoSessionService
         BuildReleaseNotesSession();
         BuildVaultSession();
         BuildTerminalSession();
+        BuildBumpSession();
         BuildJobSession();
         foreach (var session in _sessions.Values)
             session.LastSummary = Summary(session);
@@ -557,10 +561,51 @@ public sealed partial class DemoSessionService
         });
         Seed(session, At(13, 4, 58),
             new AgentMessageChunk("The policy now lets `ntfy.key` reach `ntfy.sh` only, with `POST` and nothing else:\n\n```toml\n"
-                + PolicyAfter + "```\n\nVault confirms any other use out of band, so a tainted turn cannot widen it."),
+                + PolicyAfter + "```\n\nVault confirms any other use out of band, so a tainted turn cannot widen it. The policy change is done."),
             new Notice(NoticeKind.MemoryStaged, "memory staged: 1 fact") { Detail = "ntfy.key is send-only and bound to ntfy.sh" },
             new UsageUpdate { ContextTokens = 18_000, ContextWindow = 200_000, CompactAt = 0.70 });
         Seed(session, new TurnEnded(6, TurnOutcome.Answered) { Elapsed = TimeSpan.FromSeconds(18), Tokens = 640, At = At(13, 5) });
+        // C-043: a finished handoff, so the Board suggests Mark done; the line the local generator wrote after it.
+        session.Ending = TurnEnding.Finished;
+        session.Status = "ntfy.key is send-only and bound to ntfy.sh; nothing left open";
+    }
+
+    // ---- cli-5e81: idle, its answer asks for the merge (C-043's "your turn") ----
+
+    private void BuildBumpSession()
+    {
+        var session = Add(new SessionSummary(BumpSessionId, "Bump Starling packages to 0.3.0") { Workspace = "corvid", Branch = "deps/starling-0.3" });
+        Seed(session, At(13, 30),
+            new TitleChanged("Bump Starling packages to 0.3.0") { Generated = true },
+            new ApprovalModeChanged(ApprovalMode.Smart),
+            new EngineStatus
+            {
+                Generator = new GeneratorStatus(Qwen, "cuda:0") { Latency = TimeSpan.FromMilliseconds(180) },
+                Decider = "Kev-0.8B, calibrated",
+                Scheduler = "here · 2 jobs",
+                Workspace = "corvid",
+                Branch = "deps/starling-0.3",
+            },
+            new AvailableCommandsUpdate(Commands),
+            new UserMessage("bump the Starling packages to 0.3.0, run the tests and open a PR"));
+        Seed(session, At(13, 30, 2),
+            new TurnStarted(1, Qwen) { MaxSteps = 6 },
+            new ToolCall("call-b1", "patch_file", ToolKind.Edit, ToolCallStatus.InProgress)
+            {
+                Target = "Directory.Packages.props",
+                Verdict = new CallVerdict(VerdictKind.Mode) { Mode = ApprovalMode.Smart, RiskLevel = 0, RiskConfidence = 0.96, Detail = "in workspace, no network" },
+            });
+        Seed(session, new ToolCallUpdate("call-b1") { Status = ToolCallStatus.Completed, Outcome = ToolOutcome.Succeeded, Summary = "+4 −4", Elapsed = TimeSpan.FromSeconds(0.1), At = At(13, 30, 3) });
+        Seed(session, At(13, 31),
+            new ToolCall("call-b2", "shell", ToolKind.Execute, ToolCallStatus.InProgress) { Target = "dotnet test Corvid.slnx", Verdict = new CallVerdict(VerdictKind.ReadOnly) });
+        Seed(session, new ToolCallUpdate("call-b2") { Status = ToolCallStatus.Completed, Outcome = ToolOutcome.Succeeded, Summary = "exit 0", Elapsed = TimeSpan.FromSeconds(212), At = At(13, 34, 32) });
+        Seed(session, At(13, 35, 10),
+            new AgentMessageChunk("Starling is on 0.3.0 in `Directory.Packages.props`, and the whole solution's tests pass.\n\n"
+                + "PR #131 is up with the bump and the lock file. Want me to merge it?"),
+            new UsageUpdate { ContextTokens = 31_000, ContextWindow = 200_000, CompactAt = 0.70 });
+        Seed(session, new TurnEnded(1, TurnOutcome.Answered) { Elapsed = TimeSpan.FromSeconds(308), Tokens = 910, At = At(13, 35, 12) });
+        session.Ending = TurnEnding.AsksYou;
+        session.Status = "Starling bumped to 0.3.0, tests pass; PR #131 waits on your merge";
     }
 
     // ---- cli-c3d2: open in a terminal, a read-only live view ----

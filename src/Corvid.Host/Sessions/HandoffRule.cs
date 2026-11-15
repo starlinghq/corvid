@@ -45,6 +45,30 @@ public static partial class HandoffRule
     }
 
     /// <summary>
+    /// The sentence a your-turn answer asks with, for the Board's card when no generated status line is current: the last
+    /// question in the paragraph the rule reads (or the dropped list's last item), else its last sentence with a request
+    /// ("Let me know which you prefer."); null when the answer does not ask (<see cref="Classify"/> is not AsksYou).
+    /// </summary>
+    public static string? Question(string? lastAnswer)
+    {
+        if (Classify(lastAnswer) != TurnEnding.AsksYou)
+            return null;
+        var (paragraph, list) = LastParagraph(lastAnswer!);
+        foreach (var text in (string?[])[paragraph, list])
+        {
+            if (string.IsNullOrEmpty(text))
+                continue;
+            var sentences = Sentence().Split(text.Trim()).Where(sentence => sentence.Length > 0).ToList();
+            if (sentences.LastOrDefault(sentence => sentence.EndsWith('?')) is { } question)
+                return question;
+            if (sentences.LastOrDefault(sentence => Request().IsMatch(Pleasantry().Replace(sentence, ""))) is { } request)
+                return request;
+        }
+
+        return paragraph.Length > 0 ? paragraph : list;
+    }
+
+    /// <summary>
     /// The paragraph the rule reads, flattened to one line without markdown emphasis, and the last item of a trailing list
     /// it dropped (a question can close a list of options: "1. … 2. Ok to delete the rest?"); empty when nothing is left.
     /// </summary>

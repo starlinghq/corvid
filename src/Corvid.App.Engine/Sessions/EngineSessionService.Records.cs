@@ -13,14 +13,18 @@ using Corvid.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using RecapSources = Corvid.Abstractions.Events.RecapSources;
 using SessionRecapped = Corvid.Abstractions.Events.SessionRecapped;
+using SessionStatusNoted = Corvid.Abstractions.Events.SessionStatusNoted;
+using StatusSources = Corvid.Abstractions.Events.StatusSources;
+using TurnEnding = Corvid.App.Core.Sessions.TurnEnding;
 using SessionTitled = Corvid.Abstractions.Events.SessionTitled;
 using TitleSources = Corvid.Abstractions.Events.TitleSources;
 
 namespace Corvid.App.Engine.Sessions;
 
 /// <summary>
-/// A4's records on the engine: titles and recaps from the log (G-6, extending K-9), pins, drafts and when a session was
-/// last seen in <c>ui.db</c> (G-7, shared with the CLI), and the composer's <c>!</c> and <c>#</c> lines
+/// A4's records on the engine: titles and recaps from the log (G-6, extending K-9), pins, drafts, the Board's Done and
+/// Parked marks (C-043) and when a session was last seen in <c>ui.db</c> (G-7, shared with the CLI), the Board's status
+/// lines from the log (C-043), and the composer's <c>!</c> and <c>#</c> lines
 /// (docs/plan/tui.md §4.1), read by the host's <see cref="ComposerLine"/> as the CLI reads them.
 /// </summary>
 public sealed partial class EngineSessionService
@@ -78,6 +82,43 @@ public sealed partial class EngineSessionService
         var pin = Task.Run(() => Ui.SetPinned(sessionId, pinned, _time.GetUtcNow()), cancellationToken);
         Track(pin);
         await pin.ConfigureAwait(false);
+        Refresh(runtime, sessionId);
+    }
+
+    /// <summary>C-043: the Board's Done and Parked are kept in <c>ui.db</c>, beside pins.</summary>
+    public bool CanMarkBoard => true;
+
+    /// <summary>
+    /// C-043: how long a session another process drives reads as running after its log last moved mid-turn
+    /// (<see cref="SessionSummary.WorkingElsewhere"/>); a long tool call in a terminal falls back to Parked after it.
+    /// </summary>
+    internal static readonly TimeSpan WorkingElsewhereFor = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// C-043: puts the session in the Board's Done or Parked through its latest news, or takes it out (null), in <c>ui.db</c>
+    /// (G-7), not the log: it changes nothing the agent does, and a session a terminal drives (G-12) can be marked too. Done
+    /// is refused while an approval or question is open, so it never hides what the bell counts.
+    /// </summary>
+    public async Task SetBoardMarkAsync(string sessionId, BoardMark? mark, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
+        var write = Task.Run(() =>
+        {
+            if (mark is null)
+            {
+                Ui.ClearBoardMark(sessionId);
+                return;
+            }
+            if (SessionCatalogue.Describe(runtime.Log, sessionId, cancellationToken) is not { } described)
+                throw new KeyNotFoundException($"There is no session '{sessionId}' in Corvid's log.");
+            if (mark == BoardMark.Done && Summarize(runtime, sessionId) is { } logged && Live(sessionId, logged) is { } live
+                && (live.PendingApprovals > 0 || live.PendingQuestions > 0))
+                throw new InvalidOperationException("Answer it first: an approval or question is open.");
+            Ui.SetBoardMark(sessionId, mark == BoardMark.Done ? UiBoardMarks.Done : UiBoardMarks.Parked, described.LastNews, _time.GetUtcNow());
+        }, cancellationToken);
+        Track(write);
+        await write.ConfigureAwait(false);
         Refresh(runtime, sessionId);
     }
 
@@ -220,6 +261,43 @@ public sealed partial class EngineSessionService
         Track(Task.Run(() => Ui.MarkSeen(sessionId, runtime.Log.GetHead(sessionId), _time.GetUtcNow())));
     }
 
+    /// <summary>C-043: the Board's marks in <c>ui.db</c>, stale ones too; none (and a line in the log) when it cannot be read.</summary>
+    private IReadOnlyDictionary<string, UiBoardMark> BoardMarks()
+    {
+        try
+        {
+            return Ui.BoardMarks();
+        }
+        catch (Exception exception) when (exception is DbException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Log("corvid app: the Board's marks could not be read from ui.db: " + exception.Message);
+            return ImmutableDictionary<string, UiBoardMark>.Empty;
+        }
+    }
+
+    /// <summary>C-043: the host's reading of how the latest answer ends, in the app's terms.</summary>
+    private static TurnEnding Ending(Corvid.Host.Sessions.TurnEnding ending) => ending switch
+    {
+        Corvid.Host.Sessions.TurnEnding.AsksYou => TurnEnding.AsksYou,
+        Corvid.Host.Sessions.TurnEnding.Finished => TurnEnding.Finished,
+        _ => TurnEnding.None,
+    };
+
+    /// <summary>
+    /// C-043: the card's line once the session is idle: the local generator's status line when it covers the latest answer,
+    /// else the question the answer ends on when it asks, else the answer's first line. The Board puts the running call
+    /// and an open approval or question before it. Model text, cleaned where it is drawn.
+    /// </summary>
+    internal static (string? Text, bool Generated) BoardLine(SessionDescription described)
+    {
+        if (described.Status is { Source: StatusSources.Generated } status && status.ThroughSequence >= described.LastAnswerSequence
+            && SessionCatalogue.Line(status.Text) is { } generated)
+            return (generated, true);
+        if (described.Ending == Corvid.Host.Sessions.TurnEnding.AsksYou && SessionCatalogue.Line(HandoffRule.Question(described.LastAnswer)) is { } asked)
+            return (asked, false);
+        return (described.Preview, false);
+    }
+
     /// <summary>The pinned sessions in <c>ui.db</c>; none (and a line in the log) when it cannot be read.</summary>
     private IReadOnlySet<string> Pins()
     {
@@ -327,6 +405,13 @@ public sealed partial class EngineSessionService
                 Publish(channel, _ => [Recap(recap, default)]);
         }
 
+        // C-043: the Board's status line was written after a turn: the card's line follows. It is not activity, so no time.
+        void OnStatus(string id, SessionStatusNoted status)
+        {
+            if (!_disposed)
+                Refresh(runtime, id);
+        }
+
         // L10: background problems (the egress ledger) go to the app's log, not the model call's thread's stderr.
         static void OnNotice(string line) => Log("corvid app: " + line);
 
@@ -369,6 +454,7 @@ public sealed partial class EngineSessionService
         runtime.FlockChanged += OnFlock;
         runtime.TitleChanged += OnTitle;
         runtime.Recapped += OnRecap;
+        runtime.StatusNoted += OnStatus;
         // (A5: OnModel above, through ModelUpdates below.)
         runtime.Notice += OnNotice;
         runtime.ModelChanged += OnModel;
@@ -378,6 +464,7 @@ public sealed partial class EngineSessionService
             runtime.FlockChanged -= OnFlock;
             runtime.TitleChanged -= OnTitle;
             runtime.Recapped -= OnRecap;
+            runtime.StatusNoted -= OnStatus;
             runtime.Notice -= OnNotice;
             runtime.ModelChanged -= OnModel;
             runtime.ChildChanged -= OnChild;
