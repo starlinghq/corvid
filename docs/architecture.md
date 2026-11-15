@@ -4737,10 +4737,16 @@ Not being in the log, a mark needs no G-12 driver lock: a session a terminal dri
 **The engine maps, the app decides.** `EngineSessionService.Summarize` reads every mark in one query per listing (as
 pins), resolves it against `LastNews`, and fills `SessionSummary.Ending`, `Mark`, `MarkedAt`, `StatusLine` and
 `StatusGenerated` (the generated line when it covers the latest answer, else `HandoffRule.Question`, else the answer's
-first line), `WorkingElsewhere` (driven elsewhere, `InTurn`, written within ten minutes) and a job run's `JobRunning` and
-`JobFailed` from the job store's run record. A channel the window has open drops the mark as soon as it keeps a news
-update, before the summary is read again, so a card never snaps back into Done when its turn ends.
-`CorvidRuntime.StatusNoted` refreshes the summary. In `Corvid.App.Core`, `BoardText.Column` is the precedence (Running
+first line), `WorkingElsewhere` (driven elsewhere, `InTurn`, written within ten minutes; the held-session watch raises
+the summary again when the ten minutes pass, so a terminal that keeps its lock and writes nothing falls back to Parked)
+and a job run's `JobRunning` and `JobFailed` from the job store's run record. `InTurn` leaves out the person's own `!`
+lines (their user-shell call takes back the message before it), which end with no answer. `Ending` is None for gateway
+chats and job runs (not `IsSearchable`): their questions are put to a guest or to no one. A channel the window has open
+drops the mark as soon as it keeps a news update (`SessionBoard.IsNews`, the live mirror of `SessionCatalogue.IsNews`),
+and keeps it dropped while a read of the log still shows the mark, so a card never snaps back into Done when its turn
+ends; a new mark clears it. Done is refused while an approval or question is open, and while another process's turn
+is under way by the log (it may wait on an approval in its terminal). `CorvidRuntime.StatusNoted` refreshes the summary.
+In `Corvid.App.Core`, `SessionBoard.Column` (in `Corvid.App.Core.Sessions`, so the rail and the Board share it) is the precedence (Running
 unless an approval is open; an approval; Done; a question or a your-turn not parked; Parked), `BoardColumnViewModel`
 holds a column's cards, and `SessionHub` sets the rail's "your turn" and the Board's badge. The bell stays formal-only.
 The new summary members are defaulted, so an older attached engine's summaries still read; attached windows cannot set

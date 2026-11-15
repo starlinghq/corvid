@@ -153,7 +153,7 @@ public sealed class SessionCardViewModel : BoardTile
     /// </summary>
     public bool ShowsMarkDone => !IsJob && _summary.Child is null && _column != BoardColumn.Done && !SuggestsDone;
 
-    public bool CanMarkDone => Marker is not null && !IsJob && _summary.Child is null && _column != BoardColumn.Done
+    public bool CanMarkDone => Marker is not null && !IsJob && _summary.Child is null && _column != BoardColumn.Done && _summary.Turns > 0
         && _summary.State != SessionState.Running && !_summary.WorkingElsewhere && _summary.PendingApprovals == 0 && _summary.PendingQuestions == 0;
 
     /// <summary>C-043: what Mark done does, or why it is disabled.</summary>
@@ -161,6 +161,8 @@ public sealed class SessionCardViewModel : BoardTile
         Marker is null ? "The Board's Done is kept in ui.db, which the engine on this machine keeps"
         : _summary.PendingApprovals > 0 || _summary.PendingQuestions > 0 ? "Answer it first: an approval or question is open"
         : _summary.State == SessionState.Running || _summary.WorkingElsewhere ? "A turn is running: mark it done once it ends"
+        // A new session holds nothing in the log yet, so there is nothing to mark through.
+        : _summary.Turns == 0 ? "Nothing has been sent in it yet"
         : "Move it to Done until something new happens in it";
 
     /// <summary>C-043: Not now, on a your-turn: Parked until something new happens (a false "your turn" is put aside so).</summary>

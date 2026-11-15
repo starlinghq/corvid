@@ -43,6 +43,12 @@ public sealed record SessionDescription(string Id, long Head)
     /// </summary>
     public long LastWork { get; init; }
 
+    // C-043: the latest message counted as work and LastWork before it, so a ! line's message is taken back once the
+    // user's shell call after it is read, in this fold or the next.
+    internal long MessageWork { get; init; }
+
+    internal long WorkBeforeMessage { get; init; }
+
     /// <summary>
     /// C-043: a turn looks under way from the log alone: work came after the latest answer (a message, a call, its result)
     /// and no clarifying question is open. A process that drives the session elsewhere is read as busy by this (G-12),
@@ -139,6 +145,7 @@ public static class SessionCatalogue
         var news = from.LastNews;
         var content = from.HasContent;
         var (answeredAt, work, status) = (from.LastAnswerSequence, from.LastWork, from.Status);
+        var (messageWork, workBefore) = (from.MessageWork, from.WorkBeforeMessage);
         foreach (var item in events)
         {
             content |= item.Payload is not WorkspaceBound;
@@ -147,9 +154,16 @@ public static class SessionCatalogue
                 last = item.RecordedAt;
             if (IsNews(item.Payload))
                 news = item.Sequence;
-            // C-043: a turn's work, for InTurn; a ! line's message, call and result end with no answer, so they are left out.
-            if (item.Payload is UserMessage { LocalOnly: not true } or ToolCallIssued { LocalOnly: not true } or ToolResult { LocalOnly: not true }
-                or AssistantMessage)
+            // C-043: a turn's work, for InTurn. A ! line (its message, then the user's own shell call and its result, !! or
+            // not) ends with no answer, so it is left out: the call is never work, and it takes back the message before it.
+            if (UserShell(item.Payload))
+            {
+                if (item.Payload is ToolCallIssued && work == messageWork)
+                    work = workBefore;
+            }
+            else if (item.Payload is UserMessage { LocalOnly: not true })
+                (workBefore, messageWork, work) = (work, item.Sequence, item.Sequence);
+            else if (item.Payload is ToolCallIssued { LocalOnly: not true } or ToolResult { LocalOnly: not true } or AssistantMessage)
                 work = item.Sequence;
             switch (item.Payload)
             {
@@ -196,6 +210,8 @@ public static class SessionCatalogue
             Ending = answeredAt == from.LastAnswerSequence && from.Head > 0 ? from.Ending : HandoffRule.Classify(answer),
             Status = status,
             LastWork = work,
+            MessageWork = messageWork,
+            WorkBeforeMessage = workBefore,
             Turns = turns,
             LastActivity = last,
             LastNews = news,
@@ -204,6 +220,11 @@ public static class SessionCatalogue
             HasContent = content,
         };
     }
+
+    // C-043: the person's own shell call (a ! line's), or its result; a model's call never has that id (TurnRunner renames one).
+    private static bool UserShell(SessionEvent payload) =>
+        (payload switch { ToolCallIssued call => call.CallId, ToolResult result => result.CallId, _ => null })
+            ?.StartsWith(Corvid.Kernel.Turns.TurnRunner.UserShellCall, StringComparison.Ordinal) == true;
 
     /// <summary>
     /// The text's lines joined into one, without control or format characters (so nothing in a title is invisible in a

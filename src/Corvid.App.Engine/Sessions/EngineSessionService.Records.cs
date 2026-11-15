@@ -115,7 +115,14 @@ public sealed partial class EngineSessionService
             if (mark == BoardMark.Done && Summarize(runtime, sessionId) is { } logged && Live(sessionId, logged) is { } live
                 && (live.PendingApprovals > 0 || live.PendingQuestions > 0))
                 throw new InvalidOperationException("Answer it first: an approval or question is open.");
+            // A turn another process runs may wait on an approval in its terminal, which this window cannot see (G-12).
+            if (mark == BoardMark.Done && described.InTurn && runtime.Driver(sessionId).State == LockState.HeldElsewhere)
+                throw new InvalidOperationException("A turn is running in another process: mark it done once it ends.");
             Ui.SetBoardMark(sessionId, mark == BoardMark.Done ? UiBoardMarks.Done : UiBoardMarks.Parked, described.LastNews, _time.GetUtcNow());
+            // The new mark is through the latest news: what this window kept before it no longer counts against it.
+            if (_channels.TryGetValue(sessionId, out var channel))
+                lock (channel.Gate)
+                    channel.NewsSinceRead = false;
         }, cancellationToken);
         Track(write);
         await write.ConfigureAwait(false);

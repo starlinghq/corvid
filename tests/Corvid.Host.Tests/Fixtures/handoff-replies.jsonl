@@ -58,3 +58,5 @@
 {"label": "none", "text": "Quick update: the first two stages finished, the third is building.\n\nMore when it's done."}
 {"label": "asks_you", "text": "I can either keep going with the XAML or stop here and open the PR with the view-model work only. What would you like?"}
 {"label": "finished", "text": "Done. Let me know if you need anything else."}
+{"label": "none", "text": "The tests haven't finished yet, I'll check back."}
+{"label": "none", "text": "What do I do about the lock? I'll try a retry."}

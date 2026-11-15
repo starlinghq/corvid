@@ -233,37 +233,11 @@ public static partial class BoardText
         };
     }
 
-    /// <summary>
-    /// C-043: the kanban column a session's card is in (docs/plan/ui.md §4.13), top rule first: a turn running here or
-    /// elsewhere (or a job's unfinished run) is Running unless an approval waits on the person; an approval is Needs you; a
-    /// Done mark is Done (and a job's ended run); a clarifying question or an answer that asks is Needs you unless the person
-    /// parked it; everything else is Parked. Children are not cards, so their column is never asked.
-    /// </summary>
-    public static BoardColumn Column(SessionSummary summary)
-    {
-        ArgumentNullException.ThrowIfNull(summary);
-        if (summary.Job is not null)
-            return summary.JobRunning ? BoardColumn.Running : BoardColumn.Done;
-        if (summary.PendingApprovals == 0 && (summary.State == SessionState.Running || summary.WorkingElsewhere))
-            return BoardColumn.Running;
-        if (summary.PendingApprovals > 0)
-            return BoardColumn.NeedsYou;
-        if (summary.Mark == BoardMark.Done)
-            return BoardColumn.Done;
-        if (summary.PendingQuestions > 0 || summary.Ending == TurnEnding.AsksYou && summary.Mark != BoardMark.Parked)
-            return BoardColumn.NeedsYou;
-        return BoardColumn.Parked;
-    }
+    /// <summary>C-043: the kanban column a session's card is in (<see cref="SessionBoard.Column"/>).</summary>
+    public static BoardColumn Column(SessionSummary summary) => SessionBoard.Column(summary);
 
-    /// <summary>
-    /// C-043: an idle session whose latest answer asks the person for something and that they have not parked or marked
-    /// done: "your turn" on the card and the rail. A formal question or approval is "waiting on you" instead.
-    /// </summary>
-    public static bool YourTurn(SessionSummary summary)
-    {
-        ArgumentNullException.ThrowIfNull(summary);
-        return summary is { State: SessionState.Idle, Ending: TurnEnding.AsksYou, Mark: null, Job: null, PendingApprovals: 0, PendingQuestions: 0, WorkingElsewhere: false };
-    }
+    /// <summary>C-043: "your turn" on the card and the rail (<see cref="SessionBoard.YourTurn"/>).</summary>
+    public static bool YourTurn(SessionSummary summary) => SessionBoard.YourTurn(summary);
 
     /// <summary>
     /// C-043: the card's one line on where the session is at, the first that applies: the running call ("write_file

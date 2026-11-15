@@ -403,11 +403,11 @@ is a side effect under the session's approval mode, its card showing the goal, t
 
 **Kanban (C-043, built).** The cards sit in four columns, left to right **Running → Needs you → Parked → Done**, with a
 count in each head ("Needs you · 3"); a narrow window shows them two by two, then stacked with Needs you first, each
-foldable. A card's column is a pure function of its summary (`BoardText.Column`), top rule first:
+foldable. A card's column is a pure function of its summary (`SessionBoard.Column`), top rule first:
 
 1. **Running**: a turn runs with no approval open, a session another process drives reads as mid-turn (its log shows a
-   message, call or result after its latest answer, written in the last ten minutes: `WorkingElsewhere`), or a job's
-   run has not ended.
+   message, call or result after its latest answer, the person's own `!` lines left out, written in the last ten
+   minutes: `WorkingElsewhere`; the card falls back by itself once that passes), or a job's run has not ended.
 2. **Needs you**: an approval is open, even inside a running turn.
 3. **Done**: the person marked it done and nothing has happened since; a job's ended run (a failed one tagged red).
 4. **Needs you**: a clarifying question, or **your turn**: the session is idle and its latest answer asks the person for
@@ -417,7 +417,9 @@ foldable. A card's column is a pure function of its summary (`BoardText.Column`)
 "Your turn" is read by a deterministic rule over the last paragraph of the latest answer (`HandoffRule`, English only):
 fenced code, quoted blocks and a trailing list are dropped, then a question to the person or a short list of requests
 ("want me to", "shall I", "let me know", "please review", …) asks, and failing that a short list of closing phrases
-("is merged", "all tests pass", "PR #12 is up", …) reads as finished. A request beats a closing phrase. Kev's calibrated
+("is merged", "all tests pass", "PR #12 is up", …) reads as finished, unless its sentence denies it ("the tests haven't
+finished yet"). An earlier question counts only when it is put to the person ("you", "shall I"), not one the model asks
+itself. A request beats a closing phrase. Kev's calibrated
 `handoff` question replaces it where it clears its floor (C-045).
 
 The person's moves: **Mark done** on an idle card (disabled, saying why, while a turn runs or an approval or question is

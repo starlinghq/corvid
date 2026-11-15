@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using EventData = Corvid.Abstractions.Events.EventData;
 using SessionState = Corvid.App.Core.Shell.SessionState;
 using UserMessage = Corvid.Abstractions.Events.UserMessage;
+using AssistantMessage = Corvid.Abstractions.Events.AssistantMessage;
 using TurnEnding = Corvid.App.Core.Sessions.TurnEnding;
 
 namespace Corvid.App.Engine.Tests;
@@ -174,8 +175,63 @@ public sealed class EngineBoardTests
         fixture.Time.Advance(EngineSessionService.WorkingElsewhereFor + TimeSpan.FromMinutes(1));
         Assert.False((await Listed(service, "cli-held")).WorkingElsewhere);
 
-        // Marks are ui.db's, not the log's: a session a terminal drives can be put in Done.
+        // Its turn may still wait on an approval in the terminal, which this window cannot see: Done is refused until the
+        // log shows the turn ended. Marks are ui.db's, not the log's: then a session a terminal drives can be put in Done.
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => service.SetBoardMarkAsync("cli-held", BoardMark.Done, Ct));
+        Assert.Contains("another process", refused.Message, StringComparison.Ordinal);
+        other.Log.Append("cli-held", other.Log.GetHead("cli-held", Ct), [EventData.Create(new AssistantMessage("Two."))], Ct);
         await service.SetBoardMarkAsync("cli-held", BoardMark.Done, Ct);
         Assert.Equal(UiBoardMarks.Done, fixture.Runtime.UiState.BoardMarks()["cli-held"].Mark);
+    }
+
+    [Fact]
+    public async Task A_terminal_that_holds_the_lock_and_writes_nothing_falls_back_from_running_by_itself()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."))));
+        var other = await fixture.Host.Services.GetRequiredService<CorvidRuntimeFactory>().StartAsync(Ct);
+        await using var _ = other;
+        var terminal = other.OpenSession("cli-quiet");
+        await terminal.SendAsync("first", Ct);
+        other.Log.Append("cli-quiet", other.Log.GetHead("cli-quiet", Ct), [EventData.Create(new UserMessage("second"))], Ct);
+        using var service = fixture.Sessions();
+        var written = (await Listed(service, "cli-quiet")).LastActivity;
+        if (written > fixture.Time.GetUtcNow())
+            fixture.Time.Advance(written - fixture.Time.GetUtcNow());
+        Assert.True((await Listed(service, "cli-quiet")).WorkingElsewhere);
+        var fellBack = new TaskCompletionSource<SessionSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.SessionChanged += (_, summary) =>
+        {
+            if (summary.Id == "cli-quiet" && !summary.WorkingElsewhere)
+                fellBack.TrySetResult(summary);
+        };
+
+        // No list is read again: the held watch raises the card once the bound passes (in two steps, so a look runs wholly
+        // after it).
+        fixture.Time.Advance(EngineSessionService.WorkingElsewhereFor + TimeSpan.FromSeconds(1));
+        await service.IdleAsync();
+        fixture.Time.Advance(EngineSessionService.TailInterval * 2);
+        await service.IdleAsync();
+
+        var summary = await fellBack.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.True(summary.ReadOnly);
+    }
+
+    [Fact]
+    public async Task A_gateway_chat_never_reads_as_your_turn()
+    {
+        await using var fixture = await EngineFixture.StartAsync(new FakeModels(new FakeGenerator(Reply.Say("One."))));
+        const string chat = "gateway:telegram:42";
+        fixture.Runtime.Log.Append(chat, 0, [EventData.Create(new UserMessage("can you draft a reply to Sam?", From: "guest:sam")),
+            EventData.Create(new AssistantMessage("Here is a draft. Want me to send that?"))], Ct);
+        fixture.Runtime.Log.Append("cli-asks", 0, [EventData.Create(new UserMessage("draft a reply to Sam")),
+            EventData.Create(new AssistantMessage("Here is a draft. Want me to send that?"))], Ct);
+        using var service = fixture.Sessions();
+
+        // The question was put to someone else: no Needs you, no "your turn" on the rail. The person's own session asks.
+        var gateway = await Listed(service, chat);
+        Assert.Equal(TurnEnding.None, gateway.Ending);
+        Assert.False(SessionBoard.YourTurn(gateway));
+        Assert.Equal(BoardColumn.Parked, SessionBoard.Column(gateway));
+        Assert.Equal(TurnEnding.AsksYou, (await Listed(service, "cli-asks")).Ending);
     }
 }

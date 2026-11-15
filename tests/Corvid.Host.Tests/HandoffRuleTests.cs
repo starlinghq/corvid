@@ -18,6 +18,10 @@ public sealed class HandoffRuleTests(ITestOutputHelper output)
     [InlineData("The fix is in place and all 2,114 tests pass.", TurnEnding.Finished)]
     [InlineData("Why does the rail say idle? Because a reply that asks in prose sets no state.", TurnEnding.None)]
     [InlineData("I'm reading the engine's summary code next.", TurnEnding.None)]
+    [InlineData("The tests haven't finished yet, I'll check back.", TurnEnding.None)]
+    [InlineData("The build is not completed. I'm looking at the linker error.", TurnEnding.None)]
+    [InlineData("What do I do about the lock? I'll try a retry.", TurnEnding.None)]
+    [InlineData("Should I keep the old API? I left it in for now.", TurnEnding.AsksYou)]
     [InlineData("", TurnEnding.None)]
     [InlineData(null, TurnEnding.None)]
     public void Classifies_the_last_paragraph(string? answer, TurnEnding ending) => Assert.Equal(ending, HandoffRule.Classify(answer));
@@ -51,7 +55,8 @@ public sealed class HandoffRuleTests(ITestOutputHelper output)
         Assert.Equal(TurnEnding.AsksYou, HandoffRule.Classify("PR #131 is merged and the worktrees are removed. Should I start on the docs next?"));
 
     /// <summary>
-    /// The fixture (Fixtures/handoff-replies.jsonl) is 60 labelled turn-ending replies in the style of a coding assistant's.
+    /// The fixture (Fixtures/handoff-replies.jsonl) is 62 labelled turn-ending replies in the style of a coding assistant's,
+    /// the last two the false positives a review found (a denied closing phrase, a question the model put to itself).
     /// They are synthetic: the plan asked for scrubbed replies from Mark's own logs, which this change could not read; they
     /// should be replaced or extended with real ones, and C-045's eval rows come from the same labelled set. The bounds below
     /// are the rule's measured figures on it (your turn: precision 1.00, recall 0.96; finished: precision 1.00, recall 0.78),
@@ -65,7 +70,7 @@ public sealed class HandoffRuleTests(ITestOutputHelper output)
             .Select(line => JsonDocument.Parse(line).RootElement)
             .Select(row => (Label: Label(row.GetProperty("label").GetString()!), Text: row.GetProperty("text").GetString()!))
             .ToList();
-        Assert.Equal(60, rows.Count);
+        Assert.Equal(62, rows.Count);
         var predicted = rows.Select(row => (row.Label, Got: HandoffRule.Classify(row.Text), row.Text)).ToList();
         foreach (var (label, got, text) in predicted.Where(row => row.Label != row.Got))
             output.WriteLine($"{label} read as {got}: {text.ReplaceLineEndings(" ")}");

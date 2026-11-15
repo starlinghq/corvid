@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using Corvid.App.Core.Board;
 using Corvid.App.Core.Mvvm;
 using Corvid.App.Core.Shell;
 
@@ -470,7 +469,7 @@ public sealed class SessionHub : IDisposable
     private SessionListItem Item(SessionSummary summary)
     {
         var item = _shell.CreateSession(summary.Id, SafeText.Clean(summary.Title), summary.State, When(summary));
-        item.YourTurn = BoardText.YourTurn(summary);
+        item.YourTurn = SessionBoard.YourTurn(summary);
         return item;
     }
 
@@ -478,7 +477,7 @@ public sealed class SessionHub : IDisposable
     {
         item.Title = SafeText.Clean(summary.Title);
         item.State = summary.State;
-        item.YourTurn = BoardText.YourTurn(summary);
+        item.YourTurn = SessionBoard.YourTurn(summary);
         item.When = When(summary);
     }
 
@@ -490,7 +489,7 @@ public sealed class SessionHub : IDisposable
             && summary.State is SessionState.Running or SessionState.Waiting));
         // C-043: the Board's badge counts its Needs you column (children are not cards).
         _shell.SetBadge(Area.Board, _summaries.Values.Count(summary => summary.Child is null
-            && BoardText.Column(summary) == BoardColumn.NeedsYou));
+            && SessionBoard.Column(summary) == BoardColumn.NeedsYou));
     }
 
     /// <summary>

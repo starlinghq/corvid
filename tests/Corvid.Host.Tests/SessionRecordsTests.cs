@@ -432,6 +432,30 @@ public sealed class SessionTitlerTests : IDisposable
         Assert.False(SessionCatalogue.Describe(shell, "t", Ct)!.InTurn);
     }
 
+    [Fact]
+    public void A_plain_shell_line_ends_with_no_answer_and_never_reads_as_a_turn_under_way()
+    {
+        // A ! line (not !!) is logged without LocalOnly: its output goes to the model with the next message.
+        var log = new SqliteEventLog(Path.Combine(_root, "plain.db"));
+        log.Append("t", 0, [EventData.Create(new UserMessage("hi")), EventData.Create(new AssistantMessage("Hello.")),
+            EventData.Create(new UserMessage("!ls")), EventData.Create(new ToolCallIssued("user-shell", "shell", Json("""{"command":"ls"}"""))),
+            EventData.Create(new ToolResult("user-shell", Json("""{"exit_code":0}""")))], Ct);
+        Assert.False(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+
+        // Read between the message and its call (the line's command still runs), the message is a turn's start until the
+        // call after it shows it was a ! line.
+        log.Append("t", log.GetHead("t", Ct), [EventData.Create(new UserMessage("!git status"))], Ct);
+        Assert.True(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+        log.Append("t", log.GetHead("t", Ct), [EventData.Create(new ToolCallIssued("user-shell-2", "shell", Json("""{"command":"git status"}""")))], Ct);
+        Assert.False(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+        log.Append("t", log.GetHead("t", Ct), [EventData.Create(new ToolResult("user-shell-2", Json("""{"exit_code":0}""")))], Ct);
+        Assert.False(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+
+        // A message to the model after it is a turn again.
+        log.Append("t", log.GetHead("t", Ct), [EventData.Create(new UserMessage("why is the tree dirty?"))], Ct);
+        Assert.True(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+    }
+
     private static System.Text.Json.JsonElement Json(string text) => System.Text.Json.JsonDocument.Parse(text).RootElement.Clone();
 
     [Fact]

@@ -982,7 +982,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     private static void Keep(Channel channel, SessionUpdate update)
     {
         // C-043: something happened in the session since its log summary was read; the summary's Board mark no longer holds.
-        if (update is UserMessage or AgentMessageChunk or ToolCall or ApprovalRequested or QuestionAsked)
+        if (SessionBoard.IsNews(update))
             channel.NewsSinceRead = true;
         var updates = channel.Updates;
         channel.Updates = updates.Count > 0 && (updates[^1], update) switch
@@ -1134,7 +1134,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             lock (channel.Gate)
             {
                 channel.LogSummary = summary;
-                channel.NewsSinceRead = false;
+                // C-043: while the log still holds the mark, news kept here is newer than what was read (a message published
+                // before its append, or kept while this read ran), so the mark stays off until a read that has it.
+                if (summary.Mark is null)
+                    channel.NewsSinceRead = false;
                 summary = channel.Raised = Overlay(summary, channel);
             }
         }
@@ -1210,8 +1213,12 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         // G-12: another process drives it (a terminal's corvid chat, an editor over ACP): shown read-only, saying which.
         var driver = job.Name is null ? runtime.Driver(id) : null;
         var drivenElsewhere = driver is { State: Corvid.Host.Composition.LockState.HeldElsewhere };
+        // C-043 (G-12): another process's turn is under way by the log, and it wrote something lately; a terminal that
+        // crashed mid-turn (or cancelled one, which logs nothing) leaves the same log, so the bound keeps it from looking
+        // busy forever, and the held watch raises the card again when the bound passes.
+        var working = drivenElsewhere && described.InTurn && last > _time.GetUtcNow() - WorkingElsewhereFor;
         if (drivenElsewhere)
-            WatchHeld(runtime, id);
+            WatchHeld(runtime, id, working ? last + WorkingElsewhereFor : null);
         // A5: a child is its parent's record: read-only here, shown under its parent.
         var child = ChildFacts(runtime, id);
         // C-043: the Board's mark holds while nothing newer than it happened in the session (G-7: ui.db, not the log).
@@ -1220,14 +1227,13 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         // A session this window made holding no message yet (a fork before the first one) is new, not its id.
         return new SessionSummary(id, title ?? (_created.ContainsKey(id) || _forks.ContainsKey(id) ? "New session" : id))
         {
-            Ending = job.Name is not null ? TurnEnding.None : Ending(described.Ending),
+            // A job's run and a gateway chat end on words put to no one here (a guest's reply is theirs): never "your turn".
+            Ending = CorvidRuntime.IsSearchable(id) ? Ending(described.Ending) : TurnEnding.None,
             Mark = mark?.Mark switch { UiBoardMarks.Done => BoardMark.Done, UiBoardMarks.Parked => BoardMark.Parked, _ => null },
             MarkedAt = mark?.At,
             StatusLine = line.Text,
             StatusGenerated = line.Generated,
-            // C-043 (G-12): another process's turn is under way by the log, and it wrote something lately; a terminal that
-            // crashed mid-turn leaves the same log, so the bound keeps it from looking busy forever.
-            WorkingElsewhere = drivenElsewhere && described.InTurn && last > _time.GetUtcNow() - WorkingElsewhereFor,
+            WorkingElsewhere = working,
             JobRunning = job.Running,
             JobFailed = job.Failed,
             Child = child?.Child,
@@ -1557,7 +1563,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         /// <summary>The log's summary, read when the session was loaded and after each turn.</summary>
         public SessionSummary? LogSummary { get; set; }
 
-        /// <summary>C-043: a news update was kept since <see cref="LogSummary"/> was read, so its Board mark no longer holds.</summary>
+        /// <summary>
+        /// C-043: a news update was kept that <see cref="LogSummary"/>'s Board mark may not have seen, so the mark no longer
+        /// holds; cleared by a read whose mark is gone, by the history's replay, and by a new mark.
+        /// </summary>
         public bool NewsSinceRead { get; set; }
 
         /// <summary>The summary last raised, so a change is raised once.</summary>

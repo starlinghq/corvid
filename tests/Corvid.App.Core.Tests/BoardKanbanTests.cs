@@ -189,10 +189,40 @@ public sealed class BoardKanbanTests
     }
 
     [Fact]
+    public void ANewSessionWithNothingSentCannotBeMarkedDone()
+    {
+        var marker = (Func<SessionCardViewModel, BoardMark?, Task>)((_, _) => Task.CompletedTask);
+        var fresh = new SessionCardViewModel(Idle() with { Title = "New session" }, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc, _ => { }, _ => { }, () => { }) { Marker = marker };
+        var sent = new SessionCardViewModel(Idle() with { Turns = 1 }, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc, _ => { }, _ => { }, () => { }) { Marker = marker };
+
+        Assert.False(fresh.MarkDoneCommand.CanExecute(null));
+        Assert.Equal("Nothing has been sent in it yet", fresh.MarkDoneHelp);
+        Assert.True(sent.MarkDoneCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void TheRailSaysYourTurnOnlyWhileTheBoardWould()
+    {
+        var rig = Start();
+        var asks = Idle("cli-asks") with { Ending = TurnEnding.AsksYou, Turns = 1, LastActivity = rig.Time.GetUtcNow() };
+
+        rig.Sessions.Announce(asks);
+        Assert.Equal("your turn", rig.Shell.FindSession("cli-asks")!.StateLabel);
+        // Parked with Not now, or marked done: the rail says idle, as the card leaves Needs you.
+        rig.Sessions.Announce(asks with { Mark = BoardMark.Parked });
+        Assert.Equal("idle", rig.Shell.FindSession("cli-asks")!.StateLabel);
+        rig.Sessions.Announce(asks with { Mark = BoardMark.Done });
+        Assert.Equal("idle", rig.Shell.FindSession("cli-asks")!.StateLabel);
+        // A question is the formal wait, not a rule's your turn.
+        rig.Sessions.Announce(asks with { State = SessionState.Waiting, PendingQuestions = 1 });
+        Assert.Equal("waiting on you", rig.Shell.FindSession("cli-asks")!.StateLabel);
+    }
+
+    [Fact]
     public void ASessionATerminalDrivesRunsWhileItWorksAndCanBeMarkedOnceIdle()
     {
         var rig = Start();
-        var held = Idle("cli-term") with { ReadOnly = true, Holder = "open in a terminal (corvid chat --session cli-term)", LastActivity = rig.Time.GetUtcNow() };
+        var held = Idle("cli-term") with { ReadOnly = true, Holder = "open in a terminal (corvid chat --session cli-term)", LastActivity = rig.Time.GetUtcNow(), Turns = 3 };
 
         rig.Sessions.Announce(held with { WorkingElsewhere = true, Activity = "shell dotnet test" });
         var card = rig.Board.Cards["cli-term"];

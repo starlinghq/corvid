@@ -39,7 +39,7 @@ public static partial class HandoffRule
             return TurnEnding.None;
         if (AsksYou(paragraph) || list is { } item && AsksYou(item))
             return TurnEnding.AsksYou;
-        return Closing().IsMatch(paragraph) || Closing().IsMatch(Text(lastAnswer)) && paragraph.Length == 0
+        return Closes(paragraph) || paragraph.Length == 0 && Closes(Text(lastAnswer))
             ? TurnEnding.Finished
             : TurnEnding.None;
     }
@@ -128,13 +128,18 @@ public static partial class HandoffRule
             if (!sentences[i].EndsWith('?'))
                 continue;
             // The paragraph's last sentence is a question: it is put to the person. An earlier one counts when it addresses
-            // them, so a rhetorical "Why does it fail? Because …" does not.
+            // them, so a rhetorical "Why does it fail? Because …" does not, nor one the model puts to itself ("What do I do
+            // about the lock? I'll retry.").
             if (i == sentences.Count - 1 || Addressed().IsMatch(sentences[i]))
                 return true;
         }
 
         return false;
     }
+
+    // A closing phrase in a sentence that does not deny it: "The tests haven't finished yet" is not a finished handoff.
+    private static bool Closes(string text) =>
+        Sentence().Split(text.Trim()).Any(sentence => Closing().IsMatch(sentence) && !Negated().IsMatch(sentence));
 
     // Fenced code (``` or ~~~) is the work, not what it asks.
     private static string WithoutFences(string text)
@@ -183,8 +188,11 @@ public static partial class HandoffRule
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Closing();
 
-    [GeneratedRegex(@"\b(you|your|me|I|we|us)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\b(you|your|shall I|should I)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Addressed();
+
+    [GeneratedRegex(@"\b(not|never|yet|\w+n't)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex Negated();
 
     [GeneratedRegex(@"(?<=[.!?])\s+")]
     private static partial Regex Sentence();

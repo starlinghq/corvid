@@ -368,8 +368,8 @@ public sealed partial class DemoSessionService : ISessionService, IDisposable
             Question = state.Question is { } question ? question.Title ?? question.Text : null,
             Preview = lastUser?.Text,
             Ending = session.Ending,
-            Mark = session.Mark is { } mark && !session.History.Skip(mark.Through).Any(IsNews) ? mark.Mark : null,
-            MarkedAt = session.Mark is { } at && !session.History.Skip(at.Through).Any(IsNews) ? at.At : null,
+            Mark = session.Mark is { } mark && !session.History.Skip(mark.Through).Any(SessionBoard.IsNews) ? mark.Mark : null,
+            MarkedAt = session.Mark is { } at && !session.History.Skip(at.Through).Any(SessionBoard.IsNews) ? at.At : null,
             // As the engine falls back: the latest answer's first line once one is given after the latest message.
             StatusLine = session.Status ?? (state.Transcript.LastOrDefault(entry => entry is AnswerEntry or UserEntry) is AnswerEntry answer
                 ? answer.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault()
@@ -377,10 +377,6 @@ public sealed partial class DemoSessionService : ISessionService, IDisposable
             StatusGenerated = session.Status is not null,
         };
     }
-
-    /// <summary>C-043: an update a person would call something that happened in the session; it ends a Board mark.</summary>
-    private static bool IsNews(SessionUpdate update) =>
-        update is UserMessage or AgentMessageChunk or ToolCall or ApprovalRequested or QuestionAsked or TurnStarted;
 
     // ---- Turns, the queue and interruption ----
 
