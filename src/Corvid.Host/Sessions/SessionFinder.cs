@@ -66,6 +66,13 @@ public sealed record SessionFinderSources(
     public SessionSearchCache? Cache { get; init; }
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// The least cosine similarity a card's vector needs to count as found by meaning. Nearest-neighbour search always
+    /// returns the nearest cards, related or not; this floor, with <see cref="SessionFinder.MeaningCandidates"/>, keeps the
+    /// unrelated ones out. A heuristic: embedders differ in how similar unrelated text looks.
+    /// </summary>
+    public double MinSimilarity { get; init; } = SessionFinder.DefaultMinSimilarity;
 }
 
 /// <summary>
@@ -97,6 +104,12 @@ public static class SessionFinder
 
     /// <summary>The fused score is multiplied by 1 + weight · 0.5^(age / half-life).</summary>
     public const double RecencyWeight = 0.5;
+
+    /// <summary>How many of the nearest cards the meaning list takes, at most.</summary>
+    public const int MeaningCandidates = 8;
+
+    /// <summary>The default for <see cref="SessionFinderSources.MinSimilarity"/>.</summary>
+    public const double DefaultMinSimilarity = 0.3;
 
     /// <summary>
     /// Rewrites the card of every searched session whose head moved past the index's mark for it, and returns the cards
@@ -156,8 +169,8 @@ public static class SessionFinder
         {
             try
             {
-                var hits = await vectors.SearchAsync(query, n, SessionIndex.IsSessionItem, cancellationToken).ConfigureAwait(false);
-                Fuse([.. hits.Select(hit => hit.ItemId[SessionIndex.ItemPrefix.Length..]).Where(sources.Heads.ContainsKey)], SessionFoundSources.Meaning);
+                var hits = await vectors.SearchAsync(query, MeaningCandidates, SessionIndex.IsSessionItem, cancellationToken).ConfigureAwait(false);
+                Fuse([.. hits.Where(hit => hit.Similarity >= sources.MinSimilarity).Select(hit => hit.ItemId[SessionIndex.ItemPrefix.Length..]).Where(sources.Heads.ContainsKey)], SessionFoundSources.Meaning);
             }
             catch (Exception exception) when (exception is not OperationCanceledException and not ArgumentException)
             {
