@@ -273,7 +273,9 @@ by side; for MCP tools the server's trust; the deadline as a countdown (five min
 - **Context gauge** (K-5): tokens in the rendered prompt over the accepted window, with the next compaction threshold
   and a breakdown in the Context pane: system prompt, memory, skills, recent results, stubs.
 - **Cost** per session and per slot for cloud models when usage is reported (K-5).
-- **Attention tray** as in §3; its count sits on the tray icon and the taskbar or dock badge.
+- **Attention tray** as in §3; its count sits on the tray icon and the taskbar or dock badge. The bell counts formal
+  items only (approvals, questions, the areas' items): a session whose answer asks in prose ("your turn", §4.13) shows in
+  the Board's Needs you column and its rail badge, and on the rail as "your turn", but never rings the bell (C-043).
 - **Native notifications** (D-Bus on Linux, toasts on Windows, UNUserNotification on macOS) on turn end, a waiting
   approval, a question, a finished job and a pairing request, only while the window is unfocused unless configured. A
   click lands on the item. Sounds per event are optional and off by default.
@@ -397,8 +399,41 @@ taint and workspace. Peek opens a read-only live view; attach makes it the activ
 here. A session's children (plan §14's `delegate_task`, built in A5, and `/delegate`) appear as a tree with goal,
 toolset, budget, model mix, status and the validated output: on the Board under their parent, and in the session
 header's children list. A child opens read-only, linked to its parent, and can be stopped from either list. Spawning one
-is a side effect under the session's approval mode, its card showing the goal, toolset, budget and models. Kanban boards
-come later, on the same substrate.
+is a side effect under the session's approval mode, its card showing the goal, toolset, budget and models.
+
+**Kanban (C-043, built).** The cards sit in four columns, left to right **Running → Needs you → Parked → Done**, with a
+count in each head ("Needs you · 3"); a narrow window shows them two by two, then stacked with Needs you first, each
+foldable. A card's column is a pure function of its summary (`BoardText.Column`), top rule first:
+
+1. **Running**: a turn runs with no approval open, a session another process drives reads as mid-turn (its log shows a
+   message, call or result after its latest answer, written in the last ten minutes: `WorkingElsewhere`), or a job's
+   run has not ended.
+2. **Needs you**: an approval is open, even inside a running turn.
+3. **Done**: the person marked it done and nothing has happened since; a job's ended run (a failed one tagged red).
+4. **Needs you**: a clarifying question, or **your turn**: the session is idle and its latest answer asks the person for
+   something ("PR #12 is up. Want me to merge it?"), unless they parked it.
+5. **Parked**: everything else: idle with nothing asked, or a your-turn put aside.
+
+"Your turn" is read by a deterministic rule over the last paragraph of the latest answer (`HandoffRule`, English only):
+fenced code, quoted blocks and a trailing list are dropped, then a question to the person or a short list of requests
+("want me to", "shall I", "let me know", "please review", …) asks, and failing that a short list of closing phrases
+("is merged", "all tests pass", "PR #12 is up", …) reads as finished. A request beats a closing phrase. Kev's calibrated
+`handoff` question replaces it where it clears its floor (C-045).
+
+The person's moves: **Mark done** on an idle card (disabled, saying why, while a turn runs or an approval or question is
+open, so Done never hides what the bell counts); **Not now** on a your-turn, which parks it; **Looks finished · Mark
+done** on a parked card whose answer reads finished (nothing moves to Done by itself); **Reopen** in Done. Marks live in
+`ui.db` (`board_marks`, schema 2, G-7) with the session's latest news when they were set: a mark holds only while nothing
+newer happened, so any message, answer, call, approval or question brings the card back out with no action. Titles,
+recaps, status lines and egress records are not news. A session a terminal drives can be marked too (ui.db is not the
+log, so G-12's lock does not apply); an attached window shows the columns and cannot move cards. Needs you lists
+approvals by deadline, then questions, then your-turns, each newest first; Running by when the step started; Parked by
+last activity; Done by mark time, the newest 20 then "Show N more" (Parked shows 30).
+
+Each idle card carries a one-line **status** on where it is at: the local generator's line written after the turn
+(`SessionStatusNoted`, at most 14 words, one background local call per interactive turn, coalesced per session, off with
+`Corvid:Sessions:StatusLines`), else the question the answer ends on, else the answer's first line; a running card says
+its call and step, a waiting one its approval or question. Children stay rows under their parent, never cards.
 
 ### 4.14 Remote and companion
 
@@ -625,7 +660,7 @@ structured questions, rule removal, images, titles and `SessionUpdates`. New:
 | G-4 | a workspace per session or per runtime instance, and worktree creation (built in A6: `WorkspaceBound`, Open a workspace on the Board, `/workspace`, `--workspace`, `delegate_task` `isolation: worktree`) | several workspaces in one window, worktree isolation |
 | G-5 | a search API over sessions through the episodic index (built in A6: `CorvidRuntime.SearchSessions`, `/search`, `Ctrl+Shift+F`) | cross-session search |
 | G-6 | user titles and recaps as events (extends K-9) | rename, recap |
-| G-7 | the `ui.db` conventions in the host, so the CLI and the app share drafts and pins | drafts, pins, layouts |
+| G-7 | the `ui.db` conventions in the host, so the CLI and the app share drafts and pins (schema 2, C-043: the Board's Done and Parked marks in `board_marks`, held through the session's latest news) | drafts, pins, layouts, the Board's marks |
 | G-8 | correct-then-approve for staged memory | memory review |
 | G-9 | render the redacted request of a generator call on demand | egress ledger |
 | G-10 | a per-session approval mode | the mode control, the TUI's `Shift+Tab` |
@@ -697,3 +732,4 @@ A5 phase; attached mode, worktrees, images, search and packaging in A6. Voice an
 | 0.1 | 2026-10-23 | First draft: the feature catalogue and the flows, before mockups. |
 | 0.2 | 2026-10-25 | A6: G-1, G-4, G-5, K-8, U-7 and U-9 marked built (docs/plan/ui-handoff.md §1.7). |
 | 0.3 | 2026-10-25 | A6 fix round: U-12, attached mode's scope in A6 (Sessions and the Board) and its cleartext listener. |
+| 0.4 | 2026-11-14 | C-043: the Board as a kanban (§4.13): Running, Needs you, Parked and Done; "your turn" by rule; Mark done, Not now and Reopen in `ui.db` schema 2 (G-7); a per-card status line; the bell stays formal-only (§4.5). |
