@@ -404,8 +404,8 @@ come later, on the same substrate.
 
 A filter box in the Board's header ("Filter sessions…", `Ctrl+F` or `/`, `Esc` clears it; C-044) narrows the cards as
 you type by their title, preview, id, workspace, branch and flock, with no engine involved; from three characters the
-engine's session search (G-5) adds the sessions it finds by meaning or by words, each tagged with how. The attention tray
-is never filtered.
+engine's session search (G-5) adds the sessions it finds by meaning or by words, each tagged with how; one found only by
+meaning joins from two words. The attention tray is never filtered.
 
 ### 4.14 Remote and companion
 

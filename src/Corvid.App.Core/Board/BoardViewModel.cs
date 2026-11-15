@@ -435,7 +435,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
                 return;
             }
 
-            _found = finds.Finds.Take(BoardQuery.MaxFound)
+            _found = finds.Finds.Where(find => BoardQuery.Joins(find, query)).Take(BoardQuery.MaxFound)
                 .GroupBy(find => find.SessionId, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => BoardQuery.FoundBy(group.First()), StringComparer.Ordinal);
             FilterNote = finds.How;

@@ -90,6 +90,7 @@ public sealed class SessionFindPaletteTests
         palette.Accept();
         Assert.True(palette.IsOpen);
         Assert.Contains("is not in the rail's list", palette.Note, StringComparison.Ordinal);
+        Assert.Equal(Tone.Amber, palette.NoteTone);
     }
 
     [Fact]

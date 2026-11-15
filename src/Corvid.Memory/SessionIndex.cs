@@ -100,8 +100,8 @@ public sealed class SessionIndex
         return !string.Equals(before, text, StringComparison.Ordinal);
     }
 
-    /// <summary>The cards of the given sessions that exist, by session id.</summary>
-    public IReadOnlyDictionary<string, SessionCard> Get(IEnumerable<string> sessionIds)
+    /// <summary>The cards of the given sessions that exist, by session id. Internal until a surface needs it: tests read cards with it.</summary>
+    internal IReadOnlyDictionary<string, SessionCard> Get(IEnumerable<string> sessionIds)
     {
         ArgumentNullException.ThrowIfNull(sessionIds);
         using var connection = _database.Open();

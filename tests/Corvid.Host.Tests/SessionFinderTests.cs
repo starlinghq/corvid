@@ -133,6 +133,83 @@ public sealed class SessionFinderTests : IDisposable
     }
 
     [Fact]
+    public async Task A_session_its_words_found_ranks_above_a_more_recent_one_only_its_meaning_found()
+    {
+        // The query and the meaning-only card share one vector; every other card sits on another axis, under the floor.
+        Say("cli-title", new UserMessage("the hang"), new AssistantMessage("Retried."), new SessionTitled("Sandbox flake in CI", "generated"));
+        Say("cli-other", new UserMessage("release notes"), new AssistantMessage("Drafted."));
+        // Written last, so it is the most recent, and first by id, so it would win a tie.
+        Say("cli-a-meaning", new UserMessage("the okapi migration"), new AssistantMessage("Moved."));
+        SessionFinder.CatchUp(Sources(), Ct);
+        var vectors = new MemoryVectors(_database, new SqliteVectorIndex(_database), [new MemoryEmbedder("kw", new FuncEmbedder(text =>
+            !text.Contains("Sandbox flake in CI", StringComparison.Ordinal)
+            && (text.Contains("sandbox flake", StringComparison.Ordinal) || text.Contains("okapi", StringComparison.Ordinal)) ? [1, 0] : [0, 1]))]);
+        vectors.BeginSwap("kw");
+        await vectors.ReembedAsync(1_000, Ct);
+
+        var result = await SessionFinder.FindAsync(Sources(vectors) with { Time = new StoppedClock(DateTimeOffset.UtcNow) }, "sandbox flake",
+            cancellationToken: Ct);
+
+        Assert.Equal(["cli-title", "cli-a-meaning"], result.Found.Select(found => found.SessionId));
+        Assert.Equal(SessionFoundSources.Text, result.Found[0].Sources);
+        Assert.Equal(SessionFoundSources.Meaning, result.Found[1].Sources);
+    }
+
+    [Fact]
+    public async Task A_rewound_answer_or_first_message_is_neither_on_the_card_nor_the_line()
+    {
+        Say("cli-a", new UserMessage("the walrus plan"), new AssistantMessage("Noted."), new UserMessage("paste the zebra key"),
+            new AssistantMessage("The zebra key is 1234."), new SessionRewound(2, "undo", []));
+        Say("cli-b", new UserMessage("the zebra draft"), new AssistantMessage("A zebra outline."), new SessionRewound(0, "undo", []),
+            new UserMessage("the narwhal plan"), new AssistantMessage("Drafted the narwhal plan."));
+        var embedded = new List<(string ItemId, string Text)>();
+
+        var zebra = await SessionFinder.FindAsync(Sources(embedded: embedded), "zebra", cancellationToken: Ct);
+
+        Assert.Empty(zebra.Found);
+        Assert.All(embedded, card => Assert.DoesNotContain("zebra", card.Text, StringComparison.Ordinal));
+        var walrus = Assert.Single((await SessionFinder.FindAsync(Sources(), "walrus", cancellationToken: Ct)).Found);
+        Assert.Equal(("cli-a", "the walrus plan", "Noted."), (walrus.SessionId, walrus.Title, walrus.Line));
+        // A rewind past the first message takes it out of the title too, while the session has no title event.
+        var narwhal = (await SessionFinder.FindAsync(Sources(), "narwhal", cancellationToken: Ct)).Found;
+        Assert.Equal(("cli-b", "the narwhal plan", "Drafted the narwhal plan."), (narwhal[0].SessionId, narwhal[0].Title, narwhal[0].Line));
+    }
+
+    [Fact]
+    public async Task An_untitled_sessions_card_holds_its_first_message_once()
+    {
+        Say("cli-a", new UserMessage("the walrus plan"), new AssistantMessage("Noted."));
+        var embedded = new List<(string ItemId, string Text)>();
+
+        await SessionFinder.FindAsync(Sources(embedded: embedded), "walrus", cancellationToken: Ct);
+
+        Assert.Equal("the walrus plan\nNoted.", Assert.Single(embedded).Text);
+    }
+
+    [Fact]
+    public async Task The_meaning_list_takes_its_nearest_slots_from_the_searched_sessions_only()
+    {
+        // Nine cards nearer than the one searched; were they not filtered first, they would fill all eight slots.
+        for (var i = 0; i < 9; i++)
+            Say($"cli-near-{i}", new UserMessage($"okapi okapi {i}"), new AssistantMessage("Moved."));
+        Say("cli-far", new UserMessage("an okapi aside in the release notes"), new AssistantMessage("Drafted."));
+        SessionFinder.CatchUp(Sources(), Ct);
+        var vectors = new MemoryVectors(_database, new SqliteVectorIndex(_database), [new MemoryEmbedder("kw", new FuncEmbedder(text =>
+            text.Contains("release", StringComparison.Ordinal) ? [1, 1] : text.Contains("okapi", StringComparison.Ordinal) ? [1, 0] : [0, 1]))]);
+        vectors.BeginSwap("kw");
+        await vectors.ReembedAsync(1_000, Ct);
+        var far = new SessionFinderSources(_log, _index, _episodes, Heads().Where(pair => pair.Key == "cli-far").ToDictionary(StringComparer.Ordinal))
+        {
+            Vectors = vectors,
+            Time = new StoppedClock(Now),
+        };
+
+        var result = await SessionFinder.FindAsync(far, "okapi", cancellationToken: Ct);
+
+        Assert.Equal(SessionFoundSources.Text | SessionFoundSources.Meaning | SessionFoundSources.Said, Assert.Single(result.Found).Sources);
+    }
+
+    [Fact]
     public async Task A_failed_embedder_leaves_the_search_by_words()
     {
         Say("cli-a", new UserMessage("the walrus plan"), new AssistantMessage("Noted."));
@@ -202,6 +279,20 @@ public sealed class SessionFinderTests : IDisposable
         var none = await bare.FindSessionsAsync("anything", cancellationToken: Ct);
         Assert.Contains("Corvid:Memory:Enabled", none.Unavailable, StringComparison.Ordinal);
         Assert.Empty(none.Found);
+    }
+
+    /// <summary>Embeds each text as the function says.</summary>
+    private sealed class FuncEmbedder(Func<string, float[]> embed) : IEmbeddingGenerator<string, Embedding<float>>
+    {
+        public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(IEnumerable<string> values,
+            EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new GeneratedEmbeddings<Embedding<float>>(values.Select(text => new Embedding<float>(embed(text)))));
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 
     /// <summary>Embeds by keyword onto chosen axes, so two words can share a meaning; can be made to fail.</summary>

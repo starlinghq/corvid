@@ -17,8 +17,11 @@ public sealed record SessionMatches(IReadOnlyList<SessionMatch> Matches, string?
 /// when only something said in it did), and whether the embedder's vectors found it ("by meaning"). Title and line are
 /// untrusted text: a surface cleans them before showing them.
 /// </summary>
-/// <param name="TurnPosition">When a turn matched, the log position of its prompt (where the session can open); else null.</param>
-public sealed record SessionFind(string SessionId, string? Title, string? Line, double Score, bool ByMeaning, long? TurnPosition = null);
+/// <param name="TurnPosition">When a turn of the session itself matched, the log position of its prompt (where the session
+/// can open); else null, as when only a child's turn matched.</param>
+/// <param name="ByWords">Words found it too (its card's or something said in it), not only the embedder's vectors.</param>
+public sealed record SessionFind(string SessionId, string? Title, string? Line, double Score, bool ByMeaning, long? TurnPosition = null,
+    bool ByWords = false);
 
 /// <summary>What a session search found, best first; by words only when <see cref="Embedder"/> is null; or why it could not search.</summary>
 /// <param name="Embedder">The embedder whose vectors were searched, or null when the search was by words (no embedder bound).</param>

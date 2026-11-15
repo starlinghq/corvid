@@ -45,8 +45,11 @@ public sealed class EngineSessionSearch(AppEngine engine) : ISessionSearch
             .ConfigureAwait(false);
         if (found.Unavailable is { } why)
             return new SessionFinds([], null, why);
+        // A child's turn found its parent: its position is in the child's log, so the parent opens at its head.
         return new SessionFinds([.. found.Found.Select(item =>
-            new SessionFind(item.SessionId, item.Title, item.Line, item.Score, item.ByMeaning, item.Turn?.TurnSequence))], found.Embedder);
+            new SessionFind(item.SessionId, item.Title, item.Line, item.Score, item.ByMeaning,
+                item.Turn is { } turn && turn.SessionId == item.SessionId ? turn.TurnSequence : null,
+                ByWords: item.Sources != SessionFoundSources.Meaning))], found.Embedder);
     }
 
     /// <summary>The sessions a search covers: every one the runtime would search, but the memory import's staging session.</summary>

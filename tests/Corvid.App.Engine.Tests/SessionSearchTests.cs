@@ -59,6 +59,28 @@ public sealed class EngineSessionSearchTests
     }
 
     [Fact]
+    public async Task A_find_opens_at_a_turn_only_when_the_turn_is_its_own()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var log = fixture.Runtime.Log;
+        Say(log, "cli-own", new UserMessage("tidy the docs"), new AssistantMessage("Done."), new UserMessage("the okapi page"),
+            new AssistantMessage("The okapi page is fixed."));
+        Say(log, "cli-parent", new UserMessage("check the links"), new AssistantMessage("Delegated."));
+        Say(log, "child-1", new ChildOf("cli-parent", 1, "check links", [], new ChildBudget(4, 8_000, 120)),
+            new UserMessage("check links"), new AssistantMessage("The okapi link is broken."));
+        var search = new EngineSessionSearch(fixture.Engine);
+
+        var found = await search.FindSessionsAsync("okapi", Token);
+
+        Assert.NotNull(found);
+        Assert.Equal(3, found.Finds.Single(item => item.SessionId == "cli-own").TurnPosition);
+        // The child's turn is a position in the child's log, not the parent's: the parent opens at its head.
+        var parent = found.Finds.Single(item => item.SessionId == "cli-parent");
+        Assert.Null(parent.TurnPosition);
+        Assert.True(parent.ByWords);
+    }
+
+    [Fact]
     public async Task The_windows_palette_searches_through_the_engine()
     {
         await using var fixture = await EngineFixture.StartAsync();

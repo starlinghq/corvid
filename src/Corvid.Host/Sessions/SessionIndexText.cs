@@ -15,16 +15,19 @@ public static class SessionIndexText
 
     /// <summary>
     /// The card: the title, the first message and the latest answer (each cut, without control or format characters) and
-    /// the branch, one per line; blank parts are left out. User, model and tool text: it is indexed and embedded, never put
-    /// in a prompt.
+    /// the branch, one per line; blank parts are left out. Only a title event's title counts: an untitled session's title is
+    /// its first message's opening, which the card holds already. User, model and tool text: it is indexed and embedded,
+    /// never put in a prompt.
     /// </summary>
+    /// <param name="description">The session as the conversation still holds it: after an undo or rollback, its first
+    /// message and latest answer are the visible ones (<see cref="SessionFinder"/> sees to that).</param>
     /// <param name="branch">The session's worktree branch, or null when it works in a plain folder.</param>
     public static string Of(SessionDescription description, string? branch)
     {
         ArgumentNullException.ThrowIfNull(description);
         var parts = new[]
         {
-            description.Title,
+            description.Titled is { } titled ? SessionCatalogue.Line(titled.Title) : null,
             Cut(description.FirstMessage, FirstMessageChars),
             Cut(description.LastAnswer, LastAnswerChars),
             branch,

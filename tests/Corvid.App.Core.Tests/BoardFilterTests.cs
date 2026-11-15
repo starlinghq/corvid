@@ -34,7 +34,9 @@ public sealed class BoardFilterTests
         }
     }
 
-    private static BoardViewModel Start(ISessionSearch? search = null)
+    private static BoardViewModel Start(ISessionSearch? search = null) => Start(search, out _);
+
+    private static BoardViewModel Start(ISessionSearch? search, out DemoSessionService sessions)
     {
         var time = ManualTimeProvider.Demo();
         var dispatcher = new InlineDispatcher();
@@ -42,7 +44,7 @@ public sealed class BoardFilterTests
         var shell = new ShellViewModel(bar);
         DemoShell.Fill(bar);
         DemoShell.Fill(shell);
-        var sessions = new DemoSessionService(dispatcher, time, DemoScene.Approval);
+        sessions = new DemoSessionService(dispatcher, time, DemoScene.Approval);
         var hub = new SessionHub(sessions, dispatcher, time, shell, bar);
         hub.StartAsync(null, DemoShell.CurrentSessionId, TestContext.Current.CancellationToken).GetAwaiter().GetResult();
         shell.Navigate(Area.Board);
@@ -146,6 +148,86 @@ public sealed class BoardFilterTests
 
         Assert.Equal(["the CI", "the CI hang"], finder.Asked);
         Assert.Empty(Shown(board));
+    }
+
+    [Fact]
+    public void A_session_only_its_meaning_found_joins_from_two_words()
+    {
+        var finder = new FakeFinder();
+        SessionFind[] finds =
+        [
+            new(DemoSessionService.MainSessionId, null, null, 0.03, ByMeaning: true),
+            new(DemoSessionService.ReleaseNotesSessionId, null, null, 0.02, ByMeaning: true, ByWords: true),
+            new(DemoSessionService.VaultSessionId, null, null, 0.01, ByMeaning: false, ByWords: true),
+        ];
+        finder.Answers["okapi"] = finds;
+        finder.Answers["okapi tusk"] = finds;
+        using var board = Start(finder);
+
+        // One word is a lookup: the nearest cards would join it whatever it says, so only what words found joins.
+        board.FilterText = "okapi";
+        Assert.Equal(new[] { DemoSessionService.ReleaseNotesSessionId, DemoSessionService.VaultSessionId }.Order(), Shown(board).Order());
+        Assert.Equal("by meaning", board.Cards[DemoSessionService.ReleaseNotesSessionId].FoundBy);
+
+        board.FilterText = "okapi tusk";
+        Assert.Equal(new[] { DemoSessionService.MainSessionId, DemoSessionService.ReleaseNotesSessionId, DemoSessionService.VaultSessionId }.Order(),
+            Shown(board).Order());
+    }
+
+    [Fact]
+    public void A_segment_and_the_filter_both_narrow_the_cards()
+    {
+        var finder = new FakeFinder();
+        using var board = Start(finder);
+        var all = Shown(board);
+        finder.Answers["the CI hang"] = [.. all.Select(id => new SessionFind(id, null, null, 0.01, ByMeaning: false, ByWords: true))];
+        board.Filter = BoardFilter.Waiting;
+        var waiting = Shown(board);
+        Assert.NotEmpty(waiting);
+        Assert.NotEqual(all.Count, waiting.Count);
+
+        board.FilterText = "the CI hang";
+
+        // The engine found every session, but the segment still holds only those waiting on you.
+        Assert.Equal(waiting, Shown(board));
+        board.FilterText = "okapi";
+        Assert.Empty(Shown(board));
+        Assert.Equal("No session matches \"okapi\".", board.EmptyText);
+    }
+
+    [Fact]
+    public async Task A_found_card_loses_its_tag_once_its_own_text_matches()
+    {
+        var finder = new FakeFinder();
+        finder.Answers["the okapi plan"] = [new SessionFind(DemoSessionService.ReleaseNotesSessionId, null, null, 0.03, ByMeaning: true)];
+        using var board = Start(finder, out var sessions);
+
+        board.FilterText = "the okapi plan";
+        Assert.Equal("by meaning", board.Cards[DemoSessionService.ReleaseNotesSessionId].FoundBy);
+
+        // A title generated (or a rename) while the filter holds it: the card now matches by its own text.
+        await sessions.RenameAsync(DemoSessionService.ReleaseNotesSessionId, "The okapi plan", TestContext.Current.CancellationToken);
+
+        Assert.Equal([DemoSessionService.ReleaseNotesSessionId], Shown(board));
+        Assert.Equal("", board.Cards[DemoSessionService.ReleaseNotesSessionId].FoundBy);
+        Assert.DoesNotContain(board.Cards[DemoSessionService.ReleaseNotesSessionId].Tags, tag => tag.Text == "by meaning");
+    }
+
+    [Fact]
+    public void A_found_session_the_board_has_no_card_for_is_left_out()
+    {
+        var finder = new FakeFinder();
+        finder.Answers["the CI hang"] =
+        [
+            new SessionFind("cli-gone", "A session the Board never listed", null, 0.05, ByMeaning: false, ByWords: true),
+            new SessionFind(DemoSessionService.VaultSessionId, null, null, 0.01, ByMeaning: false, ByWords: true),
+        ];
+        using var board = Start(finder);
+
+        board.FilterText = "the CI hang";
+
+        Assert.Equal([DemoSessionService.VaultSessionId], Shown(board));
+        Assert.False(board.Cards.ContainsKey("cli-gone"));
     }
 
     [Fact]
