@@ -219,7 +219,7 @@ public sealed class MemoryVectors
                         UNION ALL
                         SELECT fact_id AS item_id, text FROM facts WHERE valid_to IS NULL
                         UNION ALL
-                        SELECT item_id, text FROM sessions)
+                        SELECT item_id, text FROM sessions WHERE text <> '')
                     WHERE item_id > $after ORDER BY item_id LIMIT $limit;
                     """;
                 command.Parameters.AddWithValue("$after", after);
@@ -245,7 +245,7 @@ public sealed class MemoryVectors
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT EXISTS (SELECT 1 FROM episodes) OR EXISTS (SELECT 1 FROM facts) OR EXISTS (SELECT 1 FROM sessions);";
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM episodes) OR EXISTS (SELECT 1 FROM facts) OR EXISTS (SELECT 1 FROM sessions WHERE text <> '');";
         return (long)command.ExecuteScalar()! == 1;
     }
 

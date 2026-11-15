@@ -57,6 +57,8 @@ public sealed class SessionIndexTests
         var index = new SessionIndex(store.Database, store.Time);
         var vectors = store.Vectors(new MemoryEmbedder("old", new KeywordEmbedder("sandbox")), new MemoryEmbedder("new", new KeywordEmbedder("sandbox", "flake")));
         index.Upsert("cli-a", 3, "the sandbox flake");
+        // An empty card (a session with nothing yet to find it by) keeps its mark but is never embedded.
+        index.Upsert("cli-b", 2, "");
         // A card alone is an item: the first embedder waits for a swap rather than becoming active over unembedded items.
         Assert.Equal(new EmbedderState(null, "old"), vectors.BeginSwap("old"));
         Assert.Equal(new ReembedProgress("old", 1, 0, true), await vectors.ReembedAsync(cancellationToken: Ct));
