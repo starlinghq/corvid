@@ -23,7 +23,7 @@ public sealed class DemoSessionServiceTests
 
         var sessions = (await service.ListAsync(TestContext.Current.CancellationToken)).ToDictionary(summary => summary.Id);
 
-        Assert.Equal(5, sessions.Count);
+        Assert.Equal(6, sessions.Count);
         var main = sessions[Main];
         Assert.Equal(("Fix the flaky sandbox test on CI", SessionState.Running, true), (main.Title, main.State, main.Pinned));
         Assert.Equal("14:04:48", Clock(main.StepStarted!.Value));
@@ -39,6 +39,10 @@ public sealed class DemoSessionServiceTests
 
         var vault = sessions[DemoSessionService.VaultSessionId];
         Assert.Equal((SessionState.Idle, "corvid-vault", "ntfy", "13:05:00"), (vault.State, vault.Workspace, vault.Branch, Clock(vault.LastActivity)));
+        // C-043: a finished handoff with its generated status line; the bump's answer asks for the merge.
+        Assert.Equal((TurnEnding.Finished, true), (vault.Ending, vault.StatusGenerated));
+        var bump = sessions[DemoSessionService.BumpSessionId];
+        Assert.Equal((SessionState.Idle, TurnEnding.AsksYou, (BoardMark?)null), (bump.State, bump.Ending, bump.Mark));
 
         var terminal = sessions[DemoSessionService.TerminalSessionId];
         Assert.True(terminal.ReadOnly);

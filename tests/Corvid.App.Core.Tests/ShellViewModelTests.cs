@@ -28,10 +28,11 @@ public sealed class ShellViewModelTests
         Assert.Equal("5", shell.AttentionText);
         Assert.Equal("Attention: 5 items waiting", shell.AttentionName);
         // Skills counts the demo's waiting draft from the start, before its page is visited; Main.png draws no Skills badge.
-        Assert.Equal(["2", "", "3", "1", "1", "", "", "", "1", "", "", ""], shell.NavItems.Select(item => item.BadgeText));
+        // C-043: the Board counts its Needs you column (cli-5e81's answer asks for the merge); Main.png predates it.
+        Assert.Equal(["2", "1", "3", "1", "1", "", "", "", "1", "", "", ""], shell.NavItems.Select(item => item.BadgeText));
         Assert.Equal(["Pinned", "Recent"], shell.SessionGroups.Select(group => group.Title));
         Assert.Equal(
-            ["Fix the flaky sandbox test on CI|Running|12 s", "Draft release notes for v0.2|Running|2 m", "Vault policy for ntfy|Idle|1 h", "nightly-tidy run|Job|09:00"],
+            ["Fix the flaky sandbox test on CI|Running|12 s", "Draft release notes for v0.2|Running|2 m", "Bump Starling packages to 0.3.0|Idle|29 m", "Vault policy for ntfy|Idle|1 h", "nightly-tidy run|Job|09:00"],
             shell.SessionGroups.SelectMany(group => group.Sessions).Select(session => $"{session.Title}|{session.State}|{session.When}"));
         Assert.Equal("cli-9f2e", shell.CurrentSession?.Id);
         Assert.True(shell.CurrentSession!.IsSelected);

@@ -239,6 +239,11 @@ public sealed class RemoteAppServices(RemoteSessionService sessions, AttachedAdd
         public Task SetPinnedAsync(string sessionId, bool pinned, CancellationToken cancellationToken = default) =>
             inner.SetPinnedAsync(sessionId, pinned, cancellationToken);
 
+        public bool CanMarkBoard => inner.CanMarkBoard;
+
+        public Task SetBoardMarkAsync(string sessionId, BoardMark? mark, CancellationToken cancellationToken = default) =>
+            inner.SetBoardMarkAsync(sessionId, mark, cancellationToken);
+
         public Task ViewedAsync(string sessionId, bool viewing, CancellationToken cancellationToken = default) =>
             inner.ViewedAsync(sessionId, viewing, cancellationToken);
 
