@@ -30,7 +30,9 @@ public sealed record ReembedProgress(string EmbedderId, int Embedded, int Remain
 /// everything. If the old embedder is not loaded, retrieval uses FTS and the graph only.</item>
 /// <item>When the last item has its new vector, one update makes the new embedder active, and the old vectors are removed.</item>
 /// </list>
-/// Items are episodes and current facts; invalidated facts are not re-embedded, because retrieval never returns them.
+/// Items are episodes, current facts and session cards (C-044, <see cref="SessionIndex"/>); invalidated facts are not
+/// re-embedded, because retrieval never returns them. Session cards take part in swaps and backfill like the others, or a
+/// swap's completion would drop their vectors with the old embedder's and nothing would embed them again.
 /// </summary>
 public sealed class MemoryVectors
 {
@@ -215,7 +217,9 @@ public sealed class MemoryVectors
                     SELECT item_id, text FROM (
                         SELECT item_id, text FROM episodes
                         UNION ALL
-                        SELECT fact_id AS item_id, text FROM facts WHERE valid_to IS NULL)
+                        SELECT fact_id AS item_id, text FROM facts WHERE valid_to IS NULL
+                        UNION ALL
+                        SELECT item_id, text FROM sessions)
                     WHERE item_id > $after ORDER BY item_id LIMIT $limit;
                     """;
                 command.Parameters.AddWithValue("$after", after);
@@ -241,7 +245,7 @@ public sealed class MemoryVectors
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT EXISTS (SELECT 1 FROM episodes) OR EXISTS (SELECT 1 FROM facts);";
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM episodes) OR EXISTS (SELECT 1 FROM facts) OR EXISTS (SELECT 1 FROM sessions);";
         return (long)command.ExecuteScalar()! == 1;
     }
 

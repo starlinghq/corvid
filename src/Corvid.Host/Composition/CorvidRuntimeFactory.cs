@@ -524,6 +524,7 @@ public sealed class CorvidRuntimeFactory(
         }
         return new MemoryServices(database, blocks, episodes, vectors, retriever, writer)
         {
+            Sessions = new SessionIndex(database),
             Lessons = lessons,
             LessonLearner = learner,
             Consolidator = writer is null ? null : Consolidator(settings, composer, blocks, facts, writer, log),
