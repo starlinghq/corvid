@@ -36,6 +36,16 @@ public sealed class HandoffRuleTests(ITestOutputHelper output)
         Assert.Equal(TurnEnding.Finished, HandoffRule.Classify("Should I merge it? You said yes earlier.\n\nPR #12 is merged."));
     }
 
+    [Theory]
+    [InlineData("PR #12 is up. CI is green. Want me to merge it?", "Want me to merge it?")]
+    [InlineData("I tried both. Which one do you prefer? The first is faster.", "Which one do you prefer?")]
+    [InlineData("The branch is pushed. Let me know when you've had a look.", "Let me know when you've had a look.")]
+    [InlineData("Three have changes:\n\n- flocks\n- Ok to delete the rest?", "Ok to delete the rest?")]
+    [InlineData("PR #86 is merged.", null)]
+    [InlineData(null, null)]
+    public void The_question_the_card_shows_is_the_one_the_answer_asks_with(string? answer, string? question) =>
+        Assert.Equal(question, HandoffRule.Question(answer));
+
     [Fact]
     public void A_request_beats_a_closing_phrase() =>
         Assert.Equal(TurnEnding.AsksYou, HandoffRule.Classify("PR #131 is merged and the worktrees are removed. Should I start on the docs next?"));

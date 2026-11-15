@@ -930,6 +930,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             foreach (var update in updates)
                 Keep(channel, update);
             channel.LogSummary = summary;
+            channel.NewsSinceRead = false;
             channel.Loaded = true;
             // What was published while the log was read (a restore from Rewind) follows the history it came after.
             var deferred = channel.Deferred.ToArray();
@@ -980,6 +981,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     /// </summary>
     private static void Keep(Channel channel, SessionUpdate update)
     {
+        // C-043: something happened in the session since its log summary was read; the summary's Board mark no longer holds.
+        if (update is UserMessage or AgentMessageChunk or ToolCall or ApprovalRequested or QuestionAsked)
+            channel.NewsSinceRead = true;
         var updates = channel.Updates;
         channel.Updates = updates.Count > 0 && (updates[^1], update) switch
         {
@@ -1130,6 +1134,7 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             lock (channel.Gate)
             {
                 channel.LogSummary = summary;
+                channel.NewsSinceRead = false;
                 summary = channel.Raised = Overlay(summary, channel);
             }
         }
@@ -1178,10 +1183,10 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
             Activity = waiting ? "waiting on you" : tool is { } call ? $"{call.Tool} {call.Target}".Trim() : null,
             Model = running && view.Model is { Length: > 0 } model ? model : logged.Model,
             Tainted = logged.Tainted || view.Tainted,
-            // C-043: activity this window saw after the mark is news the log summary has not been read for yet (a turn that
-            // just ended, before its refresh): the card leaves Done or Parked now rather than after that read.
-            Mark = logged.MarkedAt is { } marked && view.LastActivity > marked ? null : logged.Mark,
-            MarkedAt = logged.MarkedAt is { } at && view.LastActivity > at ? null : logged.MarkedAt,
+            // C-043: news this window saw since the log summary was read (a turn that just ended, before its refresh) ends the
+            // Board mark now rather than after that read.
+            Mark = channel.NewsSinceRead ? null : logged.Mark,
+            MarkedAt = channel.NewsSinceRead ? null : logged.MarkedAt,
             ForkOf = view.ForkOf ?? logged.ForkOf,
             ForkTurn = view.ForkTurn ?? logged.ForkTurn,
             PendingApprovals = view.Approvals.Count,
@@ -1551,6 +1556,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
 
         /// <summary>The log's summary, read when the session was loaded and after each turn.</summary>
         public SessionSummary? LogSummary { get; set; }
+
+        /// <summary>C-043: a news update was kept since <see cref="LogSummary"/> was read, so its Board mark no longer holds.</summary>
+        public bool NewsSinceRead { get; set; }
 
         /// <summary>The summary last raised, so a change is raised once.</summary>
         public SessionSummary? Raised { get; set; }
