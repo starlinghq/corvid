@@ -263,6 +263,7 @@ public sealed class CorvidRuntimeFactory(
             {
                 Generate = settings.Sessions.Titles,
                 RecapAfter = TimeSpan.FromMinutes(settings.Sessions.RecapAfterMinutes),
+                StatusLines = settings.Sessions.StatusLines,
             }, untitled);
 
             created = new CorvidRuntime(settings, catalogue, composer, devices, metrics, feed, log, registry, fabric, approvals, prompters,

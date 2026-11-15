@@ -95,6 +95,7 @@ internal static class Samples
         new ToolResult("user-shell", Json("""{"exit_code":0}"""), LocalOnly: true),
         new SessionTitled("Move the dentist reminder", TitleSources.Generated),
         new SessionRecapped("You moved the reminder to Friday.", 0, 4, RecapSources.Requested),
+        new SessionStatusNoted("Reminder moved to Friday; waiting for you to confirm the time.", 4, StatusSources.Generated),
         new ApprovalAssessed("call-1", ApprovalResolutions.RuleAllowed, "smart", [new AssessmentReason("rule_allowed", "a remembered approval matches")],
             Rule: "`dotnet test` under /work", RuleScope: "session", Effects: ["execute", "write"], Contained: true),
         new ApprovalAssessed("call-2", ApprovalResolutions.Automatic, "permissive", [],

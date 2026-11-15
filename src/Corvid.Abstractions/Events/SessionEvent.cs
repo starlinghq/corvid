@@ -35,6 +35,7 @@ namespace Corvid.Abstractions.Events;
 [JsonDerivedType(typeof(ClarificationAnswered), "clarification_answered")]
 [JsonDerivedType(typeof(SessionTitled), "session_titled")]
 [JsonDerivedType(typeof(SessionRecapped), "session_recapped")]
+[JsonDerivedType(typeof(SessionStatusNoted), "session_status_noted")]
 [JsonDerivedType(typeof(ApprovalAssessed), "approval_assessed")]
 [JsonDerivedType(typeof(EgressRecorded), "egress_recorded")]
 [JsonDerivedType(typeof(ChildSpawned), "child_spawned")]
@@ -301,6 +302,17 @@ public static class RecapSources
 {
     public const string Requested = "requested";
     public const string Absence = "absence";
+}
+
+// C-043 (docs/plan/ui.md §4.13): one line on where the session is at (what is done, what it waits for), written by the local
+// generator after a turn for the Board's card, about the events through ThroughSequence. Source is a StatusSources name:
+// "generated" for now. Display only, like a title: never in the transcript or the prompt, and not news to a person, so it
+// never moves a card out of Done, re-triggers a recap or counts as activity.
+public sealed record SessionStatusNoted(string Text, long ThroughSequence, string Source) : SessionEvent;
+
+public static class StatusSources
+{
+    public const string Generated = "generated";
 }
 
 // C-025: the project a session works in, so its lessons are recalled and filed under it. ProjectId is the 64-character hex

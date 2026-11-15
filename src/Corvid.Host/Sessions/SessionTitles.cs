@@ -25,6 +25,31 @@ public sealed record SessionDescription(string Id, long Head)
     /// <summary>The latest answer.</summary>
     public string? LastAnswer { get; init; }
 
+    /// <summary>C-043: the sequence of the latest answer's event; 0 when there is none. A status line through it is current.</summary>
+    public long LastAnswerSequence { get; init; }
+
+    /// <summary>
+    /// C-043: how the latest answer ends by <see cref="HandoffRule"/> (asks the person for something, reads as finished, or
+    /// neither), worked out on read, so old sessions, read-only ones and the CLI get it too.
+    /// </summary>
+    public TurnEnding Ending { get; init; }
+
+    /// <summary>C-043: the latest status line the local generator wrote for the Board's card, or null. Model text.</summary>
+    public SessionStatusNoted? Status { get; init; }
+
+    /// <summary>
+    /// C-043: the sequence of the latest event of a turn's work: a message, a call, a result or an answer, the person's own
+    /// <c>!</c> shell lines left out (their turn has no answer).
+    /// </summary>
+    public long LastWork { get; init; }
+
+    /// <summary>
+    /// C-043: a turn looks under way from the log alone: work came after the latest answer (a message, a call, its result)
+    /// and no clarifying question is open. A process that drives the session elsewhere is read as busy by this (G-12),
+    /// bounded in time by the surface, since a terminal that crashed mid-turn leaves the same log.
+    /// </summary>
+    public bool InTurn => LastWork > LastAnswerSequence && OpenQuestion is null;
+
     /// <summary>Messages the user sent, each a turn.</summary>
     public int Turns { get; init; }
 
@@ -98,7 +123,9 @@ public static class SessionCatalogue
     }
 
     /// <summary>Whether a person would call the event something that happened in the session (<see cref="SessionDescription.LastNews"/>).</summary>
-    public static bool IsNews(SessionEvent payload) => payload is not (SessionTitled or SessionRecapped or EgressRecorded or ApprovalAssessed or WorkspaceBound);
+    /// <remarks>C-043: the Board's status line (<see cref="SessionStatusNoted"/>) is about the session too, so writing it never moves a card out of Done.</remarks>
+    public static bool IsNews(SessionEvent payload) =>
+        payload is not (SessionTitled or SessionRecapped or SessionStatusNoted or EgressRecorded or ApprovalAssessed or WorkspaceBound);
 
     // The description continued over the events after its head.
     private static SessionDescription Fold(SessionDescription from, IEnumerable<StoredEvent> events, long head)
@@ -111,14 +138,19 @@ public static class SessionCatalogue
         var last = from.LastActivity;
         var news = from.LastNews;
         var content = from.HasContent;
+        var (answeredAt, work, status) = (from.LastAnswerSequence, from.LastWork, from.Status);
         foreach (var item in events)
         {
             content |= item.Payload is not WorkspaceBound;
             // A rename or a recap is about the session, not activity in it: the list's "time since activity" stays.
-            if (item.Payload is not (SessionTitled or SessionRecapped) || last == default)
+            if (item.Payload is not (SessionTitled or SessionRecapped or SessionStatusNoted) || last == default)
                 last = item.RecordedAt;
             if (IsNews(item.Payload))
                 news = item.Sequence;
+            // C-043: a turn's work, for InTurn; a ! line's message, call and result end with no answer, so they are left out.
+            if (item.Payload is UserMessage { LocalOnly: not true } or ToolCallIssued { LocalOnly: not true } or ToolResult { LocalOnly: not true }
+                or AssistantMessage)
+                work = item.Sequence;
             switch (item.Payload)
             {
                 case UserMessage user:
@@ -141,6 +173,10 @@ public static class SessionCatalogue
                 // A7: an architect/editor turn's plan is not an answer.
                 case AssistantMessage { Plan: null } assistant:
                     answer = assistant.Text;
+                    answeredAt = item.Sequence;
+                    break;
+                case SessionStatusNoted value:
+                    status = value;
                     break;
                 case SessionTitled value:
                     titled = value;
@@ -155,6 +191,11 @@ public static class SessionCatalogue
             Titled = titled,
             FirstMessage = first,
             LastAnswer = answer,
+            LastAnswerSequence = answeredAt,
+            // Read again only when the answer changed.
+            Ending = answeredAt == from.LastAnswerSequence && from.Head > 0 ? from.Ending : HandoffRule.Classify(answer),
+            Status = status,
+            LastWork = work,
             Turns = turns,
             LastActivity = last,
             LastNews = news,
@@ -210,6 +251,14 @@ public sealed record SessionTitlerOptions
 
     /// <summary>The most event lines a recap prompt holds: the first and last of the range, with a count of the rest.</summary>
     public int RecapLines { get; init; } = 60;
+
+    /// <summary>
+    /// C-043: write the Board's one-line status for an interactive session after each answered turn, with the local
+    /// generator (<c>Corvid:Sessions:StatusLines</c>). Off, the card falls back to the question or the answer's first line.
+    /// </summary>
+    public bool StatusLines { get; init; } = true;
+
+    public int StatusTokens { get; init; } = 40;
 }
 
 /// <summary>
@@ -243,6 +292,14 @@ public sealed class SessionTitler
     internal const string RecapPrompt =
         "You write recaps for a person coming back to a conversation with a coding assistant. In at most three short lines, "
         + "say what was asked, what was done and what is still open, from the events below. Reply with the recap only.";
+
+    /// <summary>C-043's status prompt, Corvid's own text (A5: the egress gate neither scans nor rewrites it).</summary>
+    internal const string StatusPrompt =
+        "In one line of at most 14 words, say where this conversation with a coding assistant is at: what is done and what "
+        + "it is waiting for. Reply with the line only.";
+
+    // The most of each message a status prompt quotes.
+    private const int StatusChars = 800;
 
     private readonly IEventLog _log;
     private readonly IChatClient? _generator;
@@ -340,6 +397,46 @@ public sealed class SessionTitler
             return null;
         // Only while the session still has no title: a rename that arrived while the generator ran wins.
         return Append(sessionId, new SessionTitled(title, TitleSources.Generated), current => current.Title is null)?.Payload as SessionTitled;
+    }
+
+    /// <summary>
+    /// C-043: the Board's one line on where the session is at, from its task (the first message), the latest message and
+    /// answer and the previous line, appended as <c>SessionStatusNoted</c> through the latest answer. Null when the status
+    /// is already current, there is no answer yet, it is turned off or nothing can be generated here. Never throws for the
+    /// generator's failure: the card falls back to the answer. Local-only <c>!!</c> lines and a guest's messages are left out.
+    /// </summary>
+    public async Task<SessionStatusNoted?> StatusAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        if (_generator is null || !Options.StatusLines)
+            return null;
+        if (SessionCatalogue.Describe(_log, sessionId, cancellationToken) is not { LastAnswer: { } answer } described
+            || described.Status?.ThroughSequence >= described.LastAnswerSequence)
+            return null;
+        var latest = SessionProjection.Load(_log, sessionId, cancellationToken: cancellationToken).Transcript
+            .Select(entry => entry.Content).OfType<UserMessage>().LastOrDefault(user => user is { LocalOnly: not true, From: null })?.Text;
+        var prompt = new StringBuilder();
+        prompt.Append("Task: ").AppendLine(Cut(described.FirstMessage ?? latest ?? "", StatusChars));
+        if (latest is not null && latest != described.FirstMessage)
+            prompt.Append("Latest message: ").AppendLine(Cut(latest, StatusChars));
+        prompt.Append("Latest answer: ").AppendLine(Cut(answer, StatusChars));
+        if (described.Status is { } previous)
+            prompt.Append("Previous status: ").AppendLine(Cut(previous.Text, StatusChars));
+        string? line;
+        try
+        {
+            var response = await _generator.GetResponseAsync(
+                [new ChatMessage(ChatRole.System, StatusPrompt), new ChatMessage(ChatRole.User, prompt.ToString().TrimEnd())],
+                new ChatOptions { MaxOutputTokens = Options.StatusTokens, Temperature = 0.2f, Seed = Seed }, cancellationToken).ConfigureAwait(false);
+            line = Clean(response.Text);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        if (line is null)
+            return null;
+        return Append(sessionId, new SessionStatusNoted(line, described.LastAnswerSequence, StatusSources.Generated), _ => true)?.Payload as SessionStatusNoted;
     }
 
     /// <summary>
@@ -474,7 +571,7 @@ public sealed class SessionTitler
         return [.. lines.Take(head), string.Create(CultureInfo.InvariantCulture, $"… {lines.Count - head - tail} events left out …"), .. lines.TakeLast(tail)];
     }
 
-    /// <summary>The model's reply as a title: its first line without quotes, markdown or a label, cut; null when nothing is left.</summary>
+    /// <summary>The model's reply as a title or status line: its first line without quotes, markdown or a label, cut; null when nothing is left.</summary>
     internal static string? Clean(string? reply)
     {
         if (string.IsNullOrWhiteSpace(reply))
@@ -484,8 +581,10 @@ public sealed class SessionTitler
             return null;
         static string Strip(string text) => text.Trim().Trim('#', '*', '_', '`', '"', '\'', '“', '”', '‘', '’', ' ').Trim();
         line = Strip(SessionCatalogue.Visible(line));
-        if (line.StartsWith("title:", StringComparison.OrdinalIgnoreCase))
-            line = Strip(line[6..]);
+        // A label the model put first ("Title: …", C-043's "Status: …").
+        foreach (var label in (string[])["title:", "status:"])
+            if (line.StartsWith(label, StringComparison.OrdinalIgnoreCase))
+                line = Strip(line[label.Length..]);
         return SessionCatalogue.Line(line.TrimEnd('.', '!', '?', ':', ';', ',').Trim());
     }
 
