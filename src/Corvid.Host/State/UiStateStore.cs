@@ -15,9 +15,31 @@ public sealed record UiReviewPoint(string SessionId, int Turn, int CommentsSent,
 public sealed record UiSeen(string SessionId, long Sequence, DateTimeOffset At);
 
 /// <summary>
+/// C-043: a session the person put in the Board's Done or Parked column (<see cref="UiBoardMarks"/>), and the log's latest
+/// news then (<c>SessionDescription.LastNews</c>). It holds only while nothing newer happened: any message, answer, call,
+/// approval or question moves the news past <paramref name="Through"/> and the card comes back with no write.
+/// </summary>
+public sealed record UiBoardMark(string SessionId, string Mark, long Through, DateTimeOffset At)
+{
+    /// <summary>Whether the mark still holds for a session whose latest news is <paramref name="lastNews"/>.</summary>
+    public bool HoldsAt(long lastNews) => lastNews <= Through;
+}
+
+/// <summary>C-043: the marks <c>board_marks</c> keeps.</summary>
+public static class UiBoardMarks
+{
+    /// <summary>The person called it done ("Mark done").</summary>
+    public const string Done = "done";
+
+    /// <summary>A "your turn" the person put aside ("Not now").</summary>
+    public const string Parked = "parked";
+}
+
+/// <summary>
 /// <c>ui.db</c> (G-7, docs/plan/ui.md §8): the state a person's surfaces keep about sessions and themselves, beside the
 /// event log and never in it, so the CLI and the windowed app share it. Drafts, pinned sessions, review points, when a
-/// session was last seen, and the app's own preferences (density, notifications, layout). Nothing here is ever sent to a
+/// session was last seen, the Board's Done and Parked marks (C-043), and the app's own preferences (density, notifications,
+/// layout). Nothing here is ever sent to a
 /// model or decides what a tool may do: losing the file loses conveniences, never history.
 /// <para>
 /// Safe from several processes at once: SQLite in WAL mode, each operation on its own short connection and transaction,
@@ -29,7 +51,11 @@ public sealed record UiSeen(string SessionId, long Sequence, DateTimeOffset At);
 public sealed class UiStateStore
 {
     /// <summary>The schema this build writes.</summary>
-    public const int SchemaVersion = 1;
+    /// <remarks>
+    /// 2 (C-043) adds <c>board_marks</c>. An older Corvid refuses a version-2 file (<see cref="IsUnavailable"/>): it carries on
+    /// without drafts and pins. The CLI and the app ship together, so both read it.
+    /// </remarks>
+    public const int SchemaVersion = 2;
 
     /// <summary>The longest draft kept, in characters; a longer one is cut (a paste of a whole file is not a draft).</summary>
     public const int MaxDraftLength = 64 * 1024;
@@ -200,6 +226,55 @@ public sealed class UiStateStore
         command.ExecuteNonQuery();
     }
 
+    // ---- the Board's marks (C-043) ----
+
+    /// <summary>Every session's Board mark, in one read (as <see cref="Pinned"/>); a mark the session's news has passed is still listed.</summary>
+    public ImmutableDictionary<string, UiBoardMark> BoardMarks()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT session_id, mark, through, at FROM board_marks;";
+        using var reader = command.ExecuteReader();
+        var marks = ImmutableDictionary.CreateBuilder<string, UiBoardMark>(StringComparer.Ordinal);
+        while (reader.Read())
+            marks[reader.GetString(0)] = new UiBoardMark(reader.GetString(0), reader.GetString(1), reader.GetInt64(2), Time(reader.GetString(3)));
+        return marks.ToImmutable();
+    }
+
+    /// <summary>
+    /// Puts the session in Done or Parked (<see cref="UiBoardMarks"/>) through <paramref name="through"/>, the latest news the
+    /// person saw; the last write wins, so a mark the news has passed is simply overwritten.
+    /// </summary>
+    public void SetBoardMark(string sessionId, string mark, long through, DateTimeOffset at)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        if (mark is not (UiBoardMarks.Done or UiBoardMarks.Parked))
+            throw new ArgumentException($"A Board mark is \"{UiBoardMarks.Done}\" or \"{UiBoardMarks.Parked}\", not \"{mark}\".", nameof(mark));
+        ArgumentOutOfRangeException.ThrowIfNegative(through);
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO board_marks (session_id, mark, through, at) VALUES ($session, $mark, $through, $at)
+            ON CONFLICT(session_id) DO UPDATE SET mark=excluded.mark, through=excluded.through, at=excluded.at;
+            """;
+        command.Parameters.AddWithValue("$session", sessionId);
+        command.Parameters.AddWithValue("$mark", mark);
+        command.Parameters.AddWithValue("$through", through);
+        command.Parameters.AddWithValue("$at", Stamp(at));
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Takes the session out of Done or Parked ("Reopen").</summary>
+    public void ClearBoardMark(string sessionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM board_marks WHERE session_id=$session;";
+        command.Parameters.AddWithValue("$session", sessionId);
+        command.ExecuteNonQuery();
+    }
+
     // ---- preferences ----
 
     /// <summary>The app's preferences by key (<c>Density</c>, <c>NotifyTurnEnd</c>, <c>StartLayout</c>); keys never set are absent.</summary>
@@ -297,7 +372,8 @@ public sealed class UiStateStore
                 wal.CommandText = "PRAGMA journal_mode=WAL;";
                 wal.ExecuteNonQuery();
             }
-            // An immediate transaction: two processes creating the file at once take turns, and the second finds version 1.
+            // An immediate transaction: two processes creating or upgrading the file at once take turns, and the second finds
+            // the version the first wrote.
             using var transaction = connection.BeginTransaction(deferred: false);
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
@@ -315,6 +391,17 @@ public sealed class UiStateStore
                     CREATE TABLE seen (session_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, at TEXT NOT NULL);
                     CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
                     PRAGMA user_version=1;
+                    """;
+                command.ExecuteNonQuery();
+                version = 1;
+            }
+            // C-043: version 1 (drafts, pins, review points, seen, preferences) gains the Board's marks.
+            if (version == 1)
+            {
+                command.CommandText = """
+                    CREATE TABLE IF NOT EXISTS board_marks (session_id TEXT PRIMARY KEY, mark TEXT NOT NULL CHECK (mark IN ('done','parked')),
+                        through INTEGER NOT NULL, at TEXT NOT NULL);
+                    PRAGMA user_version=2;
                     """;
                 command.ExecuteNonQuery();
             }
