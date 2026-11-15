@@ -31,8 +31,12 @@ public sealed partial class AppComposition
         }
     }
 
-    /// <summary>The Board area: every session as a card, and the attention tray.</summary>
-    public BoardViewModel Board => _board ??= new BoardViewModel(Shell, SessionHub, BoardService, new SessionServiceWatcher(SessionService), Time, Dispatcher);
+    /// <summary>
+    /// The Board area: every session as a card, and the attention tray. Its filter box asks the palette's session search
+    /// (C-044), where the engine has one.
+    /// </summary>
+    public BoardViewModel Board => _board ??= new BoardViewModel(Shell, SessionHub, BoardService, new SessionServiceWatcher(SessionService), Time, Dispatcher,
+        SessionSearch);
 
     private void OnBoardAttentionChanged(object? sender, EventArgs e) => _ = CountBoardAttentionAsync();
 

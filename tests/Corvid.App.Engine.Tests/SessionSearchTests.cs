@@ -38,6 +38,27 @@ public sealed class EngineSessionSearchTests
     }
 
     [Fact]
+    public async Task Sessions_are_found_by_what_they_are_about()
+    {
+        await using var fixture = await EngineFixture.StartAsync();
+        var log = fixture.Runtime.Log;
+        Say(log, "cli-a", new UserMessage("the integration tests hang under bubblewrap"), new AssistantMessage("Retried with a longer timeout."),
+            new SessionTitled("Sandbox flake in CI", "generated"));
+        Say(log, "cli-b", new UserMessage("write the release notes"), new AssistantMessage("Drafted."));
+        Say(log, Corvid.App.Engine.Memory.EngineMemoryService.ImportSession, new UserMessage("sandbox flake memory"));
+        var search = new EngineSessionSearch(fixture.Engine);
+
+        var found = await search.FindSessionsAsync("sandbox flake", Token);
+
+        Assert.NotNull(found);
+        Assert.Null(found.Unavailable);
+        // The import's staging session is not one of the person's sessions.
+        Assert.DoesNotContain(found.Finds, item => item.SessionId == Corvid.App.Engine.Memory.EngineMemoryService.ImportSession);
+        var find = found.Finds[0];
+        Assert.Equal(("cli-a", "Sandbox flake in CI", "Retried with a longer timeout."), (find.SessionId, find.Title, find.Line));
+    }
+
+    [Fact]
     public async Task The_windows_palette_searches_through_the_engine()
     {
         await using var fixture = await EngineFixture.StartAsync();

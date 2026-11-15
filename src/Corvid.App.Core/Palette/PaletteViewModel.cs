@@ -76,6 +76,7 @@ public sealed class PaletteViewModel : ObservableObject
     private string _placeholder = "";
     private string _emptyText = "";
     private bool _isLoading;
+    private IReadOnlyList<SessionSummary>? _searchSummaries;
 
     public PaletteViewModel(PaletteHost host)
     {
@@ -273,7 +274,8 @@ public sealed class PaletteViewModel : ObservableObject
                 OpenFind();
                 break;
             case PaletteMode.Search when _host.Search is not null:
-                // G-5: what was said, through the episodic index, as the person types.
+                // G-5: what was said, through the episodic index, as the person types; C-044: and the sessions it is about.
+                _searchSummaries = null;
                 Present("Search sessions", "Search what was said in your sessions…", TypeToSearch, []);
                 break;
             case PaletteMode.Search:
@@ -375,7 +377,7 @@ public sealed class PaletteViewModel : ObservableObject
 
         items.Add(Command("Switch session…", "The sessions, most recent first", KeyCommands.SessionSwitcher, IconKind.Chat));
         items.Add(Command("Find in the session…", "Words in the open session's transcript", KeyCommands.Find, IconKind.Search));
-        items.Add(Command("Search across sessions…", _host.Search is null ? "Titles, previews and ids" : "What was said in every session",
+        items.Add(Command("Search across sessions…", _host.Search is null ? "Titles, previews and ids" : "Sessions by what they are about, and what was said in them",
             KeyCommands.Search, IconKind.Search));
         items.Add(Command("Prompt history…", "Prompts sent in this workspace", KeyCommands.History, IconKind.Lines));
         items.Add(Command("Switch the generator…", "Without leaving the composer", KeyCommands.SwitchGenerator, IconKind.Chip));
@@ -586,25 +588,111 @@ public sealed class PaletteViewModel : ObservableObject
         {
             if (_host.SearchDelay > TimeSpan.Zero)
                 await Task.Delay(_host.SearchDelay, _host.Time, cancellationToken);
-            var found = await search.SearchAsync(query, cancellationToken);
+            // C-044: the turns and the sessions are asked together, under the one cancellation a newer query cancels.
+            var turns = search.SearchAsync(query, cancellationToken);
+            var sessions = FindSessionsAsync(search, query, cancellationToken);
+            var found = await turns;
+            var finds = await sessions;
             cancellationToken.ThrowIfCancellationRequested();
+            var rows = new List<PaletteItem>();
+            if (finds is not null)
+                rows.AddRange(await SessionRowsAsync(finds, query, cancellationToken));
             if (found.Unavailable is { } why)
             {
-                _source = [];
                 EmptyText = "";
                 Show($"No search: {SafeText.Clean(why)}.", Tone.Amber);
-                Refilter();
-                return;
+            }
+            else
+            {
+                Note = "";
+                EmptyText = "Nothing said in any session matches.";
+                rows.AddRange(found.Matches.Select(match => Match(match, finds is null ? "" : SaidGroup)));
             }
 
-            Note = "";
-            EmptyText = "Nothing said in any session matches.";
-            _source = [.. found.Matches.Select(Match)];
+            _source = rows;
             Refilter();
         });
     }
 
-    private PaletteItem Match(SessionMatch match)
+    /// <summary>C-044: the palette's Ctrl+Shift+F groups: the sessions a search found, then the turns that matched.</summary>
+    public const string SessionsGroup = "Sessions";
+
+    public const string SaidGroup = "Said in sessions";
+
+    /// <summary>How many sessions the Sessions group lists above what was said.</summary>
+    public const int MaxSessionRows = 5;
+
+    /// <summary>The session search, or null where there is none or it failed: a failure never hides what was said.</summary>
+    private static async Task<SessionFinds?> FindSessionsAsync(ISessionSearch search, string query, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await search.FindSessionsAsync(query, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The Sessions group: what the session search found, best first; or, with memory off (no session index), the rail's
+    /// sessions matched by their titles, previews, ids and workspaces, as the demo's search does.
+    /// </summary>
+    private async Task<IReadOnlyList<PaletteItem>> SessionRowsAsync(SessionFinds finds, string query, CancellationToken cancellationToken)
+    {
+        var summaries = _searchSummaries;
+        if (summaries is null && _host.Sessions is { } service)
+        {
+            try
+            {
+                summaries = _searchSummaries = await service.ListAsync(cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
+            {
+                summaries = [];
+            }
+        }
+
+        var byId = (summaries ?? []).ToDictionary(summary => summary.Id, StringComparer.Ordinal);
+        if (finds.Unavailable is not null)
+        {
+            return [.. byId.Values
+                .Select(summary => (summary, score: FuzzyMatch.Best(query, SafeText.Clean(summary.Title), SafeText.Clean(summary.Preview ?? ""), summary.Id,
+                    SafeText.Clean(summary.Workspace))))
+                .Where(entry => entry.score is not null)
+                .OrderByDescending(entry => entry.score).ThenByDescending(entry => entry.summary.LastActivity)
+                .Take(MaxSessionRows)
+                .Select(entry => Found(entry.summary.Id, entry.summary.Title, entry.summary.Preview, entry.summary, "by title"))];
+        }
+
+        return [.. finds.Finds.Take(MaxSessionRows).Select(find =>
+            Found(find.SessionId, find.Title, find.Line, byId.GetValueOrDefault(find.SessionId), find.ByMeaning ? "by meaning" : "by words"))];
+    }
+
+    private PaletteItem Found(string id, string? title, string? line, SessionSummary? summary, string how)
+    {
+        var shell = _host.Shell;
+        var name = SafeText.Clean(title ?? "");
+        var detail = string.Join(" · ", new[] { TranscriptText.Snippet(SafeText.Clean(line ?? ""), "", 90), SafeText.Clean(summary?.Workspace ?? ""), how }
+            .Where(part => part.Length > 0));
+        return new PaletteItem(name.Length > 0 ? name : SafeText.Clean(id), detail, () =>
+        {
+            if (shell.FindSession(id) is null)
+            {
+                Show($"{SafeText.Clean(id)} is not in the rail's list, so it cannot open here yet.", Tone.Amber);
+                return;
+            }
+
+            Close();
+            shell.OpenSession(id);
+        }, SessionsGroup, "", IconKind.Chat)
+        {
+            Keywords = SafeText.Clean(id),
+        };
+    }
+
+    private PaletteItem Match(SessionMatch match, string group)
     {
         var shell = _host.Shell;
         var zone = _host.Time.LocalTimeZone;
@@ -628,7 +716,7 @@ public sealed class PaletteViewModel : ObservableObject
             _host.RevealAt?.Invoke(id, position);
             Close();
             shell.OpenSession(id);
-        }, "", "", IconKind.Search)
+        }, group, "", IconKind.Search)
         {
             Keywords = SafeText.Clean(id),
         };
@@ -815,7 +903,8 @@ public sealed class PaletteViewModel : ObservableObject
         _selected = -1;
         foreach (var item in all)
             item.IsSelected = false;
-        var grouped = KeepsGroups || _query.Trim().Length == 0;
+        // C-044: a search's Sessions and Said in sessions keep their headings as the query changes.
+        var grouped = KeepsGroups || _query.Trim().Length == 0 || (_mode == PaletteMode.Search && _host.Search is not null);
         foreach (var item in all)
             item.Choose = ChooseCommand;
         for (var i = 0; i < all.Count; i++)
