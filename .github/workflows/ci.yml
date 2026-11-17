@@ -7,9 +7,9 @@ name: ci
 # (bubblewrap) and lifts Ubuntu's AppArmor restriction on unprivileged user namespaces, which the sandbox needs. They
 # also run a pull request from a fork, with a read-only token and no secrets, once a maintainer approves the run.
 #
-# The gpu job needs the RTX 3090, so it runs on the org's self-hosted runner (labels self-hosted, omarchy): an Arch
-# Linux workstation where the runner is the unprivileged system user gh-runner with no sudo. It skips a pull request
-# from a fork, so only members' branches and main run there, never code from outside. Its steps must not need root,
+# The gpu job needs a GPU, so it runs on the org's self-hosted runner, as an unprivileged user with no sudo. It
+# skips a pull request from a fork, so only members' branches and main run there, never code from outside. Its steps
+# must not need root,
 # must not install system packages, and must keep files they plant (fake secrets, homes, caches) under $RUNNER_TEMP,
 # which the runner clears after each job.
 on:
@@ -108,10 +108,11 @@ jobs:
 
   # C-029: the CUDA variant (-p:UseCuda=true) and Kev on the RTX 3090. The CUDA build and the boundary check run every
   # time, so the variant cannot rot; obj/ is restored with UseCuda here, so the checker validates the CUDA graph. The GPU
-  # tests need no root: /dev/nvidia* are world-accessible and the CUDA 13 runtime is in /opt/cuda (ldconfig). They run as
-  # required unless the repository variable CORVID_GPU_TESTS says otherwise (set it to "skip" to make them opt-in), and
-  # are pinned to the 3090 by UUID (repository variable CORVID_CUDA_DEVICE, defaulting to it) in PCI order, so the
-  # 4060 Ti is never touched. The Kev-0.8B test skips until CORVID_STARLING_MODELS names a cache gh-runner can read.
+  # tests need no root: the device nodes are readable by the runner and the CUDA 13 runtime is on the loader path. They
+  # run as required unless the repository variable CORVID_GPU_TESTS says otherwise (set it to "skip" to make them
+  # opt-in), and are pinned to one GPU by UUID (repository variable CORVID_CUDA_DEVICE, or the default below) in PCI
+  # order, so no other GPU on the host is touched. The Kev-0.8B test skips until CORVID_STARLING_MODELS names a cache
+  # the runner can read.
   gpu:
     name: CUDA build and GPU tests (RTX 3090)
     runs-on: [self-hosted, omarchy]
@@ -125,14 +126,14 @@ jobs:
       MALLOC_MMAP_THRESHOLD_: 65536
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      # setup-dotnet installs to /usr/share/dotnet by default, which gh-runner cannot write.
+      # setup-dotnet installs to /usr/share/dotnet by default, which the runner's user cannot write.
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         env:
           DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
 
-      - name: GPU visibility for gh-runner
+      - name: GPU visibility
         run: |
           ls -l /dev/nvidia*
           nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total --format=csv || echo "nvidia-smi failed"

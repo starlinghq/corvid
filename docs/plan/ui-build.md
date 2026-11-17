@@ -48,7 +48,7 @@ app and looking at it.
   Ubuntu runner with no display and no workloads. Nothing may need a display in CI.
 - Commit messages follow `git log` (`App: <what> (<step>)`) and carry no Claude attribution: no `Co-Authored-By`,
   `Claude-Session` or "Generated with" lines, and no claude.ai links, in commits or pull request bodies.
-- Memory: this machine shares its RAM and CPU with CI runners and a model server. Before every `dotnet build` or `dotnet
+- Memory: the development machine is shared with other work. Before every `dotnet build` or `dotnet
   test`, run `agent-budget level`; if it prints `critical`, wait (`agent-budget alert --from critical --timeout 300`);
   if `tight`, pass `-m:2`. Spawn no more parallel builders than `agent-budget -q` allows.
 
