@@ -9,9 +9,8 @@ name: ci
 #
 # The gpu job needs a GPU, so it runs on the org's self-hosted runner, as an unprivileged user with no sudo. It
 # skips a pull request from a fork, so only members' branches and main run there, never code from outside. Its steps
-# must not need root,
-# must not install system packages, and must keep files they plant (fake secrets, homes, caches) under $RUNNER_TEMP,
-# which the runner clears after each job.
+# must not need root, must not install system packages, and must keep files they plant (fake secrets, homes, caches)
+# under $RUNNER_TEMP, which the runner clears after each job.
 on:
   pull_request:
   push:
