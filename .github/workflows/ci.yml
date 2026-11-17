@@ -37,7 +37,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # Code mode's C# tests build file-based apps outside the repository, where global.json does not apply, so the .NET
+      # host picks the newest SDK beside it. The image's /usr/share/dotnet has a newer major SDK than global.json pins;
+      # installing into the tool cache keeps only the pinned SDK in DOTNET_ROOT, as on a developer's machine.
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
 

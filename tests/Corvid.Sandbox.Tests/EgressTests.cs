@@ -133,8 +133,8 @@ public sealed class EgressTests : IDisposable
         string vaultRun = Path.GetDirectoryName(_vault.Options.SocketPath)!;
         string script = $"""
             curl -sS --max-time 10 --noproxy '*' https://1.1.1.1/ > /dev/null; echo "direct-curl=$?"
-            (exec 3<>/dev/tcp/1.1.1.1/443) 2>&1; echo "direct-tcp=$?"
-            (exec 3<>/dev/tcp/127.0.0.1/{port}) 2> /dev/null; echo "host-loopback=$?"
+            bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' 2>&1; echo "direct-tcp=$?"
+            bash -c 'exec 3<>/dev/tcp/127.0.0.1/{port}' 2> /dev/null; echo "host-loopback=$?"
             echo "interfaces=$(grep -c : /proc/net/dev)"
             echo "run=$(ls -A /run/corvid-sandbox | tr '\n' ' ')"
             echo "vault-sockets=$(for f in '{vaultRun}'/* '{vaultRun}'/sandbox/*; do [ -S "$f" ] && echo "$f"; done | wc -l)"
