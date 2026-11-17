@@ -44,8 +44,8 @@ app and looking at it.
   <csproj> -c Release`. Pass `TestContext.Current.CancellationToken` to every call that takes a token (analyzer
   xUnit1051 is an error here). Never skip or weaken a test to get green.
 - Style: match the repo: file-scoped namespaces, sealed classes and records by default, XML doc comments that say why.
-- CI (`.github/workflows/ci.yml`) builds `Corvid.slnx` in Release, runs the checker, then the tests, on a self-hosted
-  Arch runner with no display and no workloads. Nothing may need a display in CI.
+- CI (`.github/workflows/ci.yml`) builds `Corvid.slnx` in Release, runs the checker, then the tests, on a GitHub-hosted
+  Ubuntu runner with no display and no workloads. Nothing may need a display in CI.
 - Commit messages follow `git log` (`App: <what> (<step>)`) and carry no Claude attribution: no `Co-Authored-By`,
   `Claude-Session` or "Generated with" lines, and no claude.ai links, in commits or pull request bodies.
 - Memory: this machine shares its RAM and CPU with CI runners and a model server. Before every `dotnet build` or `dotnet
