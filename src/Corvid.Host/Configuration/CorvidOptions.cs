@@ -141,7 +141,7 @@ public sealed class AppSettings
     public bool HostScheduler { get; set; }
 }
 
-/// <summary>Session titles and recaps (G-6, extending K-9), written by the local generator only.</summary>
+/// <summary>Session titles, recaps (G-6, extending K-9) and the Board's status lines (C-043), written by the local generator only.</summary>
 public sealed class SessionsSettings
 {
     /// <summary>Title a session with the local generator after its first exchange. Renames work either way.</summary>
@@ -152,6 +152,13 @@ public sealed class SessionsSettings
     /// <c>--session</c>, the app opening it); 0 turns recaps on return off. <c>/recap</c> works either way.
     /// </summary>
     public int RecapAfterMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// C-043: after each answered turn of an interactive session, the local generator writes the Board's one-line status
+    /// ("where it's at"): one background call per turn. Off, the Board's cards fall back to the answer's question or first
+    /// line. Never with a cloud default generator.
+    /// </summary>
+    public bool StatusLines { get; set; } = true;
 
     /// <summary>
     /// A6 (G-4): where the git worktrees Corvid makes for sessions go, one directory per repository below it. Outside every

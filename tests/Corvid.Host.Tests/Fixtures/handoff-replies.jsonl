@@ -1,0 +1,62 @@
+{"label": "asks_you", "text": "PR #12 is up: https://github.com/example/repo/pull/12. CI is green on all three jobs.\n\nWant me to merge it?"}
+{"label": "asks_you", "text": "I fixed the flaky sandbox test by skipping the control step when user namespaces are off. Should I also add the sysctl check to the doctor?"}
+{"label": "asks_you", "text": "Both approaches work. Option A keeps the cache in memory; option B writes it to SQLite and survives restarts.\n\nWhich one do you prefer?"}
+{"label": "asks_you", "text": "The migration is written and the tests pass locally. Before I push it, please review the schema change in `UiStateStore.cs`, since it bumps the version and older builds will refuse the file."}
+{"label": "asks_you", "text": "I can't run the GPU tests here because there is no CUDA device in this sandbox. Could you run `dotnet test -p:UseCuda=true` on the desktop and paste the output?"}
+{"label": "asks_you", "text": "The release notes draft is in `docs/releases/v0.2.md`.\n\nI wasn't sure about the version: is it 0.2.0 or 0.2.0-rc1 for the first tag?"}
+{"label": "asks_you", "text": "Branch `fix/vault-expiry` is pushed. Let me know when you've had a look and I'll open the PR."}
+{"label": "asks_you", "text": "I stopped before deleting the old worktrees because three of them have uncommitted changes:\n\n- `flocks`\n- `model-picker`\n- `readme-refresh`\n\nOk to delete the other twelve?"}
+{"label": "asks_you", "text": "Here's the plan:\n\n1. Add the `board_marks` table.\n2. Wire `SetBoardMarkAsync` through the engine.\n3. Draw the columns.\n\nShall I start with step 1?"}
+{"label": "asks_you", "text": "The benchmark finished: 41 tok/s on the 3090 with batching, 29 without. Do you want me to add these numbers to the README table?"}
+{"label": "asks_you", "text": "I need the RunPod API key to start the pod. Once you have put it in `~/.config/runpod`, I'll launch the benchmark."}
+{"label": "asks_you", "text": "The two failing tests are unrelated to this change; they fail on main too. Up to you whether we fix them here or in a separate PR."}
+{"label": "asks_you", "text": "Done with the refactor of `SessionHub`. One thing I need you to decide: the rail can either group by workspace or by flock first. Your call."}
+{"label": "asks_you", "text": "I've drafted the reply to the issue below.\n\n> Thanks for the report. The crash comes from the tokenizer cache being shared across threads; 0.3.1 fixes it.\n\nWould you like me to post it?"}
+{"label": "asks_you", "text": "The deploy script is ready. It will restart the runner service, so I'm waiting for you to say when it's safe to run."}
+{"label": "asks_you", "text": "I couldn't reproduce the oomd kill with four runners busy. Can you tell me which jobs were running when it happened?"}
+{"label": "asks_you", "text": "Everything compiles now. Please run the app once on Windows and check the tray icon, since I can't see the VM's screen from here."}
+{"label": "asks_you", "text": "That leaves two options for the decider timeout: raise it to 800 ms, or drop the `step` question on CPU hosts. Which do you want?"}
+{"label": "asks_you", "text": "PR #131 is merged and the worktrees are removed.\n\nShould I start on the docs refresh next, or is the bge-m3 work more urgent?"}
+{"label": "asks_you", "text": "I've updated the CODEOWNERS file so `src/Corvid.Vault` needs your review.\n\n```\n/src/Corvid.Vault/ @owner\n```\n\nWhen you're ready, approve the PR and I'll merge it."}
+{"label": "asks_you", "text": "The screenshot baselines changed because the font fallback differs on this machine. I'd rather not update them blindly; please confirm the new ones look right before I commit them."}
+{"label": "asks_you", "text": "All tests pass. Merge it now?"}
+{"label": "finished", "text": "PR #86 is merged. The flocks slice is in main, and the backlog row is marked built."}
+{"label": "finished", "text": "The fix is in place: the scheduler now wakes on a change instead of polling. All tests pass (2,114 passed, 0 failed)."}
+{"label": "finished", "text": "Done. I removed the twelve stale worktrees and pruned their branches. Nothing else left to do here."}
+{"label": "finished", "text": "I updated the README with the new install command and pushed the change to `docs/readme-refresh`. That's it."}
+{"label": "finished", "text": "The release is published: Kev and QwenChat 0.3.0 are on nuget.org, and the tag `v0.3.0` is pushed."}
+{"label": "finished", "text": "Summary of the changes:\n\n- `UiStateStore`: schema 2 with `board_marks`\n- `SessionCatalogue`: `Ending`, `Status`, `InTurn`\n- tests for all three\n\nPR #140 opened as a draft; CI is green."}
+{"label": "finished", "text": "The flaky test is fixed. The race was in the job replay: two handlers could both claim the first run. It's now under one lock, and the test ran 500 times without a failure."}
+{"label": "finished", "text": "Both commits are pushed and the branch is up to date with origin/main. The changelog entry is complete."}
+{"label": "finished", "text": "The benchmark results are in `docs/bench/2026-11-14.md`, with the table and the raw JSON. Finished."}
+{"label": "finished", "text": "I've cleaned up the scratch directories and stopped the RunPod pod, so nothing is billing now. Everything is done."}
+{"label": "finished", "text": "Rebased on main, resolved the conflict in `BoardViewModel.cs`, and force-pushed. The PR is now up to date and CI passed."}
+{"label": "finished", "text": "The docs build is fixed: the broken anchor in `architecture.md` pointed at a heading that was renamed. All links resolve now."}
+{"label": "finished", "text": "Here is what changed:\n\n```diff\n- if (head == 0) return null;\n+ if (head == 0) { cache.TryRemove(id, out _); return null; }\n```\n\nThe stale cache entry is gone and the regression test covers it."}
+{"label": "finished", "text": "The GIF is regenerated at 12 fps and is now 2.1 MB instead of 9 MB. The README points at the new file."}
+{"label": "finished", "text": "All 64 Host tests pass and the architecture checker reports no violations. The work on this branch is complete."}
+{"label": "finished", "text": "Memory updated: the new entry for the Omarchy VM is in MEMORY.md, and the old SSH note is removed."}
+{"label": "none", "text": "The failure is in the control step, not the sandbox. On the runner `unshare -U` is refused because unprivileged user namespaces are off, so the test's precondition fails before bubblewrap runs."}
+{"label": "none", "text": "Looking at the logs, the oomd kill happened at 14:02, while two dotnet test runs and the LLM server were all active. Memory pressure stayed above 60% for about 40 seconds before the kill."}
+{"label": "none", "text": "I'm going to start by reading `SessionTitles.cs` and the engine's summary code, then sketch the new fields."}
+{"label": "none", "text": "The tokenizer spends most of its cold start loading the vocabulary: 380 ms of the 450 ms. The merges table is another 50 ms."}
+{"label": "none", "text": "Here's how the decider batches questions: each checkpoint asks its catalogue questions in one Kev call, and the floors decide which answers act.\n\n```csharp\nvar answers = await fabric.DecideAsync(Checkpoint.Ingress, state, ct);\n```\n\nSo adding a question to an existing checkpoint costs no extra call."}
+{"label": "none", "text": "Why does the rail show idle? Because `Waiting` is only set by a formal approval or question; a reply that asks something in prose leaves the session idle."}
+{"label": "none", "text": "Still running: the full test suite is at 1,400 of 2,100 tests after six minutes."}
+{"label": "none", "text": "The three options compare like this:\n\n| option | latency | survives restart |\n| --- | --- | --- |\n| memory | 1 ms | no |\n| SQLite | 4 ms | yes |\n| file | 9 ms | yes |"}
+{"label": "none", "text": "Interesting: the 3090 is slower than the 4090 by only 18% here, which suggests the run is memory-bound rather than compute-bound."}
+{"label": "none", "text": "Next I'll wire the status line into `CorvidRuntime.Delivered`, then add the engine subscription."}
+{"label": "none", "text": "The build failed with NETSDK1004 because the worktree was never restored. Restoring now."}
+{"label": "none", "text": "I read through the flock relay. Messages are delivered by the member's own driving process tailing the flock's log, so nothing crosses the driver lock."}
+{"label": "none", "text": "> Should we keep the old API?\n\nThat was the question in the issue. The maintainers answered it in the thread: the old API stays for one more minor version."}
+{"label": "none", "text": "The test passes on its own but fails when run with the rest of the class, which points at shared static state in `SessionCatalogue`'s cache."}
+{"label": "none", "text": "Kev's accuracy on the 600-token state is 0.91 for `tool` and 0.84 for `done`; on the transcript-sized state it drops to 0.86 and 0.71."}
+{"label": "none", "text": "I've added the migration step and I'm writing its test now."}
+{"label": "asks_you", "text": "The fix works and all tests pass. One question before I push: do you want the option on by default?"}
+{"label": "finished", "text": "I ran the suite again to be sure. All tests pass, and the PR #77 is up for review by the code owner."}
+{"label": "asks_you", "text": "Two things left that need you:\n\n1. Add the `RUNPOD_KEY` secret to the repo settings.\n2. Re-run the failed job once it's there."}
+{"label": "none", "text": "Quick update: the first two stages finished, the third is building.\n\nMore when it's done."}
+{"label": "asks_you", "text": "I can either keep going with the XAML or stop here and open the PR with the view-model work only. What would you like?"}
+{"label": "finished", "text": "Done. Let me know if you need anything else."}
+{"label": "none", "text": "The tests haven't finished yet, I'll check back."}
+{"label": "none", "text": "What do I do about the lock? I'll try a retry."}

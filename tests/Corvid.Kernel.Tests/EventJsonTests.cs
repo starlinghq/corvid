@@ -41,6 +41,7 @@ public sealed class EventJsonTests
         [typeof(ClarificationAnswered)] = "clarification_answered",
         [typeof(SessionTitled)] = "session_titled",
         [typeof(SessionRecapped)] = "session_recapped",
+        [typeof(SessionStatusNoted)] = "session_status_noted",
         [typeof(ApprovalAssessed)] = "approval_assessed",
         [typeof(EgressRecorded)] = "egress_recorded",
         [typeof(ChildSpawned)] = "child_spawned",

@@ -20,8 +20,9 @@ public sealed partial class EngineSessionService
     public static readonly TimeSpan TailInterval = TimeSpan.FromSeconds(1);
 
     private readonly ConcurrentDictionary<Channel, Tail> _tails = new();
-    // Sessions listed as driven elsewhere, watched for their driver letting go, with the one timer that looks at them.
-    private readonly ConcurrentDictionary<string, byte> _held = new(StringComparer.Ordinal);
+    // Sessions listed as driven elsewhere, watched for their driver letting go, with the one timer that looks at them;
+    // C-043: with when a turn read as under way there stops reading so (WorkingElsewhere), or null.
+    private readonly ConcurrentDictionary<string, DateTimeOffset?> _held = new(StringComparer.Ordinal);
     private ITimer? _heldTimer;
     private int _lookingAtHeld;
 
@@ -186,11 +187,16 @@ public sealed partial class EngineSessionService
     /// <summary>
     /// A session listed as driven elsewhere, open in no view here (the Board's card, the rail): every
     /// <see cref="TailInterval"/> its lock is tried, and its summary raised again once that process lets go, so the card
-    /// stops saying "held" without a reload. An open view follows it through its own tail.
+    /// stops saying "held" without a reload. An open view follows it through its own tail. C-043: a card read as running
+    /// there (<see cref="SessionSummary.WorkingElsewhere"/>) is raised again at <paramref name="workingUntil"/> too, so a
+    /// terminal that holds the lock and writes nothing (a long call, a cancelled turn) falls back to Parked by itself.
     /// </summary>
-    private void WatchHeld(CorvidRuntime runtime, string sessionId)
+    private void WatchHeld(CorvidRuntime runtime, string sessionId, DateTimeOffset? workingUntil)
     {
-        if (_disposed || !_held.TryAdd(sessionId, 0) || Volatile.Read(ref _heldTimer) is not null)
+        if (_disposed)
+            return;
+        _held[sessionId] = workingUntil;
+        if (Volatile.Read(ref _heldTimer) is not null)
             return;
         var timer = _time.CreateTimer(_ => LookAtHeld(runtime), null, TailInterval, TailInterval);
         if (Interlocked.CompareExchange(ref _heldTimer, timer, null) is not null || _disposed)
@@ -205,9 +211,18 @@ public sealed partial class EngineSessionService
         {
             try
             {
-                foreach (var id in _held.Keys)
-                    if (runtime.Driver(id).State != LockState.HeldElsewhere && _held.TryRemove(id, out _))
+                var now = _time.GetUtcNow();
+                foreach (var (id, workingUntil) in _held)
+                {
+                    if (runtime.Driver(id).State != LockState.HeldElsewhere)
+                    {
+                        if (_held.TryRemove(id, out _))
+                            Refresh(runtime, id);
+                    }
+                    // C-043: nothing written there since: the turn no longer reads as under way.
+                    else if (workingUntil <= now && _held.TryUpdate(id, null, workingUntil))
                         Refresh(runtime, id);
+                }
             }
             finally
             {

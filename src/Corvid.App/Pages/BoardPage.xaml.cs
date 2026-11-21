@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Corvid.App.Controls;
 using Corvid.App.Core.Board;
 using Corvid.App.Core.Composition;
 using Corvid.App.Core.Markdown;
@@ -11,11 +12,12 @@ using Windows.System;
 namespace Corvid.App.Pages;
 
 /// <summary>
-/// The Board's page (Board.png): the session cards and a peek over them; the attention tray is <see cref="BoardDock"/> in
-/// the shell's dock. The view model does the work; this class owns keys and focus.
+/// The Board's page (Board.png): the session cards in the kanban's columns (C-043) and a peek over them; the attention
+/// tray is <see cref="BoardDock"/> in the shell's dock. The view model does the work; this class owns keys, focus and how
+/// many columns fit across.
 /// <para>
-/// Keys (docs/plan/ui.md §6, the <c>board</c> context): on a card the arrows move between cards across and down the
-/// grid, Enter opens the session (a job's run), Space peeks; Esc closes the peek and puts focus back on its card.
+/// Keys (docs/plan/ui.md §6, the <c>board</c> context): on a card Up and Down move within its column and Left and Right to
+/// the next column, Enter opens the session (a job's run), Space peeks; Esc closes the peek and puts focus back on its card.
 /// </para>
 /// </summary>
 public sealed partial class BoardPage : Page, IDockProvider
@@ -32,6 +34,7 @@ public sealed partial class BoardPage : Page, IDockProvider
         _windowKeyDown = OnWindowKeyDown;
         InitializeComponent();
         CardGrid.AddHandler(KeyDownEvent, new KeyEventHandler(OnCardKeyDown), true);
+        CardGrid.SizeChanged += (_, _) => ApplyColumns();
         // Esc closes the peek wherever focus is, the tray in the dock included: the window's content hears it, since a key
         // pressed in the dock never reaches the page and the shell's own Esc accelerator answers first.
         Loaded += (_, _) => XamlRoot?.Content?.AddHandler(KeyDownEvent, _windowKeyDown, true);
@@ -50,6 +53,7 @@ public sealed partial class BoardPage : Page, IDockProvider
         ViewModel.PropertyChanged += OnViewModelChanged;
         _composition.Shell.PropertyChanged += OnShellChanged;
         ApplyLayout();
+        ApplyColumns();
         Bindings.Update();
         base.OnNavigatedTo(e);
     }
@@ -85,6 +89,9 @@ public sealed partial class BoardPage : Page, IDockProvider
 
     public static string PeekState(string? state, string? detail) => BoardText.Join(state, detail);
 
+    /// <summary>A column head's fold button.</summary>
+    public static string FoldText(bool collapsed) => collapsed ? "Show" : "Hide";
+
     // ---- Layout ----
 
     private void OnShellChanged(object? sender, PropertyChangedEventArgs e)
@@ -110,6 +117,37 @@ public sealed partial class BoardPage : Page, IDockProvider
         HeadBorder.Padding = phone ? new Thickness(14, 10, 14, 10) : new Thickness(24, 12, 24, 12);
     }
 
+    /// <summary>The narrowest a column is drawn four across; two by two needs <see cref="PairWidth"/> each.</summary>
+    private const double ColumnWidth = 180, PairWidth = 260, Gap = 14;
+
+    private int _across;
+
+    /// <summary>
+    /// C-043: four columns across when they fit, two by two (Needs you and Running first) when two do, else stacked in the
+    /// order Needs you, Running, Parked, Done.
+    /// </summary>
+    private void ApplyColumns()
+    {
+        if (ViewModel is null)
+            return;
+        var width = CardGrid.ActualWidth > 0 ? CardGrid.ActualWidth : BodyPanel.ActualWidth;
+        var across = width <= 0 || width >= ColumnWidth * 4 + Gap * 3 ? 4 : width >= PairWidth * 2 + Gap ? 2 : 1;
+        if (across == _across && CardGrid.ItemsSource is not null)
+            return;
+        _across = across;
+        var columns = across == 4 ? ViewModel.Columns : ViewModel.Stacked;
+        if (!ReferenceEquals(CardGrid.ItemsSource, columns))
+            CardGrid.ItemsSource = columns;
+        if (CardGrid.ItemsPanelRoot is ColumnsPanel panel)
+            panel.Columns = across;
+        else
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (CardGrid.ItemsPanelRoot is ColumnsPanel later)
+                    later.Columns = _across;
+            });
+    }
+
     // ---- Peek ----
 
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
@@ -125,7 +163,7 @@ public sealed partial class BoardPage : Page, IDockProvider
         else if (_peeked is { } card)
         {
             _peeked = null;
-            DispatcherQueue.TryEnqueue(() => FocusCard(ViewModel.Tiles.IndexOf(card)));
+            DispatcherQueue.TryEnqueue(() => FocusCard(card));
         }
     }
 
@@ -159,21 +197,22 @@ public sealed partial class BoardPage : Page, IDockProvider
         // Keys on a card's own buttons are the buttons'; the grid's keys act on the card itself.
         if (!ReferenceEquals(e.OriginalSource, host))
             return;
-        var index = ViewModel.Tiles.IndexOf(card);
-        var columns = Columns();
+        var columns = Shown();
+        var column = columns.FindIndex(shown => shown.Cards.Contains(card));
+        var index = column < 0 ? -1 : columns[column].Cards.IndexOf(card);
         switch (e.Key)
         {
             case VirtualKey.Left:
-                e.Handled = FocusCard(index - 1);
+                e.Handled = FocusNear(columns, column, index, -1);
                 break;
             case VirtualKey.Right:
-                e.Handled = FocusCard(index + 1);
+                e.Handled = FocusNear(columns, column, index, +1);
                 break;
             case VirtualKey.Up:
-                e.Handled = FocusCard(index - columns);
+                e.Handled = column >= 0 && FocusCard(column, index - 1);
                 break;
             case VirtualKey.Down:
-                e.Handled = FocusCard(index + columns);
+                e.Handled = column >= 0 && FocusCard(column, index + 1);
                 break;
             case VirtualKey.Enter:
                 if (card.CanOpen)
@@ -192,19 +231,39 @@ public sealed partial class BoardPage : Page, IDockProvider
         }
     }
 
-    /// <summary>How many columns the grid draws now (ColumnsPanel drops to one when a column would be too narrow).</summary>
-    private int Columns()
+    /// <summary>The columns in the order drawn now.</summary>
+    private List<BoardColumnViewModel> Shown() => [.. (CardGrid.ItemsSource as IReadOnlyList<BoardColumnViewModel>) ?? ViewModel.Columns];
+
+    /// <summary>Left or Right: the nearest card at the same height in the next column that shows one, skipping empty or folded ones.</summary>
+    private bool FocusNear(List<BoardColumnViewModel> columns, int column, int index, int step)
     {
-        var width = CardGrid.ActualWidth;
-        return width >= 290 * 2 + 14 ? 2 : 1;
+        for (var next = column + step; column >= 0 && next >= 0 && next < columns.Count; next += step)
+        {
+            if (columns[next].IsCollapsed || columns[next].Cards.Count == 0)
+                continue;
+            return FocusCard(next, Math.Min(Math.Max(index, 0), columns[next].Cards.Count - 1));
+        }
+
+        return false;
     }
 
-    /// <summary>Focuses the card at a tile index; false when there is none there (the dashed card is not a stop).</summary>
-    private bool FocusCard(int index)
+    /// <summary>Focuses a card wherever it shows; false when it is not drawn (a folded column, past "Show N more").</summary>
+    private bool FocusCard(SessionCardViewModel card)
     {
-        if (index < 0 || index >= ViewModel.Tiles.Count || ViewModel.Tiles[index] is not SessionCardViewModel)
+        var columns = Shown();
+        var column = columns.FindIndex(shown => shown.Cards.Contains(card));
+        return column >= 0 && FocusCard(column, columns[column].Cards.IndexOf(card));
+    }
+
+    /// <summary>Focuses the card at an index of a drawn column; false when there is none there.</summary>
+    private bool FocusCard(int column, int index)
+    {
+        var columns = Shown();
+        if (column < 0 || column >= columns.Count || index < 0 || index >= columns[column].Cards.Count || columns[column].IsCollapsed)
             return false;
-        if (CardGrid.ContainerFromIndex(index) is not DependencyObject container || Find<ContentControl>(container) is not { } host)
+        if (CardGrid.ContainerFromIndex(column) is not DependencyObject columnContainer
+            || Find<ItemsControl>(columnContainer) is not { } cards
+            || cards.ContainerFromIndex(index) is not DependencyObject container || Find<ContentControl>(container) is not { } host)
             return false;
         host.StartBringIntoView();
         return host.Focus(FocusState.Keyboard);

@@ -379,6 +379,15 @@ public sealed class RemoteSessionService : ISessionService, IAsyncDisposable, ID
     public Task SetPinnedAsync(string sessionId, bool pinned, CancellationToken cancellationToken = default) =>
         CallAsync(AttachedProtocol.SetPinned, new JsonObject { ["sessionId"] = sessionId, ["pinned"] = pinned }, cancellationToken);
 
+    /// <summary>
+    /// C-043: the Board's Done and Parked are not served over the attached protocol yet (G-1), so an attached window shows
+    /// the columns the engine's summaries put cards in and cannot move them.
+    /// </summary>
+    public bool CanMarkBoard => false;
+
+    public Task SetBoardMarkAsync(string sessionId, BoardMark? mark, CancellationToken cancellationToken = default) =>
+        Task.FromException(new Composition.ServiceUnavailableException("The Board's Done and Parked are kept on the engine's machine; an attached window cannot set them yet."));
+
     public Task ViewedAsync(string sessionId, bool viewing, CancellationToken cancellationToken = default) =>
         CallAsync(AttachedProtocol.Viewed, new JsonObject { ["sessionId"] = sessionId, ["viewing"] = viewing }, cancellationToken);
 
