@@ -582,8 +582,8 @@ Plan §10.1 and §3.4, and `vault.md` §3.3 and "Implementation status". Linux o
   cannot create namespaces, and dies on timeout, cancellation and launcher death; and that
   the refusals above run nothing. Landlock and seccomp are also tested on their own (stage 2
   outside bubblewrap), and a small BPF interpreter checks the filter's decisions. CI runs on
-  the org's self-hosted runner (an Arch Linux host with bubblewrap and unprivileged user
-  namespaces; the runner has no root), first checks that bubblewrap and `unshare -U` work,
+  GitHub-hosted Ubuntu, installs bubblewrap and lifts AppArmor's restriction on unprivileged
+  user namespaces, first checks that bubblewrap and `unshare -U` work,
   and the required step "Sandbox confinement ran and passed" fails unless all of them ran
   with none skipped.
 
@@ -4707,6 +4707,53 @@ counting the user's own messages in a member session toward the loop guard; prun
 membership made atomic across flocks (two processes joining one session to two flocks at once both succeed, and `FlockOf`
 returns the latest); listing the
 rail reads the open flocks once per session summary (cached by head, but one query each) rather than once per listing.
+
+## The Board as a kanban (C-043)
+
+The app's Board (docs/plan/ui.md §4.13) puts each session's card in one of four columns, Running, Needs you, Parked and
+Done. Nothing new crosses a project boundary: the host reads, `Corvid.App.Engine` maps, `Corvid.App.Core` decides.
+
+**How a turn ends is read, not stored.** `HandoffRule` (`Corvid.Host.Sessions`) is a pure function over the latest
+answer's last paragraph (fenced code, quoted blocks and a trailing list dropped): a question to the person or a short
+request list is `AsksYou`, a short closing list is `Finished`, else `None`; English only. `SessionCatalogue.Fold` works
+it out as `SessionDescription.Ending` when the answer changes, so old sessions, read-only ones and the CLI get it with
+no storage. The fold also keeps `LastAnswerSequence`, the latest `SessionStatusNoted` (`Status`) and `LastWork`, and
+`InTurn` says a turn looks under way from the log alone (work after the latest answer, no open question).
+
+**The status line is model text in the log.** After an answered turn of an interactive, non-child, searchable session,
+`CorvidRuntime.Delivered` queues `SessionTitler.StatusAsync` on the maintenance chain beside the title, coalesced per
+session (`MaintenanceIdleAsync` waits for it). The local generator writes one line (temperature 0.2, the fixed seed, 40
+tokens) from the first message, the latest message and answer and the previous line, cleaned like a title, appended as
+`SessionStatusNoted(Text, ThroughSequence, Source)` with the titler's retry loop in the driving process; the scrubber
+treats it as assistant-like text. It is excluded from `SessionCatalogue.IsNews` and from the last-activity time, so it
+never ends a Done mark, re-triggers a recap or counts as activity. `Corvid:Sessions:StatusLines` turns it off.
+
+**Marks are a person's view, so they live in `ui.db`.** `UiStateStore` schema 2 adds `board_marks (session_id, mark,
+through, at)`; version-1 files are upgraded in the same immediate transaction, and an older build refuses a version-2
+file and carries on without drafts and pins. `through` is the session's `LastNews` when the person clicked: a mark holds
+only while `LastNews <= through`, so any message, answer, call, approval or question reactivates the card with no write.
+Not being in the log, a mark needs no G-12 driver lock: a session a terminal drives can be marked.
+
+**The engine maps, the app decides.** `EngineSessionService.Summarize` reads every mark in one query per listing (as
+pins), resolves it against `LastNews`, and fills `SessionSummary.Ending`, `Mark`, `MarkedAt`, `StatusLine` and
+`StatusGenerated` (the generated line when it covers the latest answer, else `HandoffRule.Question`, else the answer's
+first line), `WorkingElsewhere` (driven elsewhere, `InTurn`, written within ten minutes; the held-session watch raises
+the summary again when the ten minutes pass, so a terminal that keeps its lock and writes nothing falls back to Parked)
+and a job run's `JobRunning` and `JobFailed` from the job store's run record. `InTurn` leaves out the person's own `!`
+lines (their user-shell call takes back the message before it), which end with no answer. `Ending` is None for gateway
+chats and job runs (not `IsSearchable`): their questions are put to a guest or to no one. A channel the window has open
+drops the mark as soon as it keeps a news update (`SessionBoard.IsNews`, the live mirror of `SessionCatalogue.IsNews`),
+and keeps it dropped while a read of the log still shows the mark, so a card never snaps back into Done when its turn
+ends; a new mark clears it. Done is refused while an approval or question is open, and while another process's turn
+is under way by the log (it may wait on an approval in its terminal). `CorvidRuntime.StatusNoted` refreshes the summary.
+In `Corvid.App.Core`, `SessionBoard.Column` (in `Corvid.App.Core.Sessions`, so the rail and the Board share it) is the precedence (Running
+unless an approval is open; an approval; Done; a question or a your-turn not parked; Parked), `BoardColumnViewModel`
+holds a column's cards, and `SessionHub` sets the rail's "your turn" and the Board's badge. The bell stays formal-only.
+The new summary members are defaulted, so an older attached engine's summaries still read; attached windows cannot set
+marks.
+
+Not built (C-045 and follow-ups in plan §18): Kev's calibrated `handoff` question in place of the rule, `/done` and
+markers in the CLI's `/sessions`, drag between columns, flocks on the Board.
 
 ## Session search by meaning (C-044)
 

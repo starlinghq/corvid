@@ -2,11 +2,15 @@ name: ci
 
 # Build, test and publish checks. No secrets are used or exposed here.
 #
-# Jobs run on the org's self-hosted runner (labels self-hosted, omarchy): an Arch Linux workstation where the runner
-# is the unprivileged system user gh-runner with no sudo. The repository is public, so every job skips a pull request
-# from a fork: only members' branches and main run here, never code from outside. Steps must not need root, must not
-# install system packages, and must keep files they plant (fake secrets, homes, caches) under $RUNNER_TEMP, which the
-# runner clears after each job.
+# The test, cli and aot jobs run on GitHub-hosted ubuntu-latest: the repository is public, so standard hosted runners
+# have no minute limit, and they need no GPU. Those runners have passwordless sudo, so a job installs what it needs
+# (bubblewrap) and lifts Ubuntu's AppArmor restriction on unprivileged user namespaces, which the sandbox needs. They
+# also run a pull request from a fork, with a read-only token and no secrets, once a maintainer approves the run.
+#
+# The gpu job needs a GPU, so it runs on the org's self-hosted runner, as an unprivileged user with no sudo. It
+# skips a pull request from a fork, so only members' branches and main run there, never code from outside. Its steps
+# must not need root, must not install system packages, and must keep files they plant (fake secrets, homes, caches)
+# under $RUNNER_TEMP, which the runner clears after each job.
 on:
   pull_request:
   push:
@@ -28,17 +32,26 @@ env:
 jobs:
   test:
     name: Build and test (Linux)
-    runs-on: [self-hosted, omarchy]
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      # setup-dotnet installs to /usr/share/dotnet by default, which gh-runner cannot write.
+      # Code mode's C# tests build file-based apps outside the repository, where global.json does not apply, so the .NET
+      # host picks the newest SDK beside it. The image's /usr/share/dotnet has a newer major SDK than global.json pins;
+      # installing into the tool cache keeps only the pinned SDK in DOTNET_ROOT, as on a developer's machine.
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         env:
           DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
+
+      # The sandbox needs bubblewrap, which the hosted image lacks, and unprivileged user namespaces, which Ubuntu
+      # 24.04 restricts through AppArmor. zlib1g-dev is for the Native AOT link.
+      - name: Install bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap zlib1g-dev
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       # Warnings are errors (Directory.Build.props), including the trim and AOT analyzers.
       - name: Build
@@ -48,8 +61,8 @@ jobs:
         run: dotnet run --project tools/Corvid.Architecture -c Release --no-build -- .
 
       # The sandbox tests (C-007a) run real commands under bubblewrap, and the seccomp test needs `unshare -U` to work
-      # outside the sandbox as its control. The runner cannot install or reconfigure anything, so fail here, with the
-      # reason, if the host lacks either; the confinement steps below would otherwise fail less clearly.
+      # outside the sandbox as its control. Fail here, with the reason, if the host still lacks either; the confinement
+      # steps below would otherwise fail less clearly.
       - name: Check bubblewrap and unprivileged user namespaces
         run: |
           bwrap --version
@@ -94,10 +107,11 @@ jobs:
 
   # C-029: the CUDA variant (-p:UseCuda=true) and Kev on the RTX 3090. The CUDA build and the boundary check run every
   # time, so the variant cannot rot; obj/ is restored with UseCuda here, so the checker validates the CUDA graph. The GPU
-  # tests need no root: /dev/nvidia* are world-accessible and the CUDA 13 runtime is in /opt/cuda (ldconfig). They run as
-  # required unless the repository variable CORVID_GPU_TESTS says otherwise (set it to "skip" to make them opt-in), and
-  # are pinned to the 3090 by UUID (repository variable CORVID_CUDA_DEVICE, defaulting to it) in PCI order, so the
-  # 4060 Ti is never touched. The Kev-0.8B test skips until CORVID_STARLING_MODELS names a cache gh-runner can read.
+  # tests need no root: the device nodes are readable by the runner and the CUDA 13 runtime is on the loader path. They
+  # run as required unless the repository variable CORVID_GPU_TESTS says otherwise (set it to "skip" to make them
+  # opt-in), and are pinned to one GPU by UUID (repository variable CORVID_CUDA_DEVICE, or the default below) in PCI
+  # order, so no other GPU on the host is touched. The Kev-0.8B test skips until CORVID_STARLING_MODELS names a cache
+  # the runner can read.
   gpu:
     name: CUDA build and GPU tests (RTX 3090)
     runs-on: [self-hosted, omarchy]
@@ -111,13 +125,14 @@ jobs:
       MALLOC_MMAP_THRESHOLD_: 65536
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # setup-dotnet installs to /usr/share/dotnet by default, which the runner's user cannot write.
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         env:
           DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
 
-      - name: GPU visibility for gh-runner
+      - name: GPU visibility
         run: |
           ls -l /dev/nvidia*
           nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total --format=csv || echo "nvidia-smi failed"
@@ -155,14 +170,11 @@ jobs:
 
   cli:
     name: Single-file publish (corvid)
-    runs-on: [self-hosted, omarchy]
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
-        env:
-          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
 
@@ -191,16 +203,21 @@ jobs:
 
   aot:
     name: Native AOT publish (corvid-vault, corvid-sandbox)
-    runs-on: [self-hosted, omarchy]
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
-        env:
-          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
+
+      # The sandbox needs bubblewrap, which the hosted image lacks, and unprivileged user namespaces, which Ubuntu
+      # 24.04 restricts through AppArmor. zlib1g-dev is for the Native AOT link.
+      - name: Install bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap zlib1g-dev
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Publish
         run: dotnet publish vault/Corvid.Vault/Corvid.Vault.csproj -c Release -r linux-x64 -p:PublishAot=true -o out
@@ -214,7 +231,7 @@ jobs:
         run: dotnet publish sandbox/Corvid.Sandbox.Launcher/Corvid.Sandbox.Launcher.csproj -c Release -r linux-x64 -p:PublishAot=true -o out-sandbox
 
       # A real confined run with the native binary: the workspace is written, a planted ~/.ssh file is not readable,
-      # and the status reports every layer. HOME is a throwaway directory so nothing is planted in gh-runner's real home.
+      # and the status reports every layer. HOME is a throwaway directory so nothing is planted in the runner's home.
       - name: Run the native corvid-sandbox
         run: |
           export HOME="$RUNNER_TEMP/home"

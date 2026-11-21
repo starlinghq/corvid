@@ -11,10 +11,11 @@
       Foreground="{ThemeResource CorvidText}"
       FontSize="13.5">
   <!--
-    The Board (Board.png, Board-narrow.png; docs/plan/ui.md §4.13, F18): the page head with the counts, the filter, the
-    filter box (C-044) and the buttons that start work; the session cards two to a row (one on a phone), each row as tall as its tallest card;
-    and a peek that shows a session's latest exchange read-only. The attention tray is BoardDock, in the shell's dock.
-    Sizes and colours are corvid.css's: .page-head, .page-body, .cards, .scard, .state, .foot, .tag, .btn.sm, .seg.
+    The Board (Board.png, Board-narrow.png; docs/plan/ui.md §4.13, F18): the page head with the counts, the filter box
+    (C-044) and the buttons that start work; the session cards in a kanban of four columns (C-043: Running, Needs you, Parked, Done; two by two,
+    or stacked with Needs you first, as the width narrows); and a peek that shows a session's latest exchange read-only.
+    The attention tray is BoardDock, in the shell's dock. Sizes and colours are corvid.css's: .page-head, .page-body,
+    .cards, .scard, .state, .foot, .tag, .btn.sm.
   -->
   <Page.Resources>
     <!-- .scard: a line border (amber while it waits on you), radius 10, 12px 14px, rows 8 apart, the foot at the bottom. -->
@@ -29,6 +30,7 @@
                   Visibility="{x:Bind ui:Ui.VisibleIf(IsWaiting), Mode=OneWay}" />
           <Grid Padding="14,12" RowSpacing="8">
             <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
               <RowDefinition Height="Auto" />
               <RowDefinition Height="Auto" />
               <RowDefinition Height="Auto" />
@@ -49,10 +51,14 @@
               <TextBlock Grid.Column="1" FontSize="12.5" LineHeight="18.1" LineStackingStrategy="BlockLineHeight" TextWrapping="Wrap"
                          controls:RichText.Runs="{x:Bind local:BoardPage.StateRuns(StateLabel, StateDetail), Mode=OneWay}" />
             </Grid>
-            <TextBlock Grid.Row="3" Text="{x:Bind Detail, Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
+            <!-- C-043: where it's at, in a line: the generated status, the question the answer ends on, or its first line. -->
+            <TextBlock Grid.Row="3" Text="{x:Bind StatusLine, Mode=OneWay}" FontSize="12.5" TextWrapping="Wrap" MaxLines="2"
+                       TextTrimming="CharacterEllipsis" Visibility="{x:Bind ui:Ui.VisibleIf(ShowsStatusLine), Mode=OneWay}"
+                       ToolTipService.ToolTip="{x:Bind StatusLine, Mode=OneWay}" />
+            <TextBlock Grid.Row="4" Text="{x:Bind Detail, Mode=OneWay}" Style="{StaticResource CorvidSmallText}"
                        Visibility="{x:Bind ui:Ui.VisibleIfText(Detail), Mode=OneWay}" />
             <!-- A5 (§4.13, F18): the session's children as a tree under it: goal, status, tools, budget, models and answer. -->
-            <StackPanel Grid.Row="4" Spacing="6" Visibility="{x:Bind ui:Ui.VisibleIf(HasChildren), Mode=OneWay}">
+            <StackPanel Grid.Row="5" Spacing="6" Visibility="{x:Bind ui:Ui.VisibleIf(HasChildren), Mode=OneWay}">
               <TextBlock Text="{x:Bind ChildrenHeader, Mode=OneWay}" Style="{StaticResource CorvidSmallText}" FontWeight="SemiBold" />
               <ItemsControl ItemsSource="{x:Bind Children}" IsTabStop="False">
                 <ItemsControl.ItemsPanel>
@@ -97,7 +103,7 @@
                          Visibility="{x:Bind ui:Ui.VisibleIfText(MoreChildren), Mode=OneWay}" />
             </StackPanel>
             <!-- .foot: tags then buttons, 8 apart, at the card's bottom. -->
-            <controls:WrapRowPanel Grid.Row="5" Spacing="8" LineSpacing="8" VerticalAlignment="Bottom">
+            <controls:WrapRowPanel Grid.Row="6" Spacing="8" LineSpacing="8" VerticalAlignment="Bottom">
               <ItemsControl ItemsSource="{x:Bind Tags, Mode=OneWay}" IsTabStop="False" VerticalAlignment="Center">
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
@@ -126,6 +132,20 @@
               <controls:CorvidButton Content="Jobs" Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Foreground="{ThemeResource CorvidAccent}"
                                      Command="{x:Bind OpenJobsCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(IsJob), Mode=OneWay}"
                                      ToolTipService.ToolTip="The job's schedule and its other runs" />
+              <!-- C-043: the person's moves on the kanban; Done and Parked hold until something new happens in the session. -->
+              <controls:CorvidButton Content="Looks finished · Mark done" Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
+                                     Foreground="{ThemeResource CorvidAccent}" Command="{x:Bind MarkDoneCommand}"
+                                     Visibility="{x:Bind ui:Ui.VisibleIf(SuggestsDone), Mode=OneWay}"
+                                     ToolTipService.ToolTip="The answer reads as a finished handoff: move it to Done until something new happens in it" />
+              <controls:CorvidButton Content="Not now" Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
+                                     Command="{x:Bind NotNowCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(ShowsNotNow), Mode=OneWay}"
+                                     ToolTipService.ToolTip="Put it in Parked until something new happens in it" />
+              <controls:CorvidButton Content="Mark done" Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
+                                     Command="{x:Bind MarkDoneCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(ShowsMarkDone), Mode=OneWay}"
+                                     ToolTipService.ToolTip="{x:Bind MarkDoneHelp, Mode=OneWay}" AutomationProperties.HelpText="{x:Bind MarkDoneHelp, Mode=OneWay}" />
+              <controls:CorvidButton Content="Reopen" Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
+                                     Command="{x:Bind ReopenCommand}" Visibility="{x:Bind ui:Ui.VisibleIf(ShowsReopen), Mode=OneWay}"
+                                     ToolTipService.ToolTip="Take it out of Done" />
             </controls:WrapRowPanel>
           </Grid>
         </Grid>
@@ -150,7 +170,37 @@
       </Grid>
     </DataTemplate>
 
-    <local:BoardTileTemplateSelector x:Key="TileSelector" Card="{StaticResource CardTemplate}" NewSession="{StaticResource NewSessionTemplate}" />
+    <!-- C-043: a kanban column: its head with the count and a fold, its cards 10 apart, what an empty one says, Show N more. -->
+    <DataTemplate x:Key="ColumnTemplate" x:DataType="board:BoardColumnViewModel">
+      <StackPanel Spacing="10" AutomationProperties.Name="{x:Bind Name}">
+        <Grid ColumnSpacing="8" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="0,0,0,1" Padding="0,0,0,6">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Text="{x:Bind Head, Mode=OneWay}" FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="NoWrap"
+                     TextTrimming="CharacterEllipsis" AutomationProperties.HeadingLevel="Level2" />
+          <controls:CorvidButton Grid.Column="1" Content="{x:Bind local:BoardPage.FoldText(IsCollapsed), Mode=OneWay}"
+                                 Style="{StaticResource CorvidSmallButton}" Variant="Ghost" Command="{x:Bind ToggleCommand}"
+                                 ToolTipService.ToolTip="{x:Bind ToggleLabel, Mode=OneWay}" AutomationProperties.Name="{x:Bind ToggleLabel, Mode=OneWay}" />
+        </Grid>
+        <StackPanel Spacing="10" Visibility="{x:Bind ui:Ui.CollapsedIf(IsCollapsed), Mode=OneWay}">
+          <ItemsControl ItemsSource="{x:Bind Cards}" ItemTemplate="{StaticResource CardTemplate}" IsTabStop="False"
+                        AutomationProperties.Name="{x:Bind Name}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Spacing="10" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+          </ItemsControl>
+          <TextBlock Text="{x:Bind EmptyText}" Style="{StaticResource CorvidSmallText}" TextWrapping="Wrap"
+                     Visibility="{x:Bind ui:Ui.VisibleIf(IsEmpty), Mode=OneWay}" />
+          <controls:CorvidButton Content="{x:Bind MoreText, Mode=OneWay}" Style="{StaticResource CorvidSmallButton}" Variant="Ghost"
+                                 HorizontalAlignment="Left" Command="{x:Bind ShowMoreCommand}"
+                                 Visibility="{x:Bind ui:Ui.VisibleIf(HasMore), Mode=OneWay}" />
+        </StackPanel>
+      </StackPanel>
+    </DataTemplate>
   </Page.Resources>
 
   <Grid x:Name="Root">
@@ -167,22 +217,6 @@
                      AutomationProperties.HeadingLevel="Level1" />
           <TextBlock Text="{x:Bind ViewModel.Counts, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" TextWrapping="NoWrap"
                      VerticalAlignment="Center" />
-          <!-- .seg: all, running, waiting on you, jobs. -->
-          <Border Height="20" BorderBrush="{ThemeResource CorvidLine}" BorderThickness="1" CornerRadius="6" VerticalAlignment="Center">
-            <ItemsControl ItemsSource="{x:Bind ViewModel.Filters}" IsTabStop="False" AutomationProperties.Name="Filter">
-              <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate>
-                  <StackPanel Orientation="Horizontal" />
-                </ItemsPanelTemplate>
-              </ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="mvvm:Choice">
-                  <controls:SegmentButton Content="{x:Bind Label}" IsChecked="{x:Bind IsSelected, Mode=OneWay}" Command="{x:Bind Choose}"
-                                          AutomationProperties.HelpText="{x:Bind Description}" ToolTipService.ToolTip="{x:Bind Description}" />
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </Border>
           <!-- C-044: the filter box narrows the cards as you type (Ctrl+F or /; Esc clears it); the note says how it matched. -->
           <TextBox x:Name="FilterBox" Width="240" Height="28" MinHeight="28" Padding="8,3,8,3" FontSize="13.5" CornerRadius="6"
                    VerticalAlignment="Center" PlaceholderText="Filter sessions…" PlaceholderForeground="{ThemeResource CorvidText2}"
@@ -192,6 +226,12 @@
           <TextBlock Text="{x:Bind ViewModel.FilterNote, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" TextWrapping="NoWrap"
                      VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIfText(ViewModel.FilterNote), Mode=OneWay}"
                      AutomationProperties.LiveSetting="Polite" />
+          <TextBlock Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}" Style="{StaticResource CorvidMutedText}" TextWrapping="NoWrap"
+                     VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIfText(ViewModel.EmptyText), Mode=OneWay}"
+                     AutomationProperties.LiveSetting="Polite" />
+          <!-- C-043: why the latest Mark done, Not now or Reopen was refused. -->
+          <TextBlock Text="{x:Bind ViewModel.MarkFailure, Mode=OneWay}" Foreground="{ThemeResource CorvidRed}" TextWrapping="Wrap"
+                     VerticalAlignment="Center" Visibility="{x:Bind ui:Ui.VisibleIfText(ViewModel.MarkFailure), Mode=OneWay}" />
         </controls:WrapRowPanel>
         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
           <controls:CorvidButton Content="Open a workspace…" Command="{x:Bind ViewModel.OpenWorkspaceCommand}"
@@ -272,16 +312,16 @@
             <local:AttentionList Items="{x:Bind ViewModel.Attention, Mode=OneWay}" Margin="0,0,0,-1" />
           </Border>
         </StackPanel>
-        <ItemsControl x:Name="CardGrid" ItemsSource="{x:Bind ViewModel.Tiles}" ItemTemplateSelector="{StaticResource TileSelector}"
-                      IsTabStop="False" AutomationProperties.Name="Sessions">
+        <!-- C-043: the columns; the code behind picks four across, two by two, or stacked by the width. -->
+        <ItemsControl x:Name="CardGrid" ItemTemplate="{StaticResource ColumnTemplate}" IsTabStop="False" AutomationProperties.Name="Sessions">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate>
-              <controls:ColumnsPanel Columns="2" Spacing="14" MinColumnWidth="290" />
+              <controls:ColumnsPanel Columns="4" Spacing="14" MinColumnWidth="0" />
             </ItemsPanelTemplate>
           </ItemsControl.ItemsPanel>
         </ItemsControl>
-        <TextBlock Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}" Style="{StaticResource CorvidMutedText}"
-                   Visibility="{x:Bind ui:Ui.VisibleIf(ViewModel.IsEmpty), Mode=OneWay}" />
+        <ContentControl Content="{x:Bind ViewModel.NewSession, Mode=OneWay}" ContentTemplate="{StaticResource NewSessionTemplate}"
+                        HorizontalContentAlignment="Stretch" IsTabStop="False" MaxWidth="560" HorizontalAlignment="Left" />
         <!-- Under 1180 px the dock is an overlay; Board-narrow.png lays the tray out below the cards instead. -->
         <Border x:Name="InlineAttention" Visibility="Collapsed" Style="{StaticResource CorvidPanel}" Background="{ThemeResource CorvidBg2}"
                 AutomationProperties.Name="Attention">
@@ -329,6 +369,7 @@
               <TextBlock Text="{x:Bind ViewModel.Peek.Card.Title, Mode=OneWay}" Style="{StaticResource CorvidBodyText}" FontWeight="SemiBold"
                          TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" AutomationProperties.HeadingLevel="Level2" />
               <TextBlock Text="{x:Bind local:BoardPage.PeekState(ViewModel.Peek.Card.StateLabel, ViewModel.Peek.Card.Detail), Mode=OneWay}" Style="{StaticResource CorvidSmallText}" />
+              <TextBlock Text="{x:Bind ViewModel.Peek.Card.StatusLine, Mode=OneWay}" FontSize="12.5" TextWrapping="Wrap" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
               <controls:CorvidButton x:Name="PeekOpen" Content="Open" Style="{StaticResource CorvidSmallButton}" Foreground="{ThemeResource CorvidAccent}"

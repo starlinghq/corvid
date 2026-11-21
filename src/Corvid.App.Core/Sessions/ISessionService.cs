@@ -97,8 +97,68 @@ public sealed record SessionSummary(string Id, string Title)
 
     public DateTimeOffset? RunAt { get; init; }
 
+    /// <summary>
+    /// C-043: how the latest answer ends by the host's rule (it asks the person for something, reads as finished, or neither),
+    /// so the Board puts an idle session that asks in Needs you. English only; None when there is no answer.
+    /// </summary>
+    public TurnEnding Ending { get; init; }
+
+    /// <summary>
+    /// C-043: the person put the session in the Board's Done or Parked column (<c>ui.db</c>, G-7), and nothing has happened
+    /// since: the engine leaves it null once newer news passed the mark, so the card comes back by itself.
+    /// </summary>
+    public BoardMark? Mark { get; init; }
+
+    /// <summary>C-043: when <see cref="Mark"/> was set; Done lists the newest first.</summary>
+    public DateTimeOffset? MarkedAt { get; init; }
+
+    /// <summary>
+    /// C-043: the card's one line on where the session is at, once it is idle: the local generator's status line when it is
+    /// current (<see cref="StatusGenerated"/>), else the question the answer ends on, else the answer's first line. Data,
+    /// drawn cleaned; the Board puts the running call or the open approval and question before it.
+    /// </summary>
+    public string? StatusLine { get; init; }
+
+    /// <summary>C-043: <see cref="StatusLine"/> was written by the local generator after the latest answer.</summary>
+    public bool StatusGenerated { get; init; }
+
+    /// <summary>
+    /// C-043: another process drives it (<see cref="ReadOnly"/>) and its log shows a turn under way, with something written in
+    /// the last ten minutes: the Board shows it as running. A heuristic, bounded so a crashed terminal does not look busy forever.
+    /// </summary>
+    public bool WorkingElsewhere { get; init; }
+
+    /// <summary>C-043: for a job run, its run has not ended (the job store's run record); the Board shows it as running.</summary>
+    public bool JobRunning { get; init; }
+
+    /// <summary>C-043: for a job run, its run ended failed or interrupted; the Done card carries a red "failed" tag.</summary>
+    public bool JobFailed { get; init; }
+
     /// <summary>Items waiting on the user here, as the attention tray counts them: an approval queue is one, each question one.</summary>
     public int Attention => (PendingApprovals > 0 ? 1 : 0) + PendingQuestions;
+}
+
+/// <summary>
+/// C-043: how a turn's latest answer ends, by the host's deterministic rule over its last paragraph (Corvid.Host's
+/// <c>HandoffRule</c>), English only. A formal clarifying question is <see cref="SessionState.Waiting"/>, not this.
+/// </summary>
+public enum TurnEnding
+{
+    /// <summary>No answer, or one that neither asks nor closes.</summary>
+    None,
+    /// <summary>It asks the person for something ("PR #12 is up. Want me to merge it?"): "your turn".</summary>
+    AsksYou,
+    /// <summary>It reads as a finished handoff ("All tests pass and the PR is merged."): the Board suggests Mark done.</summary>
+    Finished,
+}
+
+/// <summary>C-043: a column the person put a session in on the Board, kept in <c>ui.db</c> until something new happens.</summary>
+public enum BoardMark
+{
+    /// <summary>"Mark done".</summary>
+    Done,
+    /// <summary>"Not now": a your-turn put aside.</summary>
+    Parked,
 }
 
 /// <summary>A session's composer as kept in <c>ui.db</c> (G-7): its text and the draft put aside with <c>Ctrl+S</c>.</summary>
@@ -286,6 +346,19 @@ public interface ISessionService
     /// </summary>
     Task SetPinnedAsync(string sessionId, bool pinned, CancellationToken cancellationToken = default) =>
         Task.FromException(new Composition.ServiceUnavailableException("Pinning comes with ui.db (G-7), which the engine keeps."));
+
+    /// <summary>Whether <see cref="SetBoardMarkAsync"/> keeps the Board's Done and Parked marks (C-043 default member: false).</summary>
+    bool CanMarkBoard => false;
+
+    /// <summary>
+    /// C-043: puts the session in the Board's Done or Parked column through its latest news (<c>ui.db</c>, G-7), or takes it
+    /// out with null ("Reopen"). Anything new in the session brings it back without a write. Done is refused while an
+    /// approval or question is open, so Done never hides what the bell still counts. The change comes back as a
+    /// <see cref="SessionChanged"/> summary.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Done was asked while an approval or question is open.</exception>
+    Task SetBoardMarkAsync(string sessionId, BoardMark? mark, CancellationToken cancellationToken = default) =>
+        Task.FromException(new Composition.ServiceUnavailableException("The Board's Done and Parked come with ui.db (G-7), which the engine keeps."));
 
     /// <summary>
     /// The person started (<paramref name="viewing"/> true) or stopped looking at a session in the Sessions area (G-6, G-7):

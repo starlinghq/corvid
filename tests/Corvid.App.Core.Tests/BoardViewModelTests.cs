@@ -34,15 +34,27 @@ public sealed class BoardViewModelTests
 
     private static SessionCardViewModel Card(Rig rig, string id) => rig.Board.Cards[id];
 
+    /// <summary>A column's cards by id, in its order.</summary>
+    private static List<string> In(BoardViewModel board, BoardColumn column) => [.. board.Column(column).Cards.Select(card => card.Id)];
+
+    /// <summary>Every card in a column, left to right.</summary>
+    private static List<string> All(BoardViewModel board) => [.. board.Columns.SelectMany(column => column.Cards).Select(card => card.Id)];
+
     [Fact]
     public void TheBoardDrawsEverySessionAsTheMockupsCardsInItsOrder()
     {
         var rig = Start();
 
-        var cards = rig.Board.Tiles.OfType<SessionCardViewModel>().Select(card => card.Id).ToList();
-        Assert.Equal(["cli-9f2e", "cli-a410", "cli-77b0", "cli-c3d2", DemoSessionService.JobSessionId], cards);
-        Assert.IsType<NewSessionTile>(rig.Board.Tiles[^1]);
-        Assert.Equal("5 sessions · 2 workspaces · 1 job run", rig.Board.Counts);
+        // C-043: the approval, then the answer that asks to merge; the terminal's turn runs; the finished
+        // Vault policy is parked with the done suggestion; the job's ended run is done.
+        // (cli-a410's question is queued inside its running turn: it runs until the turn stops to ask.)
+        Assert.Equal(["cli-a410", "cli-c3d2"], In(rig.Board, BoardColumn.Running));
+        Assert.Equal(["cli-9f2e", DemoSessionService.BumpSessionId], In(rig.Board, BoardColumn.NeedsYou));
+        Assert.Equal(["cli-77b0"], In(rig.Board, BoardColumn.Parked));
+        Assert.Equal([DemoSessionService.JobSessionId], In(rig.Board, BoardColumn.Done));
+        Assert.Equal(["Running · 2", "Needs you · 2", "Parked · 1", "Done · 1"], rig.Board.Columns.Select(column => column.Head));
+        Assert.Equal([BoardColumn.NeedsYou, BoardColumn.Running, BoardColumn.Parked, BoardColumn.Done], rig.Board.Stacked.Select(column => column.Column));
+        Assert.Equal("6 sessions · 2 workspaces · 1 job run", rig.Board.Counts);
     }
 
     [Fact]
@@ -57,12 +69,11 @@ public sealed class BoardViewModelTests
         var hub = new SessionHub(sessions, dispatcher, time, shell, bar);
         shell.Navigate(Area.Board);
         using var board = new BoardViewModel(shell, hub, new DemoBoardService(time), new SessionServiceWatcher(sessions), time, dispatcher);
-        Assert.Empty(board.Tiles.OfType<SessionCardViewModel>());
+        Assert.Empty(All(board));
 
         await hub.StartAsync(null, null, TestContext.Current.CancellationToken);
 
-        Assert.Equal(["cli-9f2e", "cli-a410", "cli-77b0", "cli-c3d2", DemoSessionService.JobSessionId],
-            board.Tiles.OfType<SessionCardViewModel>().Select(card => card.Id));
+        Assert.Equal(["cli-a410", "cli-c3d2", "cli-9f2e", DemoSessionService.BumpSessionId, "cli-77b0", DemoSessionService.JobSessionId], All(board));
         hub.Dispose();
     }
 
@@ -266,26 +277,16 @@ public sealed class BoardViewModelTests
     }
 
     [Fact]
-    public void TheFilterKeepsOnlyWhatItNamesAndSaysSoWhenNothingIs()
+    public async Task AnEmptyColumnSaysWhatWouldShowThere()
     {
         var rig = Start();
 
-        rig.Board.Filters[1].Choose.Execute(null);
-        Assert.Equal(BoardFilter.Running, rig.Board.Filter);
-        Assert.Equal(["cli-a410", "cli-c3d2"], rig.Board.Tiles.OfType<SessionCardViewModel>().Select(card => card.Id));
-        Assert.DoesNotContain(rig.Board.Tiles, tile => tile is NewSessionTile);
-        Assert.True(rig.Board.Filters[1].IsSelected);
-        Assert.False(rig.Board.Filters[0].IsSelected);
+        await rig.Sessions.SetBoardMarkAsync("cli-77b0", BoardMark.Done, TestContext.Current.CancellationToken);
 
-        rig.Board.Filters[2].Choose.Execute(null);
-        Assert.Equal(["cli-9f2e"], rig.Board.Tiles.OfType<SessionCardViewModel>().Select(card => card.Id));
-
-        rig.Board.Filters[3].Choose.Execute(null);
-        Assert.Equal([DemoSessionService.JobSessionId], rig.Board.Tiles.OfType<SessionCardViewModel>().Select(card => card.Id));
-        Assert.False(rig.Board.IsEmpty);
-
-        rig.Board.Filters[0].Choose.Execute(null);
-        Assert.Equal(6, rig.Board.Tiles.Count);
+        Assert.True(rig.Board.Column(BoardColumn.Parked).IsEmpty);
+        Assert.Equal("Nothing parked.", rig.Board.Column(BoardColumn.Parked).EmptyText);
+        Assert.Equal("Parked · 0", rig.Board.Column(BoardColumn.Parked).Head);
+        Assert.False(rig.Board.Column(BoardColumn.Done).IsEmpty);
     }
 
     [Fact]
@@ -483,8 +484,11 @@ public sealed class BoardViewModelTests
         Assert.Equal("running", card.StateLabel);
         Assert.Equal(Tone.Blue, card.StateTone);
         Assert.True(card.CanPeek);
-        var order = rig.Board.Tiles.OfType<SessionCardViewModel>().Select(tile => tile.Id).ToList();
-        Assert.True(order.IndexOf("cli-77b0") < order.IndexOf("cli-c3d2"));
+        // C-043: out of Parked into Running, after the terminal's turn that started earlier.
+        Assert.Equal(BoardColumn.Running, card.Column);
+        var running = In(rig.Board, BoardColumn.Running);
+        Assert.True(running.IndexOf("cli-c3d2") < running.IndexOf("cli-77b0"));
+        Assert.DoesNotContain("cli-77b0", In(rig.Board, BoardColumn.Parked));
     }
 
     [Fact]
@@ -517,7 +521,7 @@ public sealed class BoardViewModelTests
     {
         var rig = Start();
 
-        var tile = Assert.IsType<NewSessionTile>(rig.Board.Tiles[^1]);
+        var tile = rig.Board.NewSession;
         Assert.Equal(new MarkdownRun("corvid · main", InlineStyle.Bold), tile.Text[1]);
         Assert.False(tile.NewSessionCommand.CanExecute(null));
         Assert.False(tile.OpenWorkspaceCommand.CanExecute(null));

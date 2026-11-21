@@ -572,7 +572,7 @@ and what to change (tmux options, iTerm2 clipboard permission, VS Code settings)
 
 ## 8. Testing
 
-Three layers, run on the Arch self-hosted runner, where `/dev/ptmx` needs no root and no step has a TTY unless a
+Three layers, run on the GitHub-hosted Ubuntu runner, where `/dev/ptmx` needs no root and no step has a TTY unless a
 test allocates one.
 
 1. **Components and layout.** Snapshot tests of `Render(width)` at 40, 80, 120 and 200 columns for every block

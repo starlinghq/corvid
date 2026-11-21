@@ -17,7 +17,7 @@ public sealed class SessionHubTests
         using var sessions = new DemoSessionService(dispatcher, time, DemoScene.Main);
         using var hub = new SessionHub(sessions, dispatcher, time, shell, bar);
         await hub.StartAsync(null, null, TestContext.Current.CancellationToken);
-        var idle = shell.SessionGroups.SelectMany(group => group.Sessions).Single(session => session.State == SessionState.Idle);
+        var idle = shell.SessionGroups.SelectMany(group => group.Sessions).Single(session => session.Id == DemoSessionService.VaultSessionId);
         Assert.Equal("1 h", idle.When);
 
         time.Advance(TimeSpan.FromHours(1));

@@ -139,10 +139,16 @@ public static class SessionFinder
                 continue;
             if (Describe(sources.Log, cache, id, cancellationToken) is not { } described)
                 continue;
-            // An empty card is written too, so its mark is kept and text the session no longer holds is not found.
+            // An empty card is written too, so its mark is kept and text the session no longer holds is not found, by words
+            // or by its old vector. A log whose head went back replaces the card built from the later head.
             var text = SessionIndexText.Of(described, sources.BranchOf(id));
-            if (sources.Index.Upsert(id, described.Head, text) && text.Length > 0)
+            long? replacing = marks.TryGetValue(id, out var mark) && mark > described.Head ? mark : null;
+            if (!sources.Index.Upsert(id, described.Head, text, replacing))
+                continue;
+            if (text.Length > 0)
                 changed.Add((SessionIndex.ItemIdOf(id), text));
+            else
+                sources.Vectors?.Index.Remove(SessionIndex.ItemIdOf(id));
         }
         return changed;
     }

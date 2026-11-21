@@ -8,20 +8,16 @@ using Corvid.App.Core.Shell;
 
 namespace Corvid.App.Core.Board;
 
-/// <summary>Which sessions the Board shows (the header's segmented control).</summary>
-public enum BoardFilter
-{
-    All,
-    Running,
-    Waiting,
-    Jobs,
-}
-
 /// <summary>
 /// The Board area (docs/plan/ui.md §4.13, F18; Board.dc.html): every session as a card with its state, step, model and
-/// taint, filtered by the header's segments and narrowed by the filter box (C-044, <see cref="BoardQuery"/>), and the
-/// attention tray beside them listing everything waiting on the user
-/// across sessions, each item opening its full card.
+/// taint in a kanban of four columns (C-043: Running, Needs you, Parked, Done), narrowed by the filter box (C-044,
+/// <see cref="BoardQuery"/>), and the attention tray beside them listing everything waiting on the user across sessions,
+/// each item opening its full card.
+/// <para>
+/// A card's column is <see cref="BoardText.Column"/> of its summary. The person moves a card only to Done ("Mark done") or
+/// Parked ("Not now" on a your-turn), kept by the engine in <c>ui.db</c> through the session's latest news, so anything
+/// new in the session brings the card back out with no action; "Reopen" takes it out of Done at once.
+/// </para>
 /// <para>
 /// Sessions come from <see cref="SessionHub.Summaries"/> and <see cref="ISessionService.SessionChanged"/>, and each one's
 /// folded state through <see cref="ISessionWatcher"/> (tool calls, staged memory, the open question's options, a peek).
@@ -56,12 +52,12 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     private readonly HashSet<string> _watching = new(StringComparer.Ordinal);
     private IReadOnlyList<AttentionItem> _areaItems = [];
     private BoardStatus? _status;
-    private BoardFilter _filter = BoardFilter.All;
     private string _filterText = "";
     private Dictionary<string, string> _found = new(StringComparer.Ordinal);
     private CancellationTokenSource? _finding;
     private string _filterNote = "";
     private string _counts = "";
+    private string _markFailure = "";
     private string _attentionHead = "Attention";
     private string? _failure;
     private BoardPeekViewModel? _peek;
@@ -90,9 +86,9 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         _dispatcher = dispatcher;
         _search = search;
 
-        Filters = [.. Enum.GetValues<BoardFilter>().Select(filter =>
-            new Choice(FilterLabel(filter), FilterHelp(filter), new RelayCommand(() => Filter = filter)))];
-        Filters[0].IsSelected = true;
+        Columns = [.. Enum.GetValues<BoardColumn>().Select(column => new BoardColumnViewModel(column))];
+        // Stacked (a narrow window), what needs the person leads.
+        Stacked = [Column(BoardColumn.NeedsYou), Column(BoardColumn.Running), Column(BoardColumn.Parked), Column(BoardColumn.Done)];
         // The engine starts a session in the window's workspace; the demo's scenario cannot, so there it stays disabled.
         NewSessionCommand = new RelayCommand(_hub.StartNew, () => _hub.CanCreate);
         // A6 (G-4): a session in another workspace or a new git worktree, on the engine; disabled in the demo's scenario.
@@ -116,29 +112,20 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         _ = LoadAsync();
     }
 
-    /// <summary>The cards the filter lets through, in the Board's order, then the dashed card when the filter is All.</summary>
-    public ObservableCollection<BoardTile> Tiles { get; } = [];
+    /// <summary>C-043: the kanban's columns left to right: Running, Needs you, Parked, Done.</summary>
+    public IReadOnlyList<BoardColumnViewModel> Columns { get; }
 
-    /// <summary>Every session's card by id, whatever the filter.</summary>
+    /// <summary>C-043: the same columns stacked for a narrow window, in the order Needs you, Running, Parked, Done.</summary>
+    public IReadOnlyList<BoardColumnViewModel> Stacked { get; }
+
+    /// <summary>A column by name.</summary>
+    public BoardColumnViewModel Column(BoardColumn column) => Columns[(int)column];
+
+    /// <summary>Every session's card by id, children's included (they show under their parents, not in a column).</summary>
     public IReadOnlyDictionary<string, SessionCardViewModel> Cards => _cards;
 
+    /// <summary>The dashed card after the columns: start another session or open a workspace.</summary>
     public NewSessionTile NewSession { get; private set; }
-
-    /// <summary>The header's segments: all, running, waiting on you, jobs.</summary>
-    public IReadOnlyList<Choice> Filters { get; }
-
-    public BoardFilter Filter
-    {
-        get => _filter;
-        set
-        {
-            if (!SetProperty(ref _filter, value))
-                return;
-            foreach (var (choice, filter) in Filters.Zip(Enum.GetValues<BoardFilter>()))
-                choice.IsSelected = filter == value;
-            Rebuild();
-        }
-    }
 
     /// <summary>
     /// C-044: the filter box. Every change narrows the cards at once by their own text (<see cref="BoardQuery.Matches"/>);
@@ -170,19 +157,17 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
     public RelayCommand ClearFilterCommand { get; }
 
+    /// <summary>C-044: the filter box leaves no card in any column.</summary>
+    public bool IsEmpty => IsFiltering && Columns.All(column => column.Cards.Count == 0);
+
+    /// <summary>C-044: what the header says when the filter box leaves no card (each column's own empty line would mislead).</summary>
+    public string EmptyText => IsEmpty ? $"No session matches \"{SafeText.Clean(_filterText.Trim())}\"." : "";
+
     /// <summary>The header's counts: "5 sessions · 2 workspaces · 1 job run".</summary>
     public string Counts { get => _counts; private set => SetProperty(ref _counts, value); }
 
-    /// <summary>What the filter leaves when it leaves no card: one line on what would show here.</summary>
-    public string EmptyText => IsFiltering ? $"No session matches \"{SafeText.Clean(_filterText.Trim())}\"." : _filter switch
-    {
-        BoardFilter.Running => "Nothing is running. A session shows here while a turn runs.",
-        BoardFilter.Waiting => "Nothing waits on you. Approvals and questions show here as they arrive.",
-        BoardFilter.Jobs => "No job has run yet. Jobs shows the schedule.",
-        _ => "No sessions yet.",
-    };
-
-    public bool IsEmpty => !Tiles.OfType<SessionCardViewModel>().Any() && (_filter != BoardFilter.All || IsFiltering);
+    /// <summary>Why the latest Mark done, Not now or Reopen was refused; empty when it was not.</summary>
+    public string MarkFailure { get => _markFailure; private set => SetProperty(ref _markFailure, value); }
 
     /// <summary>The tray: the sessions' approvals and questions in the Board's order, then the areas' items.</summary>
     public ObservableCollection<AttentionItemViewModel> Attention { get; } = [];
@@ -309,7 +294,10 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         {
             card = new SessionCardViewModel(summary, _time.GetUtcNow(), _time.LocalTimeZone, card => Open(card.Id), OpenPeek,
                 // A job run's link to Jobs names the run, so Jobs lands on its job with the run marked.
-                () => _shell.Follow(new AreaLink(Area.Jobs, summary.Id)));
+                () => _shell.Follow(new AreaLink(Area.Jobs, summary.Id)))
+            {
+                Marker = _hub.Service.CanMarkBoard ? MarkAsync : null,
+            };
             _cards[summary.Id] = card;
             card.PropertyChanged += OnCardChanged;
             _ = WatchAsync(card);
@@ -345,13 +333,22 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     private IEnumerable<SessionCardViewModel> Ordered() =>
         _cards.Values.OrderBy(card => BoardText.Rank(card.Summary)).ThenByDescending(card => card.Summary.LastActivity).ThenBy(card => card.Id, StringComparer.Ordinal);
 
-    private bool Passes(SessionCardViewModel card) => _filter switch
+    /// <summary>
+    /// C-043: puts a card in Done or Parked, or takes it out (null). The engine writes <c>ui.db</c> and the card moves when
+    /// its summary comes back; a refusal (an approval opened meanwhile, the file unwritable) says why in the header.
+    /// </summary>
+    private async Task MarkAsync(SessionCardViewModel card, BoardMark? mark)
     {
-        BoardFilter.Running => card.Summary.State == SessionState.Running,
-        BoardFilter.Waiting => card.Summary.State == SessionState.Waiting,
-        BoardFilter.Jobs => card.IsJob,
-        _ => true,
-    } && Matches(card);
+        try
+        {
+            await _hub.Service.SetBoardMarkAsync(card.Id, mark).ConfigureAwait(true);
+            MarkFailure = "";
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            MarkFailure = $"could not {(mark switch { BoardMark.Done => "mark it done", BoardMark.Parked => "put it aside", _ => "reopen it" })}: {SafeText.Clean(exception.Message)}";
+        }
+    }
 
     /// <summary>C-044: the filter box lets the card through by its own text, or the engine's search found it.</summary>
     private bool Matches(SessionCardViewModel card)
@@ -371,13 +368,15 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         foreach (var card in _cards.Values)
             card.SetChildren(children.TryGetValue(card.Id, out var rows) ? rows : [], Open,
                 id => _hub.Service.StopChildAsync(id));
-        var wanted = new List<BoardTile>(Ordered().Where(card => !(card.Summary.ParentId is { } parent && _cards.ContainsKey(parent))).Where(Passes));
-        if (_filter == BoardFilter.All && !IsFiltering)
-            wanted.Add(NewSession);
-        Sync(Tiles, wanted);
-        Counts = BoardText.Counts(_cards.Values.Select(card => card.Summary).ToList());
+        // C-043: each top-level card in its column, in the column's order.
+        var byColumn = _cards.Values.Where(card => !(card.Summary.ParentId is { } parent && _cards.ContainsKey(parent)))
+            .Where(Matches)
+            .ToLookup(card => BoardText.Column(card.Summary));
+        foreach (var column in Columns)
+            column.Set([.. BoardText.Order(column.Column, byColumn[column.Column].Select(card => card.Summary)).Select(summary => _cards[summary.Id])]);
         OnPropertyChanged(nameof(IsEmpty));
         OnPropertyChanged(nameof(EmptyText));
+        Counts = BoardText.Counts(_cards.Values.Select(card => card.Summary).ToList());
         RebuildAttention();
         ApplyStatus();
         UpdateTicker();
@@ -419,7 +418,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         {
             _dispatcher.Post(() =>
             {
-                if (!cancellationToken.IsCancellationRequested)
+                if (!cancellationToken.IsCancellationRequested && !_disposed)
                     FilterNote = $"could not search: {SafeText.Clean(exception.Message)}";
             });
             return;
@@ -444,7 +443,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     }
 
     /// <summary>Reorders, inserts and removes only what changed, so a card that stays in place keeps its element and focus.</summary>
-    private static void Sync<T>(ObservableCollection<T> target, IReadOnlyList<T> wanted) where T : class
+    internal static void Sync<T>(ObservableCollection<T> target, IReadOnlyList<T> wanted) where T : class
     {
         for (var i = 0; i < wanted.Count; i++)
         {
@@ -734,20 +733,4 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
         RebuildAttention();
     }
-
-    private static string FilterLabel(BoardFilter filter) => filter switch
-    {
-        BoardFilter.Running => "running",
-        BoardFilter.Waiting => "waiting on you",
-        BoardFilter.Jobs => "jobs",
-        _ => "all",
-    };
-
-    private static string FilterHelp(BoardFilter filter) => filter switch
-    {
-        BoardFilter.Running => "Sessions with a turn running",
-        BoardFilter.Waiting => "Sessions waiting on an approval or a question",
-        BoardFilter.Jobs => "Scheduled jobs' runs",
-        _ => "Every session and job run",
-    };
 }

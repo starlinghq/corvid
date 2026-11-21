@@ -62,11 +62,12 @@ public sealed partial class CorvidRuntime
         var heads = Log.ListHeads(cancellationToken)
             .Where(pair => IsSearchable(pair.Key) && (include?.Invoke(pair.Key) ?? true))
             .ToDictionary(StringComparer.Ordinal);
-        var sources = new SessionFinderSources(Log, memory.Sessions ?? new SessionIndex(memory.Database), memory.Episodes, heads)
+        var index = memory.Sessions ?? new SessionIndex(memory.Database);
+        var sources = new SessionFinderSources(Log, index, memory.Episodes, heads)
         {
             Vectors = memory.Vectors,
             BranchOf = id => WorkspaceOf(id).Branch,
-            Embed = cards => QueueEmbed(memory, cards),
+            Embed = cards => QueueCardEmbed(memory, index, cards),
             EpisodesCaughtUp = added => QueueEmbed(memory, added),
             Cache = _searchCache,
             Time = SearchClock,
@@ -79,6 +80,26 @@ public sealed partial class CorvidRuntime
 
     private void QueueEmbed(MemoryServices memory, IReadOnlyList<Episode> added) =>
         QueueEmbed(memory, [.. added.Select(episode => (episode.ItemId, episode.Text))]);
+
+    // C-044: a card is embedded as its text stands when the embed runs, not as it stood when queued, so two searches that
+    // queue a card's embeds out of order still leave the vector of its latest text; a card emptied meanwhile is skipped.
+    private void QueueCardEmbed(MemoryServices memory, SessionIndex index, IReadOnlyList<(string ItemId, string Text)> cards)
+    {
+        lock (_maintenanceGate)
+            _maintenance = _maintenance.ContinueWith(async _ =>
+            {
+                try
+                {
+                    var texts = index.Texts([.. cards.Select(card => card.ItemId)]);
+                    var current = texts.Where(pair => pair.Value.Length > 0).Select(pair => (pair.Key, pair.Value)).ToList();
+                    if (current.Count > 0)
+                        await memory.Vectors.EmbedAsync(current).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                }
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+    }
 
     // On the maintenance chain, as QueueCatchUp's embedding is: best effort, and a failure never reaches the search.
     private void QueueEmbed(MemoryServices memory, IReadOnlyList<(string ItemId, string Text)> items)

@@ -377,6 +377,15 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
     public event Action<string, SessionRecapped>? Recapped;
 
     /// <summary>
+    /// C-043: the local generator wrote a session's status line for the Board after a turn here. Raised on the pool thread
+    /// that wrote it; handlers must be thread-safe.
+    /// </summary>
+    public event Action<string, SessionStatusNoted>? StatusNoted;
+
+    // C-043: sessions whose status line is queued and not yet begun: two turns that end before it runs write one, for the latest.
+    private readonly ConcurrentDictionary<string, byte> _statusPending = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Something in the background went wrong that a person should hear of without it stopping anything (the egress ledger
     /// could not record a request, or prune its store). Raised from any thread, often inside a model call: a surface shows it
     /// its own way (the CLI as a notice, the app in its log), never by writing to the terminal from the handler's thread
@@ -974,6 +983,13 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
             && !_titled.ContainsKey(delivery.Request.SessionId)
             && TryGetSession(delivery.Request.SessionId, out var answered) && answered.Interactive && answered.Child is null)
             QueueTitle(delivery.Request.SessionId);
+        // C-043: the Board's "where it's at" line after each turn with an answer, for the person's own conversations
+        // (IsSearchable: not a gateway chat or a job's run) and not a child. One background local call per turn, coalesced.
+        if (delivery.Result is { Text: not null, Status: not (TurnStatus.Clarifying or TurnStatus.Failed) }
+            && Titles is { Unavailable: null, Options.StatusLines: true }
+            && TryGetSession(delivery.Request.SessionId, out var noted) && noted is { Interactive: true, Child: null }
+            && IsSearchable(noted.Id))
+            QueueStatus(delivery.Request.SessionId);
         if (delivery.Request.MessageId is { } id && _waiting.TryRemove(id, out var waiter))
             waiter.TrySetResult(delivery);
     }
@@ -1019,6 +1035,29 @@ public sealed partial class CorvidRuntime : IAsyncDisposable
                         _titled[sessionId] = 0;
                         TitleChanged?.Invoke(sessionId, titled);
                     }
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                }
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+    }
+
+    // C-043: on the maintenance chain beside the title, so MaintenanceIdleAsync waits for it too. Coalesced per session: a
+    // second turn ending before this one begins is covered by it, since it reads the log when it runs.
+    private void QueueStatus(string sessionId)
+    {
+        if (!_statusPending.TryAdd(sessionId, 0))
+            return;
+        var (end, leaving) = (_lifetime.Token, _titling.Token);
+        lock (_maintenanceGate)
+            _maintenance = _maintenance.ContinueWith(async _ =>
+            {
+                _statusPending.TryRemove(sessionId, out var _);
+                try
+                {
+                    using var writing = CancellationTokenSource.CreateLinkedTokenSource(end, leaving);
+                    if (await Titles.StatusAsync(sessionId, writing.Token).ConfigureAwait(false) is { } status)
+                        StatusNoted?.Invoke(sessionId, status);
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {

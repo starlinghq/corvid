@@ -89,7 +89,7 @@ public sealed class ChildSessionViewTests
             LastActivity = time.GetUtcNow(),
         });
 
-        Assert.DoesNotContain(board.Tiles.OfType<SessionCardViewModel>(), card => card.Id == "child-1");
+        Assert.DoesNotContain(board.Columns.SelectMany(column => column.Cards), card => card.Id == "child-1");
         var parent = board.Cards["cli-9f2e"];
         Assert.True(parent.HasChildren);
         Assert.Equal("1 child session", parent.ChildrenHeader);
@@ -97,7 +97,7 @@ public sealed class ChildSessionViewTests
         Assert.Equal(("child-1", "answered", "Three docs."), (row.Id, row.Status, row.Output));
         // A child whose parent is not listed is a card of its own.
         sessions.Announce(new SessionSummary("child-2", "orphan") { ParentId = "cli-gone", Child = Child("child-2"), ReadOnly = true });
-        Assert.Contains(board.Tiles.OfType<SessionCardViewModel>(), card => card.Id == "child-2");
+        Assert.Contains(board.Columns.SelectMany(column => column.Cards), card => card.Id == "child-2");
     }
 
     [Fact]

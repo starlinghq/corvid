@@ -466,20 +466,30 @@ public sealed class SessionHub : IDisposable
         return cut >= 0 && cut < trimmed.Length - 1 ? trimmed[(cut + 1)..] : trimmed.Length > 0 ? trimmed : workspace;
     }
 
-    private SessionListItem Item(SessionSummary summary) => _shell.CreateSession(summary.Id, SafeText.Clean(summary.Title), summary.State, When(summary));
+    private SessionListItem Item(SessionSummary summary)
+    {
+        var item = _shell.CreateSession(summary.Id, SafeText.Clean(summary.Title), summary.State, When(summary));
+        item.YourTurn = SessionBoard.YourTurn(summary);
+        return item;
+    }
 
     private void Refresh(SessionListItem item, SessionSummary summary)
     {
         item.Title = SafeText.Clean(summary.Title);
         item.State = summary.State;
+        item.YourTurn = SessionBoard.YourTurn(summary);
         item.When = When(summary);
     }
 
     private void UpdateCounts()
     {
+        // The bell counts approvals and questions only: a rule's "your turn" (C-043) is the Board's to show, not to ring.
         _shell.SetAttention(Attention, _summaries.Values.Sum(summary => summary.Attention));
         _shell.SetBadge(Area.Sessions, _summaries.Values.Count(summary => InRail(summary)
             && summary.State is SessionState.Running or SessionState.Waiting));
+        // C-043: the Board's badge counts its Needs you column (children are not cards).
+        _shell.SetBadge(Area.Board, _summaries.Values.Count(summary => summary.Child is null
+            && SessionBoard.Column(summary) == BoardColumn.NeedsYou));
     }
 
     /// <summary>

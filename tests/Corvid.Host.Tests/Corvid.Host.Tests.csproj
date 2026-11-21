@@ -21,4 +21,8 @@
     <!-- The gateway tests' fake platform (C-020). -->
     <Compile Include="../Corvid.Gateway.Tests/Fakes.cs" Link="GatewayFakes.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- C-043: the labelled turn-ending replies HandoffRuleTests measures the rule on. -->
+    <None Update="Fixtures/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

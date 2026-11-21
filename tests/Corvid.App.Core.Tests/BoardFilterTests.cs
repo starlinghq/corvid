@@ -54,19 +54,21 @@ public sealed class BoardFilterTests
         };
     }
 
-    private static List<string> Shown(BoardViewModel board) => [.. board.Tiles.OfType<SessionCardViewModel>().Select(card => card.Id)];
+    // Every column's cards, left to right (C-043): the filter box narrows all four.
+    private static List<string> Shown(BoardViewModel board) => [.. board.Columns.SelectMany(column => column.Cards).Select(card => card.Id)];
 
     [Fact]
     public void Typing_narrows_the_cards_at_once_by_their_own_text_and_esc_clears_it()
     {
         using var board = Start();
         var tray = board.Attention.Count;
+        var all = Shown(board).Count;
 
         board.FilterText = "vault";
         Assert.Equal([DemoSessionService.VaultSessionId], Shown(board));
-        // While filtering, the dashed card that starts a session steps aside.
-        Assert.DoesNotContain(board.Tiles, tile => tile is NewSessionTile);
         Assert.True(board.IsFiltering);
+        Assert.False(board.IsEmpty);
+        Assert.Equal("", board.EmptyText);
 
         // A branch, a workspace and an id match too, fuzzily.
         board.FilterText = "ntfy";
@@ -85,8 +87,8 @@ public sealed class BoardFilterTests
 
         board.ClearFilterCommand.Execute(null);
         Assert.Equal("", board.FilterText);
-        Assert.Equal(5, Shown(board).Count);
-        Assert.IsType<NewSessionTile>(board.Tiles[^1]);
+        Assert.Equal(all, Shown(board).Count);
+        Assert.False(board.IsEmpty);
         Assert.False(board.ClearFilterCommand.CanExecute(null));
     }
 
@@ -104,7 +106,7 @@ public sealed class BoardFilterTests
         board.FilterText = "the CI hang";
 
         Assert.Equal(["the CI hang"], finder.Asked);
-        Assert.Equal([DemoSessionService.MainSessionId, DemoSessionService.ReleaseNotesSessionId], Shown(board));
+        Assert.Equal(new[] { DemoSessionService.MainSessionId, DemoSessionService.ReleaseNotesSessionId }.Order(), Shown(board).Order());
         Assert.Equal("by meaning", board.Cards[DemoSessionService.MainSessionId].FoundBy);
         Assert.Contains(board.Cards[DemoSessionService.MainSessionId].Tags, tag => tag.Text == "by meaning");
         Assert.Equal("by words", board.Cards[DemoSessionService.ReleaseNotesSessionId].FoundBy);
@@ -175,21 +177,17 @@ public sealed class BoardFilterTests
     }
 
     [Fact]
-    public void A_segment_and_the_filter_both_narrow_the_cards()
+    public void A_card_the_filter_keeps_stays_in_its_column()
     {
         var finder = new FakeFinder();
         using var board = Start(finder);
-        var all = Shown(board);
-        finder.Answers["the CI hang"] = [.. all.Select(id => new SessionFind(id, null, null, 0.01, ByMeaning: false, ByWords: true))];
-        board.Filter = BoardFilter.Waiting;
-        var waiting = Shown(board);
-        Assert.NotEmpty(waiting);
-        Assert.NotEqual(all.Count, waiting.Count);
+        var columns = board.Columns.ToDictionary(column => column.Column, column => column.Cards.Select(card => card.Id).ToList());
+        finder.Answers["the CI hang"] = [.. Shown(board).Select(id => new SessionFind(id, null, null, 0.01, ByMeaning: false, ByWords: true))];
 
         board.FilterText = "the CI hang";
 
-        // The engine found every session, but the segment still holds only those waiting on you.
-        Assert.Equal(waiting, Shown(board));
+        // The engine found every session: each column holds what it held, in its own order.
+        Assert.All(board.Columns, column => Assert.Equal(columns[column.Column], column.Cards.Select(card => card.Id)));
         board.FilterText = "okapi";
         Assert.Empty(Shown(board));
         Assert.Equal("No session matches \"okapi\".", board.EmptyText);

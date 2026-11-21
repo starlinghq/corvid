@@ -61,10 +61,12 @@ public sealed class SessionIndex
 
     /// <summary>
     /// Writes a session's card as of <paramref name="head"/>. A card already built from that head or a later one is kept (two
-    /// searches catching up at once); otherwise the text and head are replaced.
+    /// searches catching up at once); otherwise the text and head are replaced. A log whose head went back (a file replaced
+    /// under the same instance) is rewritten by passing the later head the caller read as <paramref name="replacing"/>: the
+    /// card is replaced only while it still holds that head.
     /// </summary>
     /// <returns>True when the text changed, so its vector needs embedding again.</returns>
-    public bool Upsert(string sessionId, long head, string text)
+    public bool Upsert(string sessionId, long head, string text, long? replacing = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(text);
@@ -79,7 +81,8 @@ public sealed class SessionIndex
             using var reader = read.ExecuteReader();
             if (reader.Read())
             {
-                if (reader.GetInt64(0) >= head)
+                var stored = reader.GetInt64(0);
+                if (stored >= head && stored != replacing)
                     return false;
                 before = reader.GetString(1);
             }
@@ -123,6 +126,26 @@ public sealed class SessionIndex
     /// Full-text search over the cards, ranked by BM25. As in <see cref="EpisodicIndex.Search"/>, a query of only terms under
     /// three characters matches by LIKE instead, most recently updated first.
     /// </summary>
+    /// <summary>The cards' current text by item id (<see cref="ItemIdOf"/>); an id without a card is absent.</summary>
+    public IReadOnlyDictionary<string, string> Texts(IReadOnlyCollection<string> itemIds)
+    {
+        ArgumentNullException.ThrowIfNull(itemIds);
+        var texts = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (itemIds.Count == 0)
+            return texts;
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT text FROM sessions WHERE item_id=$item;";
+        var item = command.Parameters.Add("$item", Microsoft.Data.Sqlite.SqliteType.Text);
+        foreach (var id in itemIds.Distinct(StringComparer.Ordinal))
+        {
+            item.Value = id;
+            if (command.ExecuteScalar() is string text)
+                texts[id] = text;
+        }
+        return texts;
+    }
+
     public IReadOnlyList<SessionCardHit> Search(string query, int limit = 20)
     {
         ArgumentNullException.ThrowIfNull(query);

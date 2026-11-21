@@ -33,6 +33,23 @@ public sealed class SessionIndexTests
     }
 
     [Fact]
+    public void A_log_whose_head_went_back_replaces_the_card_it_was_read_from_and_texts_are_read_by_item()
+    {
+        using var store = new TempStore();
+        var index = new SessionIndex(store.Database, store.Time);
+        Assert.True(index.Upsert("cli-a", 12, "the okapi migration"));
+
+        // The log was replaced and now ends at 5: replacing the head read (12) rewrites the card; any other head does not.
+        Assert.False(index.Upsert("cli-a", 5, "the narwhal plan", replacing: 9));
+        Assert.True(index.Upsert("cli-a", 5, "the narwhal plan", replacing: 12));
+        Assert.Equal(5, index.Marks()["cli-a"]);
+        Assert.Empty(index.Search("okapi"));
+
+        Assert.Equal(new Dictionary<string, string> { ["session:cli-a"] = "the narwhal plan" },
+            index.Texts(["session:cli-a", "session:cli-missing"]));
+    }
+
+    [Fact]
     public void Short_terms_match_by_like_and_ids_are_kept_apart_from_other_items()
     {
         using var store = new TempStore();

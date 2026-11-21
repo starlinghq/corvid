@@ -16,7 +16,7 @@ namespace Corvid.Kernel.Events;
 /// Scrubbed: <see cref="ToolCallIssued.Arguments"/>, <see cref="ToolResult.Result"/>, <see cref="AssistantMessage.Text"/>,
 /// <see cref="ClarificationAsked"/>'s text and options, <see cref="ApprovalRequested.Action"/> and <see cref="ApprovalRequested.Reason"/>, <see cref="Decision.State"/> and
 /// <see cref="AskedQuestion.Instructions"/> (a pre_execute or memory_op question carries arguments and text), <see cref="ApprovalAssessed"/>'s reasons and rule,
-/// <see cref="SessionTitled.Title"/> and <see cref="SessionRecapped.Text"/>, <see cref="EgressRecorded.Reason"/> and <see cref="EgressRecorded.Unkept"/>, and
+/// <see cref="SessionTitled.Title"/>, <see cref="SessionRecapped.Text"/> and <see cref="SessionStatusNoted.Text"/>, <see cref="EgressRecorded.Reason"/> and <see cref="EgressRecorded.Unkept"/>, and
 /// <see cref="DeliveryQueued.Text"/>, and since A6 (verification round 2, A6V2-06) <see cref="UserMessage.Text"/> and <see cref="UserSteered.Text"/>:
 /// a password or key pasted into the composer is replaced by its marker before the message is logged, so neither the log,
 /// the episodic index (and so <c>/search</c> and the palette's search) nor prompt history keeps it, and the prompt rendered
@@ -53,6 +53,8 @@ public static class EventScrubber
             // title is shown in every list rather than kept as a recorded message.
             SessionTitled titled when Text(titled.Title) is { } text => titled with { Title = text },
             SessionRecapped recap when Text(recap.Text) is { } text => recap with { Text = text },
+            // C-043: the Board's status line is model output over the conversation, like a recap.
+            SessionStatusNoted status when Text(status.Text) is { } text => status with { Text = text },
             ApprovalAssessed assessed => Assessed(assessed),
             // G-9: the gate's reason and why the store could not keep the request (an exception's message) can quote text.
             EgressRecorded egress => Egress(egress),

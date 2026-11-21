@@ -176,6 +176,37 @@ public sealed class SessionFinderTests : IDisposable
     }
 
     [Fact]
+    public async Task The_boards_status_line_is_on_the_card_while_it_is_current_for_the_latest_answer()
+    {
+        Say("cli-a", new UserMessage("the migration"), new AssistantMessage("Moved."));
+        var answered = _log.GetHead("cli-a", Ct);
+        Say("cli-a", new SessionStatusNoted("Okapi tables moved, indexes next", answered, StatusSources.Generated));
+
+        Assert.Equal("cli-a", Assert.Single((await SessionFinder.FindAsync(Sources(), "okapi", cancellationToken: Ct)).Found).SessionId);
+
+        // A newer answer the status line has not caught up with: it no longer says where the session is.
+        Say("cli-a", new UserMessage("now the docs"), new AssistantMessage("Docs drafted."));
+        Assert.Empty((await SessionFinder.FindAsync(Sources(), "okapi", cancellationToken: Ct)).Found);
+    }
+
+    [Fact]
+    public async Task A_card_a_rewind_empties_loses_its_vector_so_its_meaning_is_not_found()
+    {
+        Say("cli-a", new UserMessage("the okapi migration"), new AssistantMessage("Moved."));
+        SessionFinder.CatchUp(Sources(), Ct);
+        var vectors = new MemoryVectors(_database, new SqliteVectorIndex(_database), [new MemoryEmbedder("kw", new AxisEmbedder(("okapi", 0)))]);
+        vectors.BeginSwap("kw");
+        await vectors.ReembedAsync(1_000, Ct);
+        Assert.Single(vectors.Index.Having("kw", ["session:cli-a"]));
+
+        Say("cli-a", new SessionRewound(0, "undo", []));
+        var result = await SessionFinder.FindAsync(Sources(vectors), "okapi", cancellationToken: Ct);
+
+        Assert.Empty(result.Found);
+        Assert.Empty(vectors.Index.Having("kw", ["session:cli-a"]));
+    }
+
+    [Fact]
     public async Task An_untitled_sessions_card_holds_its_first_message_once()
     {
         Say("cli-a", new UserMessage("the walrus plan"), new AssistantMessage("Noted."));

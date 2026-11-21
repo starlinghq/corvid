@@ -147,12 +147,78 @@ public sealed class UiStateStoreTests : IDisposable
         {
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = "PRAGMA user_version=2;";
+            command.CommandText = "PRAGMA user_version=3;";
             command.ExecuteNonQuery();
         }
 
         var error = Assert.Throws<InvalidDataException>(() => new UiStateStore(File).Pinned());
         Assert.Contains("newer Corvid", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_new_file_is_version_2_with_the_boards_marks()
+    {
+        var store = new UiStateStore(File);
+
+        Assert.Empty(store.BoardMarks());
+        Assert.Equal(2, UserVersion());
+    }
+
+    [Fact]
+    public void A_version_1_file_gains_the_boards_marks_and_keeps_what_it_held()
+    {
+        // C-043: ui.db as Corvid wrote it before the Board's marks.
+        Directory.CreateDirectory(_root);
+        using (var connection = new SqliteConnection($"Data Source={File};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE drafts (session_id TEXT PRIMARY KEY, text TEXT NOT NULL, stash TEXT, updated_at TEXT NOT NULL);
+                CREATE TABLE pins (session_id TEXT PRIMARY KEY, pinned_at TEXT NOT NULL);
+                CREATE TABLE review_points (session_id TEXT PRIMARY KEY, turn INTEGER NOT NULL, comments INTEGER NOT NULL,
+                    at TEXT NOT NULL, head INTEGER NOT NULL);
+                CREATE TABLE seen (session_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, at TEXT NOT NULL);
+                CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
+                INSERT INTO pins (session_id, pinned_at) VALUES ('cli-1', '2026-10-24T14:05:00.0000000Z');
+                PRAGMA user_version=1;
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var store = new UiStateStore(File);
+        store.SetBoardMark("cli-1", UiBoardMarks.Done, 7, At);
+
+        Assert.Equal(["cli-1"], store.Pinned());
+        Assert.Equal(new UiBoardMark("cli-1", UiBoardMarks.Done, 7, At), store.BoardMarks()["cli-1"]);
+        Assert.Equal(2, UserVersion());
+    }
+
+    [Fact]
+    public void A_board_mark_holds_until_newer_news_and_the_last_write_wins()
+    {
+        var store = new UiStateStore(File);
+        store.SetBoardMark("cli-1", UiBoardMarks.Parked, 4, At);
+        store.SetBoardMark("cli-2", UiBoardMarks.Done, 9, At);
+        store.SetBoardMark("cli-1", UiBoardMarks.Done, 6, At.AddMinutes(1));
+
+        var marks = new UiStateStore(File).BoardMarks();
+        Assert.Equal(new UiBoardMark("cli-1", UiBoardMarks.Done, 6, At.AddMinutes(1)), marks["cli-1"]);
+        Assert.True(marks["cli-1"].HoldsAt(6));
+        Assert.False(marks["cli-1"].HoldsAt(7));
+
+        store.ClearBoardMark("cli-1");
+        Assert.Equal(["cli-2"], store.BoardMarks().Keys);
+        Assert.Throws<ArgumentException>(() => store.SetBoardMark("cli-1", "archived", 1, At));
+    }
+
+    private long UserVersion()
+    {
+        using var connection = new SqliteConnection($"Data Source={File};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA user_version;";
+        return (long)command.ExecuteScalar()!;
     }
 
     [Fact]
@@ -321,6 +387,112 @@ public sealed class SessionTitlerTests : IDisposable
 
         log.Append("s", log.GetHead("s", Ct), [EventData.Create(new UserMessage("0.2.0"))], Ct);
         Assert.Null(SessionCatalogue.Describe(log, "s", Ct)!.OpenQuestion);
+    }
+
+    [Fact]
+    public void A_list_reads_how_the_latest_answer_ends_and_a_status_line_is_not_news()
+    {
+        var log = Log(new UserMessage("open the PR"), new AssistantMessage("PR #12 is up. Want me to merge it?"));
+        var asked = SessionCatalogue.Describe(log, "s", Ct)!;
+        Assert.Equal(TurnEnding.AsksYou, asked.Ending);
+        Assert.Equal(2, asked.LastAnswerSequence);
+        Assert.False(asked.InTurn);
+
+        // C-043: the status line is about the session: no news, no activity, but the description carries it.
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new SessionStatusNoted("PR #12 open; waiting for your merge call", 2, StatusSources.Generated))], Ct);
+        var noted = SessionCatalogue.Describe(log, "s", Ct)!;
+        Assert.Equal(asked.LastNews, noted.LastNews);
+        Assert.Equal(asked.LastActivity, noted.LastActivity);
+        Assert.Equal("PR #12 open; waiting for your merge call", noted.Status?.Text);
+        Assert.Equal(TurnEnding.AsksYou, noted.Ending);
+
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new UserMessage("yes, merge"))], Ct);
+        Assert.True(SessionCatalogue.Describe(log, "s", Ct)!.InTurn);
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new AssistantMessage("PR #12 is merged."))], Ct);
+        var merged = SessionCatalogue.Describe(log, "s", Ct)!;
+        Assert.Equal(TurnEnding.Finished, merged.Ending);
+        Assert.False(merged.InTurn);
+    }
+
+    [Fact]
+    public void A_turn_reads_as_under_way_from_the_log_until_an_answer_or_a_question()
+    {
+        var log = Log(new UserMessage("run the tests"), new ToolCallIssued("c1", "shell", Json("{}")));
+        Assert.True(SessionCatalogue.Describe(log, "s", Ct)!.InTurn);
+
+        // A question the turn ended on waits on the person: the turn is not under way, whatever came after the answer.
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new ClarificationAsked("q-1", "Which project?", []))], Ct);
+        Assert.False(SessionCatalogue.Describe(log, "s", Ct)!.InTurn);
+
+        // The person's own ! line has no answer: it never reads as a turn under way.
+        var shell = new SqliteEventLog(Path.Combine(_root, "shell.db"));
+        shell.Append("t", 0, [EventData.Create(new UserMessage("hi")), EventData.Create(new AssistantMessage("Hello.")),
+            EventData.Create(new UserMessage("!!ls", LocalOnly: true)), EventData.Create(new ToolCallIssued("u1", "shell", Json("{}"), LocalOnly: true)),
+            EventData.Create(new ToolResult("u1", Json("{}"), LocalOnly: true))], Ct);
+        Assert.False(SessionCatalogue.Describe(shell, "t", Ct)!.InTurn);
+    }
+
+    [Fact]
+    public void A_plain_shell_line_ends_with_no_answer_and_never_reads_as_a_turn_under_way()
+    {
+        // A ! line (not !!) is logged without LocalOnly: its output goes to the model with the next message.
+        var log = new SqliteEventLog(Path.Combine(_root, "plain.db"));
+        log.Append("t", 0, [EventData.Create(new UserMessage("hi")), EventData.Create(new AssistantMessage("Hello.")),
+            EventData.Create(new UserMessage("!ls")), EventData.Create(new ToolCallIssued("user-shell", "shell", Json("""{"command":"ls"}"""))),
+            EventData.Create(new ToolResult("user-shell", Json("""{"exit_code":0}""")))], Ct);
+        Assert.False(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+
+        // Read between the message and its call (the line's command still runs), the message is a turn's start until the
+        // call after it shows it was a ! line.
+        log.Append("t", log.GetHead("t", Ct), [EventData.Create(new UserMessage("!git status"))], Ct);
+        Assert.True(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+        log.Append("t", log.GetHead("t", Ct), [EventData.Create(new ToolCallIssued("user-shell-2", "shell", Json("""{"command":"git status"}""")))], Ct);
+        Assert.False(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+        log.Append("t", log.GetHead("t", Ct), [EventData.Create(new ToolResult("user-shell-2", Json("""{"exit_code":0}""")))], Ct);
+        Assert.False(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+
+        // A message to the model after it is a turn again.
+        log.Append("t", log.GetHead("t", Ct), [EventData.Create(new UserMessage("why is the tree dirty?"))], Ct);
+        Assert.True(SessionCatalogue.Describe(log, "t", Ct)!.InTurn);
+    }
+
+    private static System.Text.Json.JsonElement Json(string text) => System.Text.Json.JsonDocument.Parse(text).RootElement.Clone();
+
+    [Fact]
+    public async Task A_status_line_is_written_through_the_latest_answer_from_the_task_and_the_latest_exchange()
+    {
+        var log = Log(new UserMessage("!!cat secret.txt", LocalOnly: true), new UserMessage("fix the flaky sandbox test"),
+            new AssistantMessage("Skipped the control step."), new UserMessage("open a PR"), new AssistantMessage("PR #12 is up. Want me to merge it?"));
+        var chat = new ScriptedChat(_ => "Status: \"PR #12 open, waiting for your merge call.\"");
+        var titler = new SessionTitler(log, chat);
+
+        var status = await titler.StatusAsync("s", Ct);
+
+        Assert.Equal(new SessionStatusNoted("PR #12 open, waiting for your merge call", 5, StatusSources.Generated), status);
+        var prompt = Assert.Single(chat.Prompts);
+        Assert.Equal(SessionTitler.StatusPrompt, prompt[0].Text);
+        Assert.Contains("Task: fix the flaky sandbox test", prompt[^1].Text, StringComparison.Ordinal);
+        Assert.Contains("Latest message: open a PR", prompt[^1].Text, StringComparison.Ordinal);
+        Assert.Contains("Latest answer: PR #12 is up", prompt[^1].Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", prompt[^1].Text, StringComparison.Ordinal);
+        // Current: no second call until another answer.
+        Assert.Null(await titler.StatusAsync("s", Ct));
+        Assert.Single(chat.Prompts);
+
+        log.Append("s", log.GetHead("s", Ct), [EventData.Create(new UserMessage("merge it")), EventData.Create(new AssistantMessage("Merged."))], Ct);
+        Assert.NotNull(await titler.StatusAsync("s", Ct));
+        Assert.Contains("Previous status: PR #12 open, waiting for your merge call", chat.Prompts.Last()[^1].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task No_status_line_without_a_local_generator_or_with_it_turned_off_or_when_the_generator_fails()
+    {
+        var log = Log(new UserMessage("hi"), new AssistantMessage("Hello."));
+
+        Assert.Null(await new SessionTitler(log, null).StatusAsync("s", Ct));
+        Assert.Null(await new SessionTitler(log, new ScriptedChat(_ => "x"), new SessionTitlerOptions { StatusLines = false }).StatusAsync("s", Ct));
+        Assert.Null(await new SessionTitler(log, new ScriptedChat(_ => throw new InvalidOperationException("down"))).StatusAsync("s", Ct));
+        Assert.Null(SessionCatalogue.Describe(log, "s", Ct)!.Status);
     }
 
     [Fact]
@@ -559,6 +731,27 @@ public sealed class SessionRecordsHostTests
 
         Assert.Equal((session.Id, new SessionTitled("Boat colour question", TitleSources.Generated)), Assert.Single(titled));
         Assert.Equal("Boat colour question", SessionCatalogue.Describe(runtime.Log, session.Id, TestContext.Current.CancellationToken)!.Title);
+    }
+
+    [Fact]
+    public async Task Each_answered_turn_gets_a_status_line_from_the_local_generator_in_the_background()
+    {
+        var generator = new FakeGenerator(Reply.Say("PR #12 is up. Want me to merge it?"), Reply.Say("PR #12 open; waiting for your merge call"));
+        await using var host = TestHost.Create(new FakeModels(generator), new Dictionary<string, string?> { ["Corvid:Sessions:StatusLines"] = "true" });
+        await using var runtime = await host.StartAsync();
+        var noted = new ConcurrentQueue<(string, SessionStatusNoted)>();
+        runtime.StatusNoted += (id, status) => noted.Enqueue((id, status));
+        var session = runtime.OpenSession();
+
+        await session.SendAsync("open a PR for the fix", TestContext.Current.CancellationToken);
+        await runtime.MaintenanceIdleAsync();
+
+        var (id, status) = Assert.Single(noted);
+        Assert.Equal(session.Id, id);
+        Assert.Equal("PR #12 open; waiting for your merge call", status.Text);
+        var described = SessionCatalogue.Describe(runtime.Log, session.Id, TestContext.Current.CancellationToken)!;
+        Assert.Equal(described.LastAnswerSequence, described.Status?.ThroughSequence);
+        Assert.Equal(TurnEnding.AsksYou, described.Ending);
     }
 
     [Fact]

@@ -337,6 +337,8 @@ internal sealed class FakeModels
         // G-6: titles and recaps would take the generator's script too; tests of them turn them on.
         ["Corvid:Sessions:Titles"] = "false",
         ["Corvid:Sessions:RecapAfterMinutes"] = "0",
+        // C-043: the Board's status line after each turn too; its tests turn it on.
+        ["Corvid:Sessions:StatusLines"] = "false",
     };
 
     /// <summary>Replaces the model providers (Starling by default) with these fakes and registers the note tools.</summary>

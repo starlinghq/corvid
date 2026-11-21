@@ -13,9 +13,13 @@ public static class SessionIndexText
     /// <summary>How much of the latest answer (where the work is now) the card keeps.</summary>
     public const int LastAnswerChars = 600;
 
+    /// <summary>How much of the Board's status line (C-043) the card keeps; a status line is one short line.</summary>
+    public const int StatusChars = 200;
+
     /// <summary>
-    /// The card: the title, the first message and the latest answer (each cut, without control or format characters) and
-    /// the branch, one per line; blank parts are left out. Only a title event's title counts: an untitled session's title is
+    /// The card: the title, the first message, the latest answer and the Board's status line while it is current for that
+    /// answer (C-043; not after an undo or rollback, which may have taken back what it summed up), each cut, without
+    /// control or format characters, and the branch, one per line; blank parts are left out. Only a title event's title counts: an untitled session's title is
     /// its first message's opening, which the card holds already. User, model and tool text: it is indexed and embedded,
     /// never put in a prompt.
     /// </summary>
@@ -30,6 +34,9 @@ public static class SessionIndexText
             description.Titled is { } titled ? SessionCatalogue.Line(titled.Title) : null,
             Cut(description.FirstMessage, FirstMessageChars),
             Cut(description.LastAnswer, LastAnswerChars),
+            description.Status is { } status && !description.Rewound && status.ThroughSequence >= description.LastAnswerSequence
+                ? Cut(status.Text, StatusChars)
+                : null,
             branch,
         };
         return string.Join('\n', parts.Where(part => !string.IsNullOrWhiteSpace(part)).Select(part => part!.Trim()).Distinct(StringComparer.Ordinal));
