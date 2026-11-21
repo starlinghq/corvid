@@ -25,6 +25,9 @@ public interface IVectorIndex
 
     /// <summary>Removes every vector of an embedder (after a swap completes).</summary>
     void RemoveEmbedder(string embedderId);
+
+    /// <summary>Removes an item's vectors under every embedder (C-044: a session card whose text is gone).</summary>
+    void Remove(string itemId);
 }
 
 /// <summary>
@@ -64,6 +67,16 @@ public sealed class SqliteVectorIndex(MemoryDatabase database) : IVectorIndex
         command.Parameters.AddWithValue("$vector", MemoryMarshal.AsBytes(normalized.AsSpan()).ToArray());
         command.ExecuteNonQuery();
         transaction.Commit();
+    }
+
+    public void Remove(string itemId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemId);
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM vectors WHERE item_id=$item;";
+        command.Parameters.AddWithValue("$item", itemId);
+        command.ExecuteNonQuery();
     }
 
     public IReadOnlyList<VectorHit> Search(string embedderId, ReadOnlySpan<float> query, int limit, Func<string, bool>? filter = null)

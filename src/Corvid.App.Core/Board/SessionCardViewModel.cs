@@ -50,6 +50,7 @@ public sealed class SessionCardViewModel : BoardTile
     private string _detail = "";
     private IReadOnlyList<StatusTag> _tags = [];
     private string _automationName = "";
+    private string _foundBy = "";
     private BoardColumn _column;
     private string _statusLine = "";
 
@@ -97,6 +98,20 @@ public sealed class SessionCardViewModel : BoardTile
     public string Detail { get => _detail; private set => SetProperty(ref _detail, value); }
 
     public IReadOnlyList<StatusTag> Tags { get => _tags; private set => SetProperty(ref _tags, value); }
+
+    /// <summary>
+    /// C-044: how the Board's filter found the card when its own text did not match ("by meaning", "by words"): shown as a
+    /// tag while the filter holds it. Empty otherwise.
+    /// </summary>
+    public string FoundBy
+    {
+        get => _foundBy;
+        set
+        {
+            if (SetProperty(ref _foundBy, value ?? ""))
+                Refresh();
+        }
+    }
 
     /// <summary>The card's whole text in one line, for a screen reader.</summary>
     public string AutomationName { get => _automationName; private set => SetProperty(ref _automationName, value); }
@@ -290,6 +305,8 @@ public sealed class SessionCardViewModel : BoardTile
         Column = BoardText.Column(_summary);
         StatusLine = BoardText.StatusLine(_summary);
         var tags = BoardText.Tags(_summary);
+        if (_foundBy.Length > 0)
+            tags = [.. tags, new StatusTag(_foundBy, Tone.Grey, "The session search found it for the filter, though its title and preview do not match the words")];
         if (!tags.SequenceEqual(Tags))
             Tags = tags;
         AutomationName = BoardText.Join(Title, Text(Meta), $"{StateLabel}, {Text(StateDetail)}", ShowsStatusLine ? StatusLine : null, Detail,

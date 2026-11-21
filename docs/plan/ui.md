@@ -287,7 +287,9 @@ by side; for MCP tools the server's trust; the deadline as a countdown (five min
 
 - **Session list**: title (generated locally after the first exchange, K-9; renameable, G-6), time since activity,
   workspace, branch, surface (`cli-`, `acp-`, `http-`, gateway, `job:`), turn count, taint, a preview. Search by typing;
-  G-5 searches content across sessions through the episodic index. Pinned and archived are UI state. Nothing in the log
+  G-5 searches content across sessions through the episodic index, and (C-044) sessions by what they are about: each
+  session's title, first message, latest answer and branch, by words and, with an embedder, by meaning. `Ctrl+Shift+F`
+  lists up to five such sessions above what was said. Pinned and archived are UI state. Nothing in the log
   is ever deleted, and the list says so where a user looks for delete.
 - **One driver per session.** A session open in another process (a terminal running `corvid chat --session`) shows as a
   read-only live view that tails the log (G-12), with "take over" once the other side releases it.
@@ -437,6 +439,11 @@ Each idle card carries a one-line **status** on where it is at: the local genera
 `Corvid:Sessions:StatusLines`), else the question the answer ends on, else the answer's first line; a running card says
 its call and step, a waiting one its approval or question. Children stay rows under their parent, never cards.
 
+A filter box in the Board's header ("Filter sessions…", `Ctrl+F` or `/`, `Esc` clears it; C-044) narrows the cards as
+you type by their title, preview, id, workspace, branch and flock, with no engine involved; from three characters the
+engine's session search (G-5) adds the sessions it finds by meaning or by words, each tagged with how; one found only by
+meaning joins from two words. The attention tray is never filtered.
+
 ### 4.14 Remote and companion
 
 Attached mode over loopback comes first. The WebAssembly build, served by the engine on the LAN after a pairing code
@@ -560,7 +567,7 @@ parent with its budget and models (A5), opens read-only with its parent linked, 
 source file becomes an `@` reference; a dropped folder is offered as a workspace to open.
 
 **F20 Search and export.** `Ctrl+Shift+F` searches across sessions through the episodic index; a hit opens the session
-at that turn. Export writes markdown, a self-contained HTML page or JSONL to a file the user picks.
+at that turn. Above the turns, a Sessions group lists the sessions the search is about (C-044), opening each at its head. Export writes markdown, a self-contained HTML page or JSONL to a file the user picks.
 
 **F21 Audit.** The user opens Audit for a session, filters to `tool_call_issued` and `approval_resolved`, reads a raw
 event, runs a scan with "fail on high", and exports a trace with metadata retention.
@@ -660,7 +667,7 @@ structured questions, rule removal, images, titles and `SessionUpdates`. New:
 | G-2 | the approval assessment on the stream for calls that ran unasked | "why it ran unasked" on every card |
 | G-3 | restore of one file, later one hunk, from the ledger | revert in Review |
 | G-4 | a workspace per session or per runtime instance, and worktree creation (built in A6: `WorkspaceBound`, Open a workspace on the Board, `/workspace`, `--workspace`, `delegate_task` `isolation: worktree`) | several workspaces in one window, worktree isolation |
-| G-5 | a search API over sessions through the episodic index (built in A6: `CorvidRuntime.SearchSessions`, `/search`, `Ctrl+Shift+F`) | cross-session search |
+| G-5 | a search API over sessions through the episodic index (built in A6: `CorvidRuntime.SearchSessions`, `/search`, `Ctrl+Shift+F`), and sessions by meaning (built in C-044: the session index in memory.db schema 4, `CorvidRuntime.FindSessionsAsync`, the palette's Sessions group, the Board's filter box) | cross-session search |
 | G-6 | user titles and recaps as events (extends K-9) | rename, recap |
 | G-7 | the `ui.db` conventions in the host, so the CLI and the app share drafts and pins (schema 2, C-043: the Board's Done and Parked marks in `board_marks`, held through the session's latest news) | drafts, pins, layouts, the Board's marks |
 | G-8 | correct-then-approve for staged memory | memory review |
@@ -735,3 +742,4 @@ A5 phase; attached mode, worktrees, images, search and packaging in A6. Voice an
 | 0.2 | 2026-10-25 | A6: G-1, G-4, G-5, K-8, U-7 and U-9 marked built (docs/plan/ui-handoff.md §1.7). |
 | 0.3 | 2026-10-25 | A6 fix round: U-12, attached mode's scope in A6 (Sessions and the Board) and its cleartext listener. |
 | 0.4 | 2026-11-14 | C-043: the Board as a kanban (§4.13): Running, Needs you, Parked and Done; "your turn" by rule; Mark done, Not now and Reopen in `ui.db` schema 2 (G-7); a per-card status line; the bell stays formal-only (§4.5). |
+| 0.5 | 2026-11-14 | C-044: session search by meaning (§4.6, F20, G-5) and the Board's filter box (§4.13). |

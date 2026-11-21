@@ -45,15 +45,71 @@ public sealed partial class CorvidRuntime
         // C-042: a flock's log holds its members' messages, each also in the member's own log.
         && !FlockSessions.IsFlock(sessionId);
 
-    // On the maintenance chain, as QueueCatchUp's embedding is: best effort, and a failure never reaches the search.
-    private void QueueEmbed(MemoryServices memory, IReadOnlyList<Episode> added)
+    /// <summary>
+    /// C-044 (G-5): finds sessions by what they are about (<see cref="SessionFinder"/>): their cards' words and, when memory
+    /// has a retrieval embedder, their meaning, fused with the turns <see cref="SearchSessions"/> would find. The cards of
+    /// sessions whose head moved are rewritten first and embedded in the background. Without an embedder the search is by
+    /// words only (<see cref="SessionFindResult.Embedder"/> null); with memory off there is no index, and the result says why.
+    /// The index work is synchronous SQLite and only the query's embedding awaits, so a surface calls it on the pool.
+    /// </summary>
+    /// <param name="include">Narrows the sessions searched, within <see cref="IsSearchable"/>; null searches every one of those.</param>
+    public async Task<SessionFindResult> FindSessionsAsync(string query, int limit = 20, Func<string, bool>? include = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (Memory is not { } memory)
+            return SessionFindResult.Off("memory is off (Corvid:Memory:Enabled), so there is no session index to search");
+        var heads = Log.ListHeads(cancellationToken)
+            .Where(pair => IsSearchable(pair.Key) && (include?.Invoke(pair.Key) ?? true))
+            .ToDictionary(StringComparer.Ordinal);
+        var index = memory.Sessions ?? new SessionIndex(memory.Database);
+        var sources = new SessionFinderSources(Log, index, memory.Episodes, heads)
+        {
+            Vectors = memory.Vectors,
+            BranchOf = id => WorkspaceOf(id).Branch,
+            Embed = cards => QueueCardEmbed(memory, index, cards),
+            EpisodesCaughtUp = added => QueueEmbed(memory, added),
+            Cache = _searchCache,
+            Time = SearchClock,
+        };
+        return await SessionFinder.FindAsync(sources, query, limit, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The clock a session search's recency boost reads; a test sets its own.</summary>
+    internal TimeProvider SearchClock { get; set; } = TimeProvider.System;
+
+    private void QueueEmbed(MemoryServices memory, IReadOnlyList<Episode> added) =>
+        QueueEmbed(memory, [.. added.Select(episode => (episode.ItemId, episode.Text))]);
+
+    // C-044: a card is embedded as its text stands when the embed runs, not as it stood when queued, so two searches that
+    // queue a card's embeds out of order still leave the vector of its latest text; a card emptied meanwhile is skipped.
+    private void QueueCardEmbed(MemoryServices memory, SessionIndex index, IReadOnlyList<(string ItemId, string Text)> cards)
     {
         lock (_maintenanceGate)
             _maintenance = _maintenance.ContinueWith(async _ =>
             {
                 try
                 {
-                    await memory.Vectors.EmbedAsync([.. added.Select(episode => (episode.ItemId, episode.Text))]).ConfigureAwait(false);
+                    var texts = index.Texts([.. cards.Select(card => card.ItemId)]);
+                    var current = texts.Where(pair => pair.Value.Length > 0).Select(pair => (pair.Key, pair.Value)).ToList();
+                    if (current.Count > 0)
+                        await memory.Vectors.EmbedAsync(current).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                }
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+    }
+
+    // On the maintenance chain, as QueueCatchUp's embedding is: best effort, and a failure never reaches the search.
+    private void QueueEmbed(MemoryServices memory, IReadOnlyList<(string ItemId, string Text)> items)
+    {
+        lock (_maintenanceGate)
+            _maintenance = _maintenance.ContinueWith(async _ =>
+            {
+                try
+                {
+                    await memory.Vectors.EmbedAsync(items).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException)
                 {

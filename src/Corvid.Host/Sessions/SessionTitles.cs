@@ -84,6 +84,13 @@ public sealed record SessionDescription(string Id, long Head)
     public bool HasContent { get; init; }
 
     /// <summary>
+    /// The log holds a <c>SessionRewound</c> (an undo or rollback, C-014). The description is folded over the whole log, so
+    /// its first message or latest answer may then be one the rewind took out of the conversation; a surface that must show
+    /// only what the conversation still holds (the session search, A6) reads those from the session's projection.
+    /// </summary>
+    public bool Rewound { get; init; }
+
+    /// <summary>
     /// The title a list shows: the title event's, else the first message's first line, cut to <see cref="SessionCatalogue.TitleLength"/>;
     /// null for a session with neither. Model and user text: a surface cleans it of hidden characters before showing it.
     /// </summary>
@@ -144,6 +151,7 @@ public static class SessionCatalogue
         var last = from.LastActivity;
         var news = from.LastNews;
         var content = from.HasContent;
+        var rewound = from.Rewound;
         var (answeredAt, work, status) = (from.LastAnswerSequence, from.LastWork, from.Status);
         var (messageWork, workBefore) = (from.MessageWork, from.WorkBeforeMessage);
         foreach (var item in events)
@@ -198,6 +206,9 @@ public static class SessionCatalogue
                 case SessionRecapped value:
                     recap = value;
                     break;
+                case SessionRewound:
+                    rewound = true;
+                    break;
             }
         }
         return new SessionDescription(from.Id, head)
@@ -218,6 +229,7 @@ public static class SessionCatalogue
             Recap = recap,
             OpenQuestion = question,
             HasContent = content,
+            Rewound = rewound,
         };
     }
 

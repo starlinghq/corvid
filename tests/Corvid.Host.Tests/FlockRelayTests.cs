@@ -51,6 +51,10 @@ public sealed class FlockRelayTests
         Assert.Equal(("The token endpoint moved to /v2/token.", "api", "team"), (message.Text, message.From, message.Flock));
         Assert.Equal("Updated the client.", events.OfType<AssistantMessage>().Last().Text);
         Assert.False(web.Tainted);
+        // The delivery is recorded once the post returns, which can be after a fast turn has answered.
+        var until = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        while (runtime.Flocks.Get(flock.Id)!.Pending(web.Id).Count > 0 && DateTimeOffset.UtcNow < until)
+            await Task.Delay(20, Ct);
         flock = runtime.Flocks.Get(flock.Id)!;
         Assert.Empty(flock.Pending(web.Id));
         Assert.True(flock.WasDelivered(flock.Messages[0].Sequence, web.Id));

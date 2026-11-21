@@ -350,7 +350,7 @@ public sealed class SettingsTests
         var history = rows.Single(row => row.Id == KeyCommands.History);
         var find = rows.Single(row => row.Id == KeyCommands.Find);
         Assert.Equal("Anywhere", settings.KeyGroups[0].Heading);
-        Assert.Equal("In Audit, Ctrl+F puts the caret in the path or tool filter instead. In Memory, Ctrl+F searches the facts instead. In Skills, Ctrl+F puts the caret in the skills filter instead.", find.ShadowText);
+        Assert.Equal("In Audit, Ctrl+F puts the caret in the path or tool filter instead. In Memory, Ctrl+F searches the facts instead. In Board, Ctrl+F puts the caret in the session filter (also /; Esc clears it) instead. In Skills, Ctrl+F puts the caret in the skills filter instead.", find.ShadowText);
         Assert.True(rows.Single(row => row.Id == "composer.send").IsFixed);
         Assert.Equal("comes with the scratch fork (F7)", rows.Single(row => row.Id == KeyCommands.Aside).ComesWith);
 

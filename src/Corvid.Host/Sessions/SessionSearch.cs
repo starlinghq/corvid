@@ -40,7 +40,11 @@ public sealed class SessionSearchCache
 {
     private readonly ConcurrentDictionary<string, SessionView> _views = new(StringComparer.Ordinal);
 
-    internal sealed record SessionView(long Head, ImmutableArray<HiddenRange> Hidden, long[] Prompts, string? Title)
+    /// <param name="FirstMessage">The first message the user sent that the conversation still holds, with the filters
+    /// <see cref="SessionDescription.FirstMessage"/> uses (no <c>!!</c> line, no guest's message); null when none.</param>
+    /// <param name="LastAnswer">The latest answer the conversation still holds (a plan is not one), or null.</param>
+    internal sealed record SessionView(long Head, ImmutableArray<HiddenRange> Hidden, long[] Prompts, string? Title,
+        string? FirstMessage = null, string? LastAnswer = null)
     {
         public bool IsVisible(long sequence) => !Hidden.Any(range => range.Contains(sequence));
     }
@@ -52,7 +56,10 @@ public sealed class SessionSearchCache
         var snapshot = SessionProjection.Load(log, sessionId, throughSequence: head, expandCompactions: true, cancellationToken: cancellationToken);
         var prompts = snapshot.Transcript.Where(entry => entry.Content is UserMessage).Select(entry => entry.FromSequence).Order().ToArray();
         var title = SessionCatalogue.Describe(log, sessionId, cancellationToken)?.Title;
-        var view = new SessionView(head, snapshot.Hidden, prompts, title);
+        var first = snapshot.Transcript.Select(entry => entry.Content).OfType<UserMessage>()
+            .FirstOrDefault(user => user.LocalOnly != true && user.From is null)?.Text;
+        var answer = snapshot.Transcript.Select(entry => entry.Content).OfType<AssistantMessage>().LastOrDefault(assistant => assistant.Plan is null)?.Text;
+        var view = new SessionView(head, snapshot.Hidden, prompts, title, first, answer);
         _views[sessionId] = view;
         return view;
     }

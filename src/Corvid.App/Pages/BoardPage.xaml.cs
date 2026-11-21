@@ -17,7 +17,8 @@ namespace Corvid.App.Pages;
 /// many columns fit across.
 /// <para>
 /// Keys (docs/plan/ui.md §6, the <c>board</c> context): on a card Up and Down move within its column and Left and Right to
-/// the next column, Enter opens the session (a job's run), Space peeks; Esc closes the peek and puts focus back on its card.
+/// the next column, Enter opens the session (a job's run), Space peeks; Esc closes the peek and puts focus back on its card. Ctrl+F,
+/// or / outside a text field, puts the caret in the filter box (C-044), where Esc clears it.
 /// </para>
 /// </summary>
 public sealed partial class BoardPage : Page, IDockProvider
@@ -33,6 +34,13 @@ public sealed partial class BoardPage : Page, IDockProvider
     {
         _windowKeyDown = OnWindowKeyDown;
         InitializeComponent();
+        var find = new KeyboardAccelerator { Key = VirtualKey.F, Modifiers = VirtualKeyModifiers.Control };
+        find.Invoked += (_, args) =>
+        {
+            FocusFilter();
+            args.Handled = true;
+        };
+        KeyboardAccelerators.Add(find);
         CardGrid.AddHandler(KeyDownEvent, new KeyEventHandler(OnCardKeyDown), true);
         CardGrid.SizeChanged += (_, _) => ApplyColumns();
         // Esc closes the peek wherever focus is, the tray in the dock included: the window's content hears it, since a key
@@ -181,9 +189,36 @@ public sealed partial class BoardPage : Page, IDockProvider
 
     private void OnWindowKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        // C-044: / outside a text field (Shift+/ is ? for help, the shell's) puts the caret in the filter box.
+        if (e.Key == (VirtualKey)191 && !e.Handled && _composition?.Shell.ShowScrim != true
+            && !Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down)
+            && XamlRoot is { } root && FocusManager.GetFocusedElement(root) is not (TextBox or PasswordBox or RichEditBox))
+        {
+            FocusFilter();
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == VirtualKey.Escape && ViewModel is { IsPeeking: true } && _composition?.Shell.ShowScrim != true)
         {
             ViewModel.ClosePeekCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
+
+    // ---- The filter box ----
+
+    private void FocusFilter()
+    {
+        FilterBox.Focus(FocusState.Keyboard);
+        FilterBox.SelectAll();
+    }
+
+    private void OnFilterKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == VirtualKey.Escape && ViewModel.FilterText.Length > 0)
+        {
+            ViewModel.ClearFilterCommand.Execute(null);
             e.Handled = true;
         }
     }

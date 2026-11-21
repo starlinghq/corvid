@@ -39,6 +39,12 @@ public sealed record MemoryServices(
     HybridRetriever Retriever,
     MemoryWriter? Writer)
 {
+    /// <summary>
+    /// The session index (C-044): a card of text per session for search by meaning across sessions, refreshed lazily by
+    /// <see cref="CorvidRuntime.FindSessionsAsync"/>. Null only for a memory built without one.
+    /// </summary>
+    public SessionIndex? Sessions { get; init; }
+
     /// <summary>The lessons tier's gated writer and store (C-025); null when <c>Corvid:Memory:Lessons:Enabled</c> is off.</summary>
     public LessonWriter? Lessons { get; init; }
 

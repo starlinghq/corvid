@@ -10,7 +10,7 @@ namespace Corvid.Memory;
 /// <remarks>SQLite calls are synchronous. Call from a storage worker if the caller must not block.</remarks>
 public sealed class MemoryDatabase
 {
-    internal const int SchemaVersion = 3;
+    internal const int SchemaVersion = 4;
 
     private readonly string _connectionString;
 
@@ -41,7 +41,7 @@ public sealed class MemoryDatabase
         command.Transaction = transaction;
         command.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-        if (version is not (0 or 1 or 2 or SchemaVersion))
+        if (version is not (0 or 1 or 2 or 3 or SchemaVersion))
             throw new InvalidDataException($"Unsupported memory database schema version {version}.");
         if (version == 0)
         {
@@ -56,6 +56,11 @@ public sealed class MemoryDatabase
         if (version < 3)
         {
             command.CommandText = LessonsMigration;
+            command.ExecuteNonQuery();
+        }
+        if (version < 4)
+        {
+            command.CommandText = SessionsMigration;
             command.ExecuteNonQuery();
         }
         transaction.Commit();
@@ -182,6 +187,32 @@ public sealed class MemoryDatabase
         );
         CREATE INDEX lesson_opportunities_state ON lesson_opportunities (state, created_at);
         PRAGMA user_version=3;
+        """;
+
+    // Version 4 (C-044): the session index, one card of text per session (its title, first message, latest answer and
+    // branch) for search by meaning across sessions. Unlike episodes it is derived and replaced: a card is rewritten when
+    // its session's head moves, so the external-content FTS table needs delete and update triggers as well as insert. Its
+    // vectors sit in the vectors table under item ids 'session:<id>'.
+    internal const string SessionsMigration = """
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY,
+            item_id TEXT NOT NULL UNIQUE,
+            session_id TEXT NOT NULL UNIQUE,
+            head INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE VIRTUAL TABLE sessions_fts USING fts5(text, content='sessions', content_rowid='id', tokenize='trigram');
+        CREATE TRIGGER sessions_fts_insert AFTER INSERT ON sessions
+            BEGIN INSERT INTO sessions_fts (rowid, text) VALUES (new.id, new.text); END;
+        CREATE TRIGGER sessions_fts_delete AFTER DELETE ON sessions
+            BEGIN INSERT INTO sessions_fts (sessions_fts, rowid, text) VALUES ('delete', old.id, old.text); END;
+        CREATE TRIGGER sessions_fts_update AFTER UPDATE ON sessions
+            BEGIN
+                INSERT INTO sessions_fts (sessions_fts, rowid, text) VALUES ('delete', old.id, old.text);
+                INSERT INTO sessions_fts (rowid, text) VALUES (new.id, new.text);
+            END;
+        PRAGMA user_version=4;
         """;
 
     // Times are UTC ticks so comparisons are numeric. FTS rows are keyed by an explicit INTEGER PRIMARY KEY, because VACUUM

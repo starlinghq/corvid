@@ -167,8 +167,9 @@ public sealed class HybridRetriever
             IReadOnlyList<VectorHit> hits;
             try
             {
+                // C-044: session cards share the vector index but are never recall; they would take the over-fetch's slots.
                 hits = await _vectors.SearchAsync(request.Query, n * 3,
-                    id => FactGraph.IsFactItem(id) ? wantFacts : wantEpisodes, cancellationToken);
+                    id => !SessionIndex.IsSessionItem(id) && (FactGraph.IsFactItem(id) ? wantFacts : wantEpisodes), cancellationToken);
             }
             // A failed embedder leaves BM25 and the graph; the result reports that no index was searched.
             catch (Exception exception) when (exception is not OperationCanceledException and not ArgumentException)
@@ -239,7 +240,7 @@ public sealed class HybridRetriever
         for (var i = 0; i < ranked.Count; i++)
         {
             var candidate = of(ranked[i]);
-            candidate.Fused += 1.0 / (_options.RrfK + i + 1);
+            candidate.Fused += RankFusion.Score(i, _options.RrfK);
             candidate.Sources |= source;
         }
     }
@@ -261,5 +262,24 @@ public sealed class HybridRetriever
         public int? Hops { get; set; }
         public string Text => Lesson?.Text ?? Fact?.Text ?? Episode!.Text;
         public DateTimeOffset RecordedAt => Lesson is { } lesson ? lesson.ResolvedAt ?? lesson.CreatedAt : Fact?.RecordedAt ?? Episode!.RecordedAt;
+    }
+}
+
+/// <summary>
+/// Reciprocal rank fusion (plan §9.3): an item's score from one ranked list is 1/(k + rank), summed over the lists it is in,
+/// so lists whose own scores are not comparable (BM25, cosine similarity, a graph's hops) merge by rank alone. Shared by
+/// memory retrieval and the host's session search (C-044).
+/// </summary>
+public static class RankFusion
+{
+    /// <summary>The constant the plan uses.</summary>
+    public const int DefaultK = 60;
+
+    /// <summary>The score of the item at <paramref name="index"/> (0 is first) in one list.</summary>
+    public static double Score(int index, int k = DefaultK)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        ArgumentOutOfRangeException.ThrowIfNegative(k);
+        return 1.0 / (k + index + 1);
     }
 }

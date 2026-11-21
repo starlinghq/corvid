@@ -297,6 +297,7 @@ public sealed class KeyMap
         yield return Page("memory", "memory.search", "Searches the facts", "Ctrl+F", "Ctrl+F");
         yield return Page("memory", "memory.tabs", "Picks a tab", "Ctrl+1 to Ctrl+5", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5");
         yield return PageKeys("board", "board.move", "Moves between sessions; Enter attaches, Space peeks", "Arrows, Enter, Space");
+        yield return Page("board", "board.filter", "Puts the caret in the session filter (also /; Esc clears it)", "Ctrl+F", "Ctrl+F");
         yield return PageKeys("rewind", "rewind.move", "Moves through the timeline", "Up, Down");
         yield return Page("skills", "skills.filter", "Puts the caret in the skills filter", "Ctrl+F", "Ctrl+F");
         yield return Page("skills", "skills.tabs", "Picks Review, Library, History or Import", "Ctrl+1 to Ctrl+4", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4");

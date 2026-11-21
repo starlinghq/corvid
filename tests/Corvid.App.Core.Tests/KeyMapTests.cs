@@ -78,7 +78,7 @@ public sealed class KeyMapTests
     {
         var keys = new KeyMap();
         var shadows = keys.ShadowsOf(keys[KeyCommands.Find]);
-        Assert.Equal(["audit", "memory", "skills"], shadows.Select(shadow => shadow.Context).Order());
+        Assert.Equal(["audit", "board", "memory", "skills"], shadows.Select(shadow => shadow.Context).Order());
         Assert.Equal("models", Assert.Single(keys.ShadowsOf(keys[KeyCommands.SwitchGenerator])).Context);
         Assert.Empty(keys.ShadowsOf(keys[KeyCommands.Palette]));
     }
@@ -89,6 +89,8 @@ public sealed class KeyMapTests
         var keys = new KeyMap();
         Assert.True(keys.IsPagesKey(keys[KeyCommands.Find], Area.Audit));
         Assert.True(keys.IsPagesKey(keys[KeyCommands.Find], Area.Memory));
+        // C-044: on the Board, Ctrl+F is the filter box's.
+        Assert.True(keys.IsPagesKey(keys[KeyCommands.Find], Area.Board));
         Assert.False(keys.IsPagesKey(keys[KeyCommands.Find], Area.Sessions));
         Assert.True(keys.IsPagesKey(keys[KeyCommands.Find], Area.Skills));
         Assert.False(keys.IsPagesKey(keys[KeyCommands.Find], Area.Jobs));

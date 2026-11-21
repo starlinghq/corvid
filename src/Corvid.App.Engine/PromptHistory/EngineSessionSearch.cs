@@ -6,7 +6,8 @@ namespace Corvid.App.Engine.PromptHistory;
 
 /// <summary>
 /// G-5 on the engine: <see cref="CorvidRuntime.SearchSessions"/> (the episodic index, caught up with the log first), for the
-/// palette's <c>Ctrl+Shift+F</c>. The sessions searched are the ones <see cref="CorvidRuntime.IsSearchable"/> takes (the
+/// palette's <c>Ctrl+Shift+F</c>, and <see cref="CorvidRuntime.FindSessionsAsync"/> (C-044, the session index) for its
+/// Sessions group and the Board's filter box. The sessions searched are the ones <see cref="CorvidRuntime.IsSearchable"/> takes (the
 /// person's own: not Corvid's stores, gateway chats or job runs, the same rule as <c>/search</c>) but the memory import's
 /// staging session; a match in a session the rail does not list says so when it is chosen.
 /// <para>The index is SQLite, read synchronously, so the search runs on the pool, never on the UI thread.</para>
@@ -28,6 +29,27 @@ public sealed class EngineSessionSearch(AppEngine engine) : ISessionSearch
             return new SessionMatches([], why);
         return new SessionMatches([.. found.Hits.Select(hit =>
             new SessionMatch(hit.SessionId, hit.Title, hit.TurnSequence, hit.Turn, hit.Who, hit.At, hit.Snippet))]);
+    }
+
+    /// <summary>
+    /// C-044: <see cref="CorvidRuntime.FindSessionsAsync"/>, sessions by what they are about (the session index, by words
+    /// and, with an embedder, by meaning, fused with the turns that matched), over the same sessions as
+    /// <see cref="SearchAsync"/>. Its index work is synchronous SQLite, so it runs on the pool; with memory off the result
+    /// says why, and the palette and the Board match the session list instead.
+    /// </summary>
+    public async Task<SessionFinds?> FindSessionsAsync(string query, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var runtime = await _engine.RuntimeAsync().ConfigureAwait(false);
+        var found = await Task.Run(() => runtime.FindSessionsAsync(query, MaxMatches, Searched, cancellationToken), cancellationToken)
+            .ConfigureAwait(false);
+        if (found.Unavailable is { } why)
+            return new SessionFinds([], null, why);
+        // A child's turn found its parent: its position is in the child's log, so the parent opens at its head.
+        return new SessionFinds([.. found.Found.Select(item =>
+            new SessionFind(item.SessionId, item.Title, item.Line, item.Score, item.ByMeaning,
+                item.Turn is { } turn && turn.SessionId == item.SessionId ? turn.TurnSequence : null,
+                ByWords: item.Sources != SessionFoundSources.Meaning))], found.Embedder);
     }
 
     /// <summary>The sessions a search covers: every one the runtime would search, but the memory import's staging session.</summary>

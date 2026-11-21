@@ -4755,6 +4755,64 @@ marks.
 Not built (C-045 and follow-ups in plan §18): Kev's calibrated `handoff` question in place of the rule, `/done` and
 markers in the CLI's `/sessions`, drag between columns, flocks on the Board.
 
+## Session search by meaning (C-044)
+
+Plan G-5 (ui.md §4.6, §4.13): with many sessions going, "the sandbox flake one" should return sessions, not turns. No
+new project, package, event type or checker rule: `Corvid.Memory` gains a table, `Corvid.Host` a finder, the app a seam
+member, a palette group and a Board filter box.
+
+- `MemoryDatabase` goes to schema 4 (a version-3 step, and 3 added to the strict version check): `sessions` (one card per
+  session: `item_id` `session:<id>`, `session_id`, the `head` it was built from, `text`, `updated_at` in UTC ticks like
+  every other table) and `sessions_fts` (external content, trigram), kept in step by insert, delete and update triggers,
+  since unlike episodes a card is rewritten. An older build refuses a version-4 file, so the CLI and the app ship together.
+- `SessionIndex` in `Corvid.Memory`: `Upsert(session, head, text)` (kept when the stored head is the same or later; true
+  when the text changed, so the vector needs embedding again), `Marks()` (every card's head in one query), and
+  `Search` (BM25; a query of only terms under three characters matches by LIKE, newest first, as in the episodic index).
+- Card vectors live in the existing `IVectorIndex` under `session:<id>`. `MemoryVectors.Missing()` and its `HasItems`
+  include the `sessions` table, so a swap re-embeds them and the backfill finds a card whose embed failed; without that a
+  swap's completion would drop their vectors with the old embedder's. `HybridRetriever`'s vector filter rejects
+  `session:` ids, so cards never take the over-fetch that memory recall for a prompt reads. Reciprocal rank fusion is
+  lifted into `RankFusion.Score(rank, k = 60)` for both.
+- `SessionIndexText.Of(description, branch)` in `Corvid.Host/Sessions`: the title event's title (an untitled session's
+  title is its first message's opening, already on the card), the first message (400 characters), the latest answer (600)
+  and the worktree branch, one per line, without control or format characters. It is indexed and embedded, never put in a
+  prompt. Only what the conversation still holds goes on it: `SessionCatalogue.Describe` folds the whole log, so for a
+  session whose log holds a `SessionRewound` (`SessionDescription.Rewound`) the finder takes the first message and latest
+  answer from its projection at that head (`SessionSearchCache`, which the turn search shares), for the card and for the
+  row's line, as the turn search hides undone and rolled-back turns (A6).
+- `SessionFinder` (host): the cards are refreshed lazily at search time, as `SessionSearch` catches up the episodic index:
+  one `ListHeads`, one look at `Marks()`, and every searched session whose head moved is described
+  (`SessionCatalogue.Describe`, cached by head) and its card rewritten; changed cards are queued for embedding on the
+  maintenance chain (an empty card is written too, so its mark is kept and old text goes). Children get no card (they are
+  rows under their parent). Three lists are fused by RRF: the cards' BM25; the cards' vectors (at most 8 nearest among
+  the searched sessions, and at least 0.3 cosine similarity) when `Memory.Vectors.RetrievalEmbedder` is set, the gate
+  `HybridRetriever` uses, fused at k = 121 rather than 60: nearest-neighbour search always returns something and e5 puts
+  unrelated text near 0.7, so a card only its meaning found counts for half a word match and the recency boost cannot
+  lift it above a session the words found; and
+  `SessionSearch.Search`'s turn hits grouped by session at their best rank, a child's counted for its parent, which keeps
+  the undo and rollback visibility rules. Then a recency boost of 1 + 0.5 · 0.5^(idle / 14 days). A failed embedder
+  leaves the words, and the result says so (`Embedder` null).
+- `CorvidRuntime.FindSessionsAsync(query, limit, include, ct)` → `SessionFindResult(Found, Embedder, Unavailable)`, over
+  `IsSearchable` sessions; with memory off it returns `Unavailable` and searches nothing. `MemoryServices.Sessions` holds
+  the index.
+- App: `ISessionSearch.FindSessionsAsync` is a default member returning null (no session index: the demo); the engine's
+  `EngineSessionSearch` runs the runtime's on the pool over the same sessions as its turn search (the memory import's
+  staging session left out). The palette's `Ctrl+Shift+F` asks both searches together under one cancellation and lists up
+  to five sessions ("Sessions", each "by meaning" or "by words", opening at its head) above "Said in sessions"; with memory
+  off the group is the rail's sessions matched by title, preview, id and workspace. A finder failure never hides the turns.
+- The Board's filter box (`BoardViewModel.FilterText`, `BoardQuery`): every keystroke narrows the cards at once by a fuzzy
+  match over title, preview, id, workspace, branch and flock, with no engine involved; from three characters, after the
+  palette's delay, the sessions the finder returns (at most 12) join them, tagged "by meaning" or "by words", and the next
+  keystroke cancels a search still running. A session only the vectors found joins from two words (`BoardQuery.Joins`):
+  a one-word filter (an id fragment, a workspace name) is a lookup, and the nearest cards would join it whatever it says. The tray is never filtered and the dashed new-session card steps aside while
+  filtering. On the page, `Ctrl+F` (a `board` page key, shadowing find-in-session as Audit, Memory and Skills do) or `/`
+  outside a text field puts the caret there, and `Esc` clears it.
+
+Not built (follow-ups in plan §18, C-044): `/search --sessions` in `corvid chat`; grouping episode vectors by session as
+a fourth list; a Kev rerank; the Board/C-043 status line on the card (one line, `description.Status?.Text`, in
+`SessionIndexText.Of` once both land); re-embedding a card whose text changed while it already has a vector, when its
+queued embed failed (the backfill only finds cards with no vector for the embedder).
+
 ## Running the check
 
 ```sh

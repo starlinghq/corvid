@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using Corvid.App.Core.Markdown;
 using Corvid.App.Core.Mvvm;
+using Corvid.App.Core.Palette;
 using Corvid.App.Core.Sessions;
 using Corvid.App.Core.Shell;
 
@@ -9,8 +10,9 @@ namespace Corvid.App.Core.Board;
 
 /// <summary>
 /// The Board area (docs/plan/ui.md §4.13, F18; Board.dc.html): every session as a card with its state, step, model and
-/// taint in a kanban of four columns (C-043: Running, Needs you, Parked, Done), and the attention tray beside them listing
-/// everything waiting on the user across sessions, each item opening its full card.
+/// taint in a kanban of four columns (C-043: Running, Needs you, Parked, Done), narrowed by the filter box (C-044,
+/// <see cref="BoardQuery"/>), and the attention tray beside them listing everything waiting on the user across sessions,
+/// each item opening its full card.
 /// <para>
 /// A card's column is <see cref="BoardText.Column"/> of its summary. The person moves a card only to Done ("Mark done") or
 /// Parked ("Not now" on a your-turn), kept by the engine in <c>ui.db</c> through the session's latest news, so anything
@@ -44,11 +46,16 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     private readonly ISessionWatcher _watcher;
     private readonly TimeProvider _time;
     private readonly IDispatcher _dispatcher;
+    private readonly ISessionSearch? _search;
     private readonly Dictionary<string, SessionCardViewModel> _cards = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IDisposable> _watches = new(StringComparer.Ordinal);
     private readonly HashSet<string> _watching = new(StringComparer.Ordinal);
     private IReadOnlyList<AttentionItem> _areaItems = [];
     private BoardStatus? _status;
+    private string _filterText = "";
+    private Dictionary<string, string> _found = new(StringComparer.Ordinal);
+    private CancellationTokenSource? _finding;
+    private string _filterNote = "";
     private string _counts = "";
     private string _markFailure = "";
     private string _attentionHead = "Attention";
@@ -58,7 +65,10 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
     private ITimer? _ticker;
     private bool _disposed;
 
-    public BoardViewModel(ShellViewModel shell, SessionHub hub, IBoardService service, ISessionWatcher watcher, TimeProvider time, IDispatcher dispatcher)
+    /// <param name="search">C-044: the engine's session search, which the filter box asks from <see cref="BoardQuery.MeaningFrom"/>
+    /// characters; null matches the cards' own text only (the demo).</param>
+    public BoardViewModel(ShellViewModel shell, SessionHub hub, IBoardService service, ISessionWatcher watcher, TimeProvider time, IDispatcher dispatcher,
+        ISessionSearch? search = null)
         : base(Area.Board, "Every session as a card with its state, step, model and taint, and the attention tray beside them.")
     {
         ArgumentNullException.ThrowIfNull(shell);
@@ -74,6 +84,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         _watcher = watcher;
         _time = time;
         _dispatcher = dispatcher;
+        _search = search;
 
         Columns = [.. Enum.GetValues<BoardColumn>().Select(column => new BoardColumnViewModel(column))];
         // Stacked (a narrow window), what needs the person leads.
@@ -84,6 +95,7 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         Chooser = new WorkspaceChooserViewModel(_hub, _shell);
         OpenWorkspaceCommand = Chooser.OpenCommand;
         ClosePeekCommand = new RelayCommand(ClosePeek, () => _peek is not null);
+        ClearFilterCommand = new RelayCommand(() => FilterText = "", () => _filterText.Length > 0);
         // Nothing sends native notifications yet, so the toggle is off and says why, as New session does.
         ToggleNotifyCommand = new RelayCommand(() => NotifyWhenUnfocused = !NotifyWhenUnfocused, () => false);
         NewSession = new NewSessionTile(NewSessionText(_shell.Workspace), NewSessionCommand, OpenWorkspaceCommand);
@@ -114,6 +126,42 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
 
     /// <summary>The dashed card after the columns: start another session or open a workspace.</summary>
     public NewSessionTile NewSession { get; private set; }
+
+    /// <summary>
+    /// C-044: the filter box. Every change narrows the cards at once by their own text (<see cref="BoardQuery.Matches"/>);
+    /// from <see cref="BoardQuery.MeaningFrom"/> characters, once typing pauses for <see cref="SearchDelay"/>, the sessions
+    /// the engine's search finds join them, each tagged with how it was found. A newer keystroke cancels a search still
+    /// running. Children stay under their parents, and the attention tray is never filtered.
+    /// </summary>
+    public string FilterText
+    {
+        get => _filterText;
+        set
+        {
+            if (!SetProperty(ref _filterText, value ?? ""))
+                return;
+            OnPropertyChanged(nameof(IsFiltering));
+            ClearFilterCommand.NotifyCanExecuteChanged();
+            Find();
+            Rebuild();
+        }
+    }
+
+    public bool IsFiltering => _filterText.Trim().Length > 0;
+
+    /// <summary>How the filter matched, beside the box: "by meaning", "by words", or why the engine could not search.</summary>
+    public string FilterNote { get => _filterNote; private set => SetProperty(ref _filterNote, value); }
+
+    /// <summary>How long typing pauses before the engine's session search runs (the palette's delay).</summary>
+    public TimeSpan SearchDelay { get; init; } = TimeSpan.FromMilliseconds(250);
+
+    public RelayCommand ClearFilterCommand { get; }
+
+    /// <summary>C-044: the filter box leaves no card in any column.</summary>
+    public bool IsEmpty => IsFiltering && Columns.All(column => column.Cards.Count == 0);
+
+    /// <summary>C-044: what the header says when the filter box leaves no card (each column's own empty line would mislead).</summary>
+    public string EmptyText => IsEmpty ? $"No session matches \"{SafeText.Clean(_filterText.Trim())}\"." : "";
 
     /// <summary>The header's counts: "5 sessions · 2 workspaces · 1 job run".</summary>
     public string Counts { get => _counts; private set => SetProperty(ref _counts, value); }
@@ -189,6 +237,8 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         _service.AttentionChanged -= OnAttentionChanged;
         _shell.PropertyChanged -= OnShellChanged;
         _ticker?.Dispose();
+        _finding?.Cancel();
+        _finding?.Dispose();
         _peek?.Dispose();
         foreach (var watch in _watches.Values)
             watch.Dispose();
@@ -300,6 +350,14 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
         }
     }
 
+    /// <summary>C-044: the filter box lets the card through by its own text, or the engine's search found it.</summary>
+    private bool Matches(SessionCardViewModel card)
+    {
+        var local = BoardQuery.Matches(card.Summary, _filterText);
+        card.FoundBy = local || !_found.TryGetValue(card.Id, out var how) ? "" : how;
+        return local || card.FoundBy.Length > 0;
+    }
+
     private void Rebuild()
     {
         // A5 (§4.13, F18): a child shows under its parent's card, not as a card of its own, while its parent is listed.
@@ -312,13 +370,76 @@ public sealed class BoardViewModel : AreaViewModel, IDisposable
                 id => _hub.Service.StopChildAsync(id));
         // C-043: each top-level card in its column, in the column's order.
         var byColumn = _cards.Values.Where(card => !(card.Summary.ParentId is { } parent && _cards.ContainsKey(parent)))
+            .Where(Matches)
             .ToLookup(card => BoardText.Column(card.Summary));
         foreach (var column in Columns)
             column.Set([.. BoardText.Order(column.Column, byColumn[column.Column].Select(card => card.Summary)).Select(summary => _cards[summary.Id])]);
+        OnPropertyChanged(nameof(IsEmpty));
+        OnPropertyChanged(nameof(EmptyText));
         Counts = BoardText.Counts(_cards.Values.Select(card => card.Summary).ToList());
         RebuildAttention();
         ApplyStatus();
         UpdateTicker();
+    }
+
+    /// <summary>
+    /// C-044: asks the engine's session search about the filter once typing pauses, and lets the sessions it finds through
+    /// the filter. Under <see cref="BoardQuery.MeaningFrom"/> characters, or without a search (the demo), the filter is the
+    /// cards' own text only; with memory off the search says so beside the box.
+    /// </summary>
+    private void Find()
+    {
+        _finding?.Cancel();
+        _finding?.Dispose();
+        _finding = null;
+        _found = new(StringComparer.Ordinal);
+        FilterNote = "";
+        if (_search is not { } search || !BoardQuery.AsksEngine(_filterText))
+            return;
+        var cancellation = new CancellationTokenSource();
+        _finding = cancellation;
+        _ = FindAsync(search, _filterText.Trim(), cancellation.Token);
+    }
+
+    private async Task FindAsync(ISessionSearch search, string query, CancellationToken cancellationToken)
+    {
+        SessionFinds? finds;
+        try
+        {
+            if (SearchDelay > TimeSpan.Zero)
+                await Task.Delay(SearchDelay, _time, cancellationToken).ConfigureAwait(true);
+            finds = await search.FindSessionsAsync(query, cancellationToken).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _dispatcher.Post(() =>
+            {
+                if (!cancellationToken.IsCancellationRequested && !_disposed)
+                    FilterNote = $"could not search: {SafeText.Clean(exception.Message)}";
+            });
+            return;
+        }
+
+        _dispatcher.Post(() =>
+        {
+            if (cancellationToken.IsCancellationRequested || _disposed || finds is null)
+                return;
+            if (finds.Unavailable is { } why)
+            {
+                FilterNote = $"matching titles only: {SafeText.Clean(why)}";
+                return;
+            }
+
+            _found = finds.Finds.Where(find => BoardQuery.Joins(find, query)).Take(BoardQuery.MaxFound)
+                .GroupBy(find => find.SessionId, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => BoardQuery.FoundBy(group.First()), StringComparer.Ordinal);
+            FilterNote = finds.How;
+            Rebuild();
+        });
     }
 
     /// <summary>Reorders, inserts and removes only what changed, so a card that stays in place keeps its element and focus.</summary>

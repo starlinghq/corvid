@@ -193,9 +193,10 @@ public sealed class LessonStoreTests
             {
                 using var command = connection.CreateCommand();
                 command.CommandText = "PRAGMA user_version;";
-                Assert.Equal(3L, command.ExecuteScalar());
+                // C-044: and on to version 4, the session index.
+                Assert.Equal(4L, command.ExecuteScalar());
             }
-            // Reopening a version 3 store migrates nothing.
+            // Reopening the migrated store migrates nothing.
             Assert.Single(new LessonStore(new MemoryDatabase(path)).List(Project));
         }
         finally
