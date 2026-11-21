@@ -83,7 +83,8 @@ public sealed record SessionFinderSources(
 /// <item>the session cards' full text (<see cref="SessionIndex"/>, BM25; terms under three characters by LIKE);</item>
 /// <item>the cards' vectors, when memory has a retrieval embedder (the gate <see cref="HybridRetriever"/> uses), at
 /// <see cref="MeaningK"/>: nearest-neighbour search always returns the nearest cards, related or not, so a card only its
-/// meaning found counts for half a word match, and the recency boost never lifts it above a session the words found;</item>
+/// meaning found counts for half a word match, and the recency boost does not lift it above a session the words ranked in
+/// their first twenty (deeper word matches it can pass);</item>
 /// <item>the turns that matched (<see cref="SessionSearch"/>, which keeps its undo and rollback rules), grouped by session
 /// at each one's best rank, a child's turns counting for its parent.</item>
 /// </list>
