@@ -10,8 +10,9 @@ name: release
 # Asset names carry no version, so releases/latest/download/<asset> always names the newest. A manual run builds and
 # smoke-tests the tarballs and keeps them as workflow artifacts; it never creates a release.
 #
-# The build jobs use the self-hosted runner (clang for Native AOT, the CUDA runtime); see ci.yml for its constraints.
-# Only members can push tags or dispatch, so no fork code reaches it from here.
+# The CPU build runs on GitHub-hosted ubuntu-latest (clang for Native AOT is on the image; bubblewrap is installed). The
+# CUDA build runs on the self-hosted runner, whose doctor sees the RTX 3090; see ci.yml for its constraints. Only
+# members can push tags or dispatch, so no fork code reaches it from here.
 on:
   push:
     tags: ['v*']
@@ -32,9 +33,10 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.asset }}
-    runs-on: [self-hosted, omarchy]
+    runs-on: ${{ matrix.cuda && fromJSON('["self-hosted", "omarchy"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
-    # The smoke test's doctor probes the GPUs through NVML; pin it to the 3090 as ci.yml's gpu job does.
+    # The smoke test's doctor probes the GPUs through NVML; on the self-hosted runner (the CUDA build), pin it to the
+    # 3090 as ci.yml's gpu job does. The hosted runner has no GPU, and the CPU build's doctor only reports that.
     env:
       CUDA_DEVICE_ORDER: PCI_BUS_ID
       CUDA_VISIBLE_DEVICES: ${{ vars.CORVID_CUDA_DEVICE || 'GPU-9e21a72e-3a6f-e082-3d74-4b8d361de70c' }}
@@ -53,6 +55,15 @@ jobs:
           DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           global-json-file: global.json
+
+      # As in ci.yml's aot job: corvid-sandbox's smoke run needs bubblewrap and unprivileged user namespaces, and the
+      # Native AOT link needs zlib1g-dev.
+      - name: Install bubblewrap and allow unprivileged user namespaces
+        if: ${{ !matrix.cuda }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap zlib1g-dev
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       # v0.1.0 becomes 0.1.0; a manual run gets a dev version that no tag can collide with.
       - name: Version

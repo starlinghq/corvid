@@ -105,7 +105,7 @@ def box(width, title, body_lines, style="yellow", right=""):
 # ---- shared pieces ----
 
 def shell_prompt(cmd="corvid"):
-    return L(seg("mark@omarchy", "bgreen b"), seg(":", "grey"), seg("~/src/corvid", "bblue b"), seg(" $ ", "grey"),
+    return L(seg("user@host", "bgreen b"), seg(":", "grey"), seg("~/src/corvid", "bblue b"), seg(" $ ", "grey"),
              seg(cmd))
 
 
@@ -527,11 +527,11 @@ def screen_leaving(W, H):
              L(seg("  · answered · 3 steps, 3 tool calls · 52 s", "grey")),
              blank(),
              farewell(W, "cli-7f3a2c", 14, 23),
-             L(seg("mark@omarchy", "bgreen b"), seg(":", "grey"), seg("~/src/corvid", "bblue b"), seg(" $ ", "grey"),
+             L(seg("user@host", "bgreen b"), seg(":", "grey"), seg("~/src/corvid", "bblue b"), seg(" $ ", "grey"),
                seg("git log --oneline -2")),
              L(seg("4f2a9e1", "yellow"), seg(" Rename MaxSteps to StepBudget")),
              L(seg("9fa8081", "yellow"), seg(" Credential-value detector shared by the egress gate (#48)")),
-             L(seg("mark@omarchy", "bgreen b"), seg(":", "grey"), seg("~/src/corvid", "bblue b"), seg(" $ ", "grey"),
+             L(seg("user@host", "bgreen b"), seg(":", "grey"), seg("~/src/corvid", "bblue b"), seg(" $ ", "grey"),
                seg(" ", "inv")),
              ]
     return lines, []

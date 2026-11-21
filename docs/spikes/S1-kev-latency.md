@@ -89,7 +89,7 @@ run 4, the review rerun at load 3–6):
 
 | | |
 | --- | --- |
-| Machine | Intel Core i7-5820K (6 cores, 12 threads, 3.3 GHz), 94 GB RAM, Linux 7.2.5 (Omarchy) |
+| Machine | Intel Core i7-5820K (6 cores, 12 threads, 3.3 GHz), Linux x64 |
 | GPU | NVIDIA GeForce RTX 3090, 24 GB, UUID `GPU-9e21a72e-3a6f-e082-3d74-4b8d361de70c` (the only GPU used; the 4060 Ti was not touched), driver 610.57.04, CUDA 13.3 runtime from `/opt/cuda`, cuDNN 9 from the `nvidia-cudnn` pip wheel on `LD_LIBRARY_PATH` |
 | .NET | SDK 10.0.401, runtime 10.0.12, Release build |
 | Packages | `Starlings.Models.Kev` 0.3.0 and `Starlings.Models.Qwen35` 0.3.0 from nuget.org; `Microsoft.ML.OnnxRuntime` 1.30.0 (CPU build) or `Microsoft.ML.OnnxRuntime.Gpu.Linux` 1.30.0 (CUDA build) |
@@ -304,7 +304,7 @@ Kev-0.8B: the first two rows are run 3 (load 5 at the start; the first cell's lo
 
 ## Contamination
 
-Other agents' builds and test suites ran on the workstation for most of the spike (at the same nice level as the
+Other builds and test suites ran on the workstation for most of the spike (at the same nice level as the
 spike), with 1-minute load averages of 4 to 99 on 12 hardware threads. Other model jobs ran beside this one: the S2
 spike held the shared GPU lock for long stretches, and `S3.Gliner2Targets` (GLiNER2) ran while Kev-4B was on the GPU,
 apparently without the lock, so the one-model-at-a-time rule was not holding on this machine. Because the CUDA profile

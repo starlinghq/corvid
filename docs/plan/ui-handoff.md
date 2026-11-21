@@ -1000,7 +1000,7 @@ U-1 (in-process first, the update stream as the only seam) is followed. U-6 to U
   by the demo service; `Corvid.App.Engine` is its first real producer.
 - Uno quirks found so far are in the app README's gotchas: theme brushes on `Run`s, line-height maths, the order of
   `Navigated` and `OnNavigatedTo`, stroke widths rounded to whole pixels. Read them before writing XAML.
-- CI builds the desktop head on a self-hosted runner with no display. Nothing in the app's build may need one.
+- CI builds the desktop head on a GitHub-hosted Ubuntu runner with no display. Nothing in the app's build may need one.
 - Left from the code and security review of #71 (the rest was fixed in its follow-up):
   - `SessionFold.OnRewound` keeps the decisions (and, when it stops a running turn, the turn header and step) of rewound
     turns; a new turn with the same number would show the old turn's chips. Key decision groups by turn header id.
