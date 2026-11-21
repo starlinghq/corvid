@@ -36,6 +36,9 @@ public sealed class HandoffRuleTests(ITestOutputHelper output)
         Assert.Equal(TurnEnding.Finished, HandoffRule.Classify("PR #140 opened as a draft.\n\n- schema 2\n- the columns\n- tests"));
         // A question closing a list of options still asks.
         Assert.Equal(TurnEnding.AsksYou, HandoffRule.Classify("Three have changes:\n\n- flocks\n- Ok to delete the rest?"));
+        // A list-only answer closes over its list, but not over a quote the parser dropped.
+        Assert.Equal(TurnEnding.Finished, HandoffRule.Classify("- PR #12 is merged\n- docs updated"));
+        Assert.Equal(TurnEnding.None, HandoffRule.Classify("> PR #12 is merged.\n\n- docs"));
         // A request in an earlier paragraph does not count once the answer moved on.
         Assert.Equal(TurnEnding.Finished, HandoffRule.Classify("Should I merge it? You said yes earlier.\n\nPR #12 is merged."));
     }
@@ -45,6 +48,7 @@ public sealed class HandoffRuleTests(ITestOutputHelper output)
     [InlineData("I tried both. Which one do you prefer? The first is faster.", "Which one do you prefer?")]
     [InlineData("The branch is pushed. Let me know when you've had a look.", "Let me know when you've had a look.")]
     [InlineData("Three have changes:\n\n- flocks\n- Ok to delete the rest?", "Ok to delete the rest?")]
+    [InlineData("Should I merge it? Why am I asking? The branches overlap.", "Should I merge it?")]
     [InlineData("PR #86 is merged.", null)]
     [InlineData(null, null)]
     public void The_question_the_card_shows_is_the_one_the_answer_asks_with(string? answer, string? question) =>

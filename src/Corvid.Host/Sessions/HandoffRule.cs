@@ -39,15 +39,17 @@ public static partial class HandoffRule
             return TurnEnding.None;
         if (AsksYou(paragraph) || list is { } item && AsksYou(item))
             return TurnEnding.AsksYou;
-        return Closes(paragraph) || paragraph.Length == 0 && Closes(Text(lastAnswer))
+        // A list-only answer ("- PR #12 is merged\n- docs updated") is read over its list, never over what the parser dropped.
+        return Closes(paragraph) || paragraph.Length == 0 && Closes(Eligible(lastAnswer))
             ? TurnEnding.Finished
             : TurnEnding.None;
     }
 
     /// <summary>
-    /// The sentence a your-turn answer asks with, for the Board's card when no generated status line is current: the last
-    /// question in the paragraph the rule reads (or the dropped list's last item), else its last sentence with a request
-    /// ("Let me know which you prefer."); null when the answer does not ask (<see cref="Classify"/> is not AsksYou).
+    /// The sentence a your-turn answer asks with, for the Board's card when no generated status line is current: in the
+    /// paragraph the rule reads (or the dropped list's last item), a closing question, else the last sentence with a request
+    /// ("Should I merge it? Why am I asking? The branches overlap." shows the first), else the last question that addresses
+    /// the person; null when the answer does not ask (<see cref="Classify"/> is not AsksYou).
     /// </summary>
     public static string? Question(string? lastAnswer)
     {
@@ -59,10 +61,13 @@ public static partial class HandoffRule
             if (string.IsNullOrEmpty(text))
                 continue;
             var sentences = Sentence().Split(text.Trim()).Where(sentence => sentence.Length > 0).ToList();
-            if (sentences.LastOrDefault(sentence => sentence.EndsWith('?')) is { } question)
-                return question;
+            // The same tests AsksYou applies, so the sentence shown is one that made the answer ask.
+            if (sentences.Count > 0 && sentences[^1].EndsWith('?'))
+                return sentences[^1];
             if (sentences.LastOrDefault(sentence => Request().IsMatch(Pleasantry().Replace(sentence, ""))) is { } request)
                 return request;
+            if (sentences.LastOrDefault(sentence => sentence.EndsWith('?') && Addressed().IsMatch(sentence)) is { } question)
+                return question;
         }
 
         return paragraph.Length > 0 ? paragraph : list;
@@ -88,9 +93,7 @@ public static partial class HandoffRule
                 continue;
             }
 
-            // A quoted block is someone else's words (a drafted reply, an issue): its question is not the model's.
-            // Headings, tables and rules carry no request either.
-            if (line.StartsWith('>') || line.StartsWith('#') || line.StartsWith('|') || RuleLine().IsMatch(line))
+            if (Skipped(line))
                 continue;
             current.Add(line);
         }
@@ -114,6 +117,18 @@ public static partial class HandoffRule
 
         return ("", listItem);
     }
+
+    // A quoted block is someone else's words (a drafted reply, an issue): its question is not the model's.
+    // Headings, tables and rules carry no request either.
+    private static bool Skipped(string line) =>
+        line.StartsWith('>') || line.StartsWith('#') || line.StartsWith('|') || RuleLine().IsMatch(line);
+
+    // The lines the rule may read at all (no code, quotes, headings, tables or rules), list marks dropped, as one line.
+    private static string Eligible(string answer) =>
+        Text(string.Join(' ', WithoutFences(answer.ReplaceLineEndings("\n")).Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !Skipped(line))
+            .Select(line => ListItem().Replace(line, ""))));
 
     private static bool AsksYou(string paragraph)
     {

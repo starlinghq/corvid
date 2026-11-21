@@ -65,5 +65,7 @@ public static class SessionBoard
     /// </summary>
     public static bool IsNews(SessionUpdate update) =>
         update is UserMessage or AgentMessageChunk or TurnStarted or TurnPlanned or ToolCall or ApprovalRequested or ApprovalResolved
-            or QuestionAsked or QuestionAnswered or SessionRewound;
+            or QuestionAsked or QuestionAnswered or SessionRewound
+        // A call's result is the update that ends it; a running call's progress (its tail) is not news.
+        || update is ToolCallUpdate { Status: ToolCallStatus.Completed or ToolCallStatus.Failed } or ToolCallUpdate { Outcome: not null };
 }

@@ -1125,6 +1125,9 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
     {
         if (_disposed)
             return;
+        // C-043: refreshes can finish out of order; one that read the log before a later one must not put back the mark the
+        // later one saw gone, so each takes a ticket before it reads and only the newest applies.
+        var ticket = _channels.TryGetValue(sessionId, out var reading) ? Interlocked.Increment(ref reading.RefreshTicket) : 0;
         var summary = Summarize(runtime, sessionId)
             ?? (_created.TryGetValue(sessionId, out var created) ? Empty(runtime, sessionId, created) : null);
         if (summary is null)
@@ -1133,6 +1136,12 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         {
             lock (channel.Gate)
             {
+                if (ReferenceEquals(channel, reading))
+                {
+                    if (ticket < channel.RefreshApplied)
+                        return;
+                    channel.RefreshApplied = ticket;
+                }
                 channel.LogSummary = summary;
                 // C-043: while the log still holds the mark, news kept here is newer than what was read (a message published
                 // before its append, or kept while this read ran), so the mark stays off until a read that has it.
@@ -1568,6 +1577,11 @@ public sealed partial class EngineSessionService : ISessionService, IDisposable
         /// holds; cleared by a read whose mark is gone, by the history's replay, and by a new mark.
         /// </summary>
         public bool NewsSinceRead { get; set; }
+
+        /// <summary>C-043: the ticket the latest refresh took before it read the log, and the newest one applied (under <see cref="Gate"/>).</summary>
+        public long RefreshTicket;
+
+        public long RefreshApplied { get; set; }
 
         /// <summary>The summary last raised, so a change is raised once.</summary>
         public SessionSummary? Raised { get; set; }
